@@ -14,6 +14,14 @@ Thumbs.db
 desktop.ini
 /data/*
 !/data/README.md
+# Keep only the approved prototype dataset for initial development testing.
+!/data/legacy-prototype/
+/data/legacy-prototype/*
+!/data/legacy-prototype/src/
+/data/legacy-prototype/src/*
+!/data/legacy-prototype/src/js/
+/data/legacy-prototype/src/js/*
+!/data/legacy-prototype/src/js/data.js
 /tools/
 *.sqlite3
 *.sqlite3-*
@@ -24,4 +32,3 @@ desktop.ini
 *.exe
 .idea/
 .vscode/
-

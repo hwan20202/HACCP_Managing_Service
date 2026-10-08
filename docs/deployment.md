@@ -59,7 +59,7 @@ Ubuntu 샌드박스에서도 동일한 Python 명령과 Caddyfile을 사용합�
 
 ## 2. Windows 11 운영 준비
 
-아래 예시는 코드 폴더가 `C:\HACCP`, 실행 데이터가 `C:\HACCPData`인 경우입니다. 다른 경로를 사용하면 명령과 환경 설정을 해당 경로에 맞춥니다. 초기 업무 화면에는 README 3절의 시제품 데이터가 필요합니다. 기준서 열람을 사용하려면 해당 PDF도 데이터 폴더에 배치합니다. 엑셀 원본은 배포에 필요하지 않습니다.
+아래 예시는 코드 폴더가 `C:\HACCP`, 실행 데이터가 `C:\HACCPData`인 경우입니다. 다른 경로를 사용하면 명령과 환경 설정을 해당 경로에 맞춥니다. 초기 업무 화면을 사용하려면 Git에 포함된 `C:\HACCP\data\legacy-prototype\src\js\data.js`를 `C:\HACCPData\legacy-prototype\src\js\data.js`로 복사합니다. 기준서 열람을 사용하려면 별도로 전달받은 PDF도 데이터 폴더에 배치합니다. 자세한 위치는 [자료 안내](../data/README.md)를 참고하세요. 엑셀 원본은 배포에 필요하지 않습니다.
 
 1. 운영 PC에 Python 3.14를 설치합니다. 서비스 계정도 실행할 수 있도록 **모든 사용자용 설치 경로**를 권합니다. 사용자 개인 프로필 안에 설치한 Python은 서비스 계정 접근 권한을 별도로 확인해야 합니다.
 2. 소스만 복사하고 운영 PC에서 `.venv`를 새로 생성합니다. `.venv`는 Mac·Ubuntu에서 복사하지 않습니다.
@@ -72,6 +72,8 @@ py -3.14 -m venv .venv
 ```
 
 `.env.production`이 없으면 예시에서 새 비밀키를 생성하여 만듭니다. `.env.production`을 열어 다음 항목을 실제 환경에 맞춥니다.
+
+`--production`은 Django 설정 모듈을 선택합니다. 환경 파일은 별도 옵션이므로 실제 운영 명령에서는 `--env-file .env.production`도 지정해야 합니다. 생략하면 이 문서 1절의 로컬 시험처럼 `.env`를 사용합니다.
 
 ```dotenv
 DJANGO_ALLOWED_HOSTS=haccp.company.example
@@ -95,7 +97,7 @@ $env:HACCP_ENV_FILE = '.env.production'
 Remove-Item Env:HACCP_ENV_FILE
 ```
 
-현재 `check --deploy`에서 나오는 `security.W005`, `security.W021`은 회사의 다른 하위 도메인에 HTTPS를 강제하거나 브라우저 HSTS preload 정책을 자동 적용하지 않도록 한 선택에 따른 경고입니다. 회사 도메인 전체 정책을 확정한 뒤 적용 여부를 결정합니다. 다른 오류·경고는 배포 전에 확인합니다.
+위 HTTPS 설정으로 `check --deploy`를 실행하면 `security.W005`, `security.W021` 경고가 나옵니다. 회사의 다른 하위 도메인에 HTTPS를 강제하거나 브라우저 HSTS preload 정책을 자동 적용하지 않도록 한 선택입니다. 회사 도메인 전체 정책을 확정한 뒤 적용 여부를 결정합니다. 로컬 HTTP 시험 설정에서는 HTTPS 관련 경고가 추가로 발생합니다. 다른 오류·경고는 배포 전에 확인합니다.
 
 ### HTTPS와 사내 주소
 
@@ -106,6 +108,8 @@ Remove-Item Env:HACCP_ENV_FILE
 공식 설명: [Caddy HTTPS](https://caddyserver.com/docs/automatic-https), [Windows 서비스](https://caddyserver.com/docs/running#windows-service).
 
 Windows 방화벽에서는 실제로 사용할 443 포트를 필요한 사내 접속 범위에 허용합니다. 80 포트는 HTTP 리다이렉트나 인증서 발급 방식에서 필요할 때 허용합니다. Waitress의 8001 포트는 로컬 전용으로 유지합니다.
+
+HTTPS 운영 시 헬스체크는 Caddy를 거친 실제 HTTPS 주소의 `/health/live/`와 `/health/ready/`를 확인합니다. 현재 설정에서는 Waitress의 HTTP 주소로 직접 요청하면 HTTPS로 리다이렉트됩니다. 잘못된 Host 값으로 요청하면 400이므로 등록한 호스트 이름도 함께 확인합니다.
 
 ## 3. Windows 서비스 등록
 
