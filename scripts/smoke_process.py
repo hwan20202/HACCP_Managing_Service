@@ -15,25 +15,35 @@ def main():
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
     url = f"http://127.0.0.1:{port}"
+    started = time.monotonic()
+    print(f"Starting smoke server at {url}", flush=True)
     process = subprocess.Popen(
-        [sys.executable, "backend/manage.py", "runserver", f"127.0.0.1:{port}", "--noreload"],
+        [sys.executable, "-u", "scripts/smoke_server.py", str(port)],
         cwd=ROOT,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        # Inherit output so CI includes Django startup errors and diagnostic traces.
     )
     try:
-        deadline = time.monotonic() + 20
+        deadline = started + 20
+        last_error = "No HTTP response received."
         while time.monotonic() < deadline:
             if process.poll() is not None:
-                raise SystemExit("Server exited before becoming ready.")
+                raise SystemExit(
+                    f"Server exited before becoming ready (exit code {process.returncode}). "
+                    "See server output above."
+                )
             try:
                 with urlopen(url + "/health/live/", timeout=1) as response:
                     if response.status == 200:
                         break
-            except URLError, TimeoutError:
+            except (URLError, TimeoutError) as error:
+                last_error = str(error)
                 time.sleep(0.1)
         else:
-            raise SystemExit("Server startup timed out.")
+            raise SystemExit(
+                f"Server startup timed out after 20s at {url}/health/live/. "
+                f"Last error: {last_error}. See server output above."
+            )
+        print(f"Smoke server ready in {time.monotonic() - started:.2f}s", flush=True)
         subprocess.run(
             [sys.executable, "scripts/project.py", "smoke", "--url", url], cwd=ROOT, check=True
         )

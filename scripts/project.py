@@ -62,6 +62,7 @@ def check(args):
     run_command("-m", "pip", "check")
     run_command("-m", "ruff", "check", ".")
     run_command("-m", "ruff", "format", "--check", ".")
+    run_command("-m", "unittest", "discover", "-s", "scripts", "-p", "test_*.py", "-v")
     settings_name = (
         "config.settings.production" if args.production else "config.settings.development"
     )

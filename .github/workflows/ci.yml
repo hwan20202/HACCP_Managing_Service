@@ -27,5 +27,6 @@ jobs:
       - run: python scripts/project.py init
       - run: python scripts/project.py check
       - run: python scripts/project.py --production collectstatic
-      - run: python scripts/smoke_process.py
-
+      - name: Check HTTP endpoints
+        run: python -u scripts/smoke_process.py
+        timeout-minutes: 2

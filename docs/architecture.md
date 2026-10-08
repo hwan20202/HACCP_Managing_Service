@@ -13,6 +13,8 @@
 
 프론트엔드와 서버는 같은 출처를 사용합니다. 별도 Node 서버나 빌드 과정은 없습니다. HTML은 `frontend/templates`, 브라우저 코드는 `frontend/static`에 둡니다. 업무 시제품은 `prototype/`, 연결 확인 화면은 `system-test/`로 구분합니다.
 
+HTTP 자동 검사는 `scripts/smoke_process.py`가 `scripts/smoke_server.py`를 자식 프로세스로 실행합니다. 이 서버는 Django의 정적 파일 제공·시작 검사를 유지하면서, 로컬 IP에 대한 역방향 DNS 조회만 생략합니다. macOS CI 러너의 DNS 지연을 피하기 위한 자동검사 전용 구성입니다. 평소 개발용 `project.py run`은 기본 Django 개발 서버를 사용합니다.
+
 ## 백엔드
 
 - `backend/config/settings/base.py`: 경로·앱·DB·로깅 공통 설정
