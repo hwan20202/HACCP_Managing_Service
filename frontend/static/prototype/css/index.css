@@ -1,0 +1,19 @@
+.excel-input { border: 1px solid transparent; background: transparent; padding: 0.2rem; font-family: inherit; font-size: inherit; color: inherit; width: 100%; box-sizing: border-box; transition: all 0.2s; border-radius: 4px; }
+.excel-input:hover { border-color: rgba(0,0,0,0.1); background: rgba(0,0,0,0.02); }
+.excel-input:focus { outline: none; border-color: var(--brand-primary); background: #fff; box-shadow: 0 0 0 2px rgba(0,123,255,0.15); }
+
+/* ===== CCP 모달 스타일 ===== */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.55);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 9000;
+  padding: 1rem;
+}
+.modal {
+  background: var(--bg-card, #fff);
+  border-radius: 16px;
+  padding: 1.5rem;
+  box-shadow: 0 25px 60px rgba(0,0,0,0.3);
+  position: relative;
+}

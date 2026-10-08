@@ -1,0 +1,33 @@
+{
+	# Local administration API is unnecessary for the initial deployment.
+	admin off
+}
+
+{$HACCP_SITE_ADDRESS:http://127.0.0.1:8080} {
+	bind {$HACCP_BIND:127.0.0.1}
+	encode zstd gzip
+	log
+
+	request_body {
+		max_size 30MB
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		# Django sets frame policy (SAMEORIGIN only for the prototype PDF viewer).
+		Referrer-Policy same-origin
+		-Server
+	}
+
+	handle_path /static/* {
+		root * "{$HACCP_STATIC_DIR}"
+		file_server
+	}
+
+	handle {
+		reverse_proxy {$HACCP_UPSTREAM:127.0.0.1:8001} {
+			# Overwrite, rather than trust, a client-provided scheme header.
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+}

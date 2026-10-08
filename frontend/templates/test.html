@@ -1,0 +1,65 @@
+{% load static %}
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>HACCP · 시스템 연결 확인</title>
+    <link rel="icon" href="{% static 'images/mark.svg' %}" type="image/svg+xml">
+    <link rel="stylesheet" href="{% static 'system-test/main.css' %}">
+    <script src="{% static 'system-test/app.js' %}" defer></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="HACCP 홈">
+        <img src="{% static 'images/mark.svg' %}" alt="" width="38" height="38">
+        <span>HACCP <span class="brand-caption">WORKSPACE</span></span>
+      </a>
+      <a class="header-link" href="/">업무 화면 <span aria-hidden="true">↗</span></a>
+    </header>
+    <main>
+      <section class="intro" aria-labelledby="page-title">
+        <span class="eyebrow">시스템 테스트 화면</span>
+        <h1 id="page-title">시스템 연결을<br>확인합니다.</h1>
+        <p class="description">서버 응답과 데이터베이스 준비 상태를 확인하세요.</p>
+      </section>
+      <section class="connection-panel" aria-labelledby="connection-title">
+        <div class="panel-heading">
+          <div>
+            <span class="eyebrow">SYSTEM STATUS</span>
+            <h2 id="connection-title">시스템 연결</h2>
+          </div>
+          <button id="refresh-status" type="button">다시 확인 <span aria-hidden="true">↻</span></button>
+        </div>
+        <div class="status-grid" aria-live="polite" aria-atomic="true">
+          <article class="status-item">
+            <span class="status-label">서비스 응답</span>
+            <strong id="live-status" class="status" data-state="pending">확인 중</strong>
+            <p>시스템이 요청에 응답하는지 확인합니다.</p>
+          </article>
+          <article class="status-item">
+            <span class="status-label">데이터 연결</span>
+            <strong id="ready-status" class="status" data-state="pending">확인 중</strong>
+            <p>데이터 저장소의 준비 상태를 확인합니다.</p>
+          </article>
+        </div>
+        <div class="panel-footer">
+          <span id="last-checked">연결 상태를 확인하고 있습니다.</span>
+          <span class="status-note">실시간 확인</span>
+        </div>
+      </section>
+      <section class="next-step" aria-labelledby="next-title">
+        <div class="step-number" aria-hidden="true">01</div>
+        <div>
+          <h2 id="next-title">업무 화면으로 이동</h2>
+          <p>기존 HACCP 시제품 화면은 초기 화면에서 확인할 수 있습니다.</p>
+        </div>
+        <a class="primary-link" href="/">업무 화면 열기 <span aria-hidden="true">→</span></a>
+      </section>
+      <noscript><p class="notice">연결 상태를 확인하려면 브라우저에서 JavaScript를 활성화해 주세요.</p></noscript>
+    </main>
+    <footer class="site-footer"><span>HACCP MANAGEMENT</span><span>내부 업무 시스템 · 초기 구축</span></footer>
+  </body>
+</html>
+

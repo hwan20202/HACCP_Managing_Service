@@ -1,0 +1,21 @@
+{% load static %}
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HACCP · 시제품 데이터 준비</title>
+    <link rel="icon" href="{% static 'images/mark.svg' %}" type="image/svg+xml">
+    <link rel="stylesheet" href="{% static 'system-test/main.css' %}">
+  </head>
+  <body>
+    <main>
+      <section class="intro">
+        <span class="eyebrow">HACCP WORKSPACE</span>
+        <h1>시제품 데이터가<br>아직 없습니다.</h1>
+        <p class="description">기존 업무 화면을 열려면 담당자에게 시제품 데이터를 받아 준비해 주세요.<br>준비 방법은 프로젝트 README에 안내되어 있습니다.</p>
+        <a class="primary-link" href="{% url 'system-test' %}">시스템 연결 확인 →</a>
+      </section>
+    </main>
+  </body>
+</html>

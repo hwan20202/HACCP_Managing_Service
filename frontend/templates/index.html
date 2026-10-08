@@ -1,0 +1,241 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BIODOT HACCP 식품안전관리 시스템</title>
+  <link rel="icon" href="{% static 'images/mark.svg' %}" type="image/svg+xml">
+  <meta name="description" content="바이오닷 HACCP 식품안전관리 시스템 - 원료 수불, CCP 모니터링, 선행요건, 생산일지 통합 관리" />
+  <link rel="stylesheet" href="{% static 'prototype/css/main.css' %}" />
+</head>
+<body>
+  <!-- 사이드바 -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <div class="logo-icon">
+          <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="20" cy="20" r="18" fill="url(#logoGrad)"/>
+            <path d="M12 20 C12 14, 20 10, 20 10 C20 10, 28 14, 28 20 C28 26, 20 30, 20 30 C20 30, 12 26, 12 20Z" fill="white" fill-opacity="0.9"/>
+            <path d="M16 20 C16 17, 20 14.5, 20 14.5 C20 14.5, 24 17, 24 20 C24 23, 20 25.5, 20 25.5 C20 25.5, 16 23, 16 20Z" fill="url(#logoGrad)"/>
+            <defs>
+              <linearGradient id="logoGrad" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="#00d4aa"/>
+                <stop offset="100%" stop-color="#0066ff"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <div class="logo-text">
+          <span class="logo-brand">BIODOT</span>
+          <span class="logo-sub">HACCP System</span>
+        </div>
+      </div>
+      <button class="sidebar-toggle" id="sidebarToggle" title="메뉴 접기">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M15 18l-6-6 6-6"/>
+        </svg>
+      </button>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-section">
+        <span class="nav-section-label">메인</span>
+        <a href="#" class="nav-item active" data-page="dashboard" id="nav-dashboard">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="7" height="7" rx="1"/>
+            <rect x="14" y="3" width="7" height="7" rx="1"/>
+            <rect x="3" y="14" width="7" height="7" rx="1"/>
+            <rect x="14" y="14" width="7" height="7" rx="1"/>
+          </svg>
+          <span>대시보드</span>
+          <span class="nav-badge" id="badge-dashboard"></span>
+        </a>
+      </div>
+
+      <div class="nav-section">
+        <span class="nav-section-label">재고 관리</span>
+        <a href="#" class="nav-item" data-page="raw-materials" id="nav-raw-materials">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+          </svg>
+          <span>원료 수불대장</span>
+        </a>
+        <a href="#" class="nav-item" data-page="sub-materials" id="nav-sub-materials">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+          </svg>
+          <span>부자재 수불대장</span>
+        </a>
+        <a href="#" class="nav-item" data-page="finished-goods" id="nav-finished-goods">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          </svg>
+          <span>완제품 수불대장</span>
+        </a>
+      </div>
+
+      <div class="nav-section">
+        <span class="nav-section-label">HACCP 관리</span>
+        <a href="#" class="nav-item" data-page="ccp-monitoring" id="nav-ccp-monitoring">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+          <span>CCP 모니터링</span>
+          <span class="nav-badge alert" id="badge-ccp">!</span>
+        </a>
+        <a href="#" class="nav-item" data-page="prerequisite" id="nav-prerequisite">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 11l3 3L22 4"/>
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+          </svg>
+          <span>선행요건 관리</span>
+        </a>
+        <a href="#" class="nav-item" data-page="production-log" id="nav-production-log">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="16" y1="13" x2="8" y2="13"/>
+            <line x1="16" y1="17" x2="8" y2="17"/>
+            <polyline points="10 9 9 9 8 9"/>
+          </svg>
+          <span>생산 일지</span>
+        </a>
+      </div>
+
+      <div class="nav-section">
+        <span class="nav-section-label">품질 관리</span>
+        <a href="#" class="nav-item" data-page="quality-check" id="nav-quality-check">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <span>자가품질검사</span>
+        </a>
+        <a href="#" class="nav-item" data-page="sanitation" id="nav-sanitation">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+          </svg>
+          <span>위생 관리 일지</span>
+        </a>
+        <a href="#" class="nav-item" data-page="training" id="nav-training">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          </svg>
+          <span>교육 훈련 관리</span>
+        </a>
+      </div>
+
+      <div class="nav-section">
+        <span class="nav-section-label">문서 관리</span>
+        <a href="#" class="nav-item" data-page="standards" id="nav-standards">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+            <line x1="9" y1="7" x2="15" y2="7"/>
+            <line x1="9" y1="11" x2="15" y2="11"/>
+            <line x1="9" y1="15" x2="13" y2="15"/>
+          </svg>
+          <span>HACCP 기준서</span>
+          <span class="nav-badge warning" id="badge-standards">갱신</span>
+        </a>
+      </div>
+
+      <div class="nav-section">
+        <span class="nav-section-label">시스템</span>
+        <a href="#" class="nav-item" data-page="alerts" id="nav-alerts">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+            <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+          </svg>
+          <span>알림 센터</span>
+          <span class="nav-badge warning" id="badge-alerts">3</span>
+        </a>
+        <a href="#" class="nav-item" data-page="reports" id="nav-reports">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="20" x2="18" y2="10"/>
+            <line x1="12" y1="20" x2="12" y2="4"/>
+            <line x1="6" y1="20" x2="6" y2="14"/>
+          </svg>
+          <span>보고서</span>
+        </a>
+        <a href="#" class="nav-item" data-page="settings" id="nav-settings">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/>
+          </svg>
+          <span>설정</span>
+        </a>
+      </div>
+    </nav>
+
+    <div class="sidebar-footer">
+      <a class="system-test-link" href="{% url 'system-test' %}">시스템 연결 확인 ↗</a>
+    </div>
+  </aside>
+
+  <!-- 메인 컨텐츠 -->
+  <main class="main-content" id="mainContent">
+    <!-- 상단 헤더 -->
+    <header class="top-header">
+      <div class="header-left">
+        <button class="mobile-menu-btn" id="mobileMenuBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="3" y1="12" x2="21" y2="12"/>
+            <line x1="3" y1="6" x2="21" y2="6"/>
+            <line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+        </button>
+        <div class="breadcrumb" id="breadcrumb">
+          <span>대시보드</span>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="current-date" id="currentDate"></div>
+        <button class="header-btn" id="alertBtn" title="알림">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+            <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+          </svg>
+          <span class="header-badge">3</span>
+        </button>
+        <button class="header-btn" title="전체화면">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- 페이지 컨텐츠 영역 -->
+    <div class="page-container" id="pageContainer">
+      <!-- 각 페이지는 JS로 동적 렌더링 -->
+    </div>
+  </main>
+
+  <!-- 모달 오버레이 -->
+  <div class="modal-overlay" id="modalOverlay"></div>
+  <div class="modal-container" id="modalContainer"></div>
+
+  <!-- 토스트 알림 -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="{% url 'prototype-data' %}"></script>
+  <script src="{% static 'prototype/js/modules/unit-converter.js' %}"></script>
+  <script src="{% static 'prototype/js/modules/auto-engine.js' %}"></script>
+  <script src="{% static 'prototype/js/modules/dashboard.js' %}"></script>
+  <script src="{% static 'prototype/js/modules/inventory.js' %}"></script>
+  <script src="{% static 'prototype/js/modules/ccp.js' %}"></script>
+  <script src="{% static 'prototype/js/modules/prerequisite.js' %}"></script>
+  <script src="{% static 'prototype/js/modules/production.js' %}"></script>
+  <script src="{% static 'prototype/js/modules/quality.js' %}"></script>
+  <script src="{% static 'prototype/js/modules/reports.js' %}"></script>
+  <script src="{% static 'prototype/js/modules/standards.js' %}"></script>
+  <script src="{% static 'prototype/js/app.js' %}"></script>
+</body>
+</html>

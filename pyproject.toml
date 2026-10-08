@@ -1,0 +1,11 @@
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+extend-exclude = ["data", "tools", "**/migrations/*"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"backend/config/settings/*.py" = ["F403", "F405"]
+
