@@ -29,7 +29,7 @@
 
 기존 HTML·CSS·기능 JavaScript를 `frontend/`에 복사했습니다. 앞으로 화면을 수정하는 위치는 이 실행 사본이며 `data/legacy-prototype`의 원본은 보존합니다. 화면은 기존 전역 변수 `HACCP_DATA`와 일부 브라우저 `localStorage`를 사용합니다. 업무 데이터의 서버 저장·동기화는 아직 없습니다.
 
-실제 데이터는 `HACCP_DATA_DIR/legacy-prototype/src/js/data.js`, PDF는 `HACCP_DATA_DIR/reference/setup_standard/`의 지정 파일을 읽습니다. 원본 자료를 서버 DB로 자동 이관하지 않습니다. 해당 자료가 없는 새 작업 폴더에서도 `/test/`와 서버 검증은 동작하며, 초기 화면에는 준비 안내를 표시합니다.
+실제 데이터는 `HACCP_DATA_DIR/legacy-prototype/src/js/data.js`, PDF는 `HACCP_DATA_DIR/reference/setup_standard/`의 지정 파일을 읽습니다. 초기 개발 테스트용 `data.js`는 Git에 포함하므로 기본 데이터 경로에서는 저장소 복제 후 초기 화면을 사용할 수 있습니다. PDF는 별도 전달합니다. 원본 자료를 서버 DB로 자동 이관하지 않습니다. 데이터 경로를 변경하고 `data.js`를 배치하지 않은 경우에는 초기 화면에 준비 안내를 표시하며, `/test/`와 서버 검증은 계속 동작합니다.
 
 자료 제공은 위 두 경로에 한정하며 임의 파일 경로나 디렉터리 목록을 제공하지 않습니다. PDF만 같은 출처의 iframe에 표시할 수 있도록 허용합니다. 계정 기능이 없으므로 지정 시제품 자료에는 로그인 제한이 없습니다.
 

@@ -6,3 +6,5 @@
 *.png binary
 *.jpg binary
 
+# Preserve the archived prototype dataset byte-for-byte on every OS.
+data/legacy-prototype/src/js/data.js -text
