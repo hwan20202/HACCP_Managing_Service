@@ -15,11 +15,11 @@
 
 ## 백엔드
 
-- `config/settings/base.py`: 경로·앱·DB·로깅 공통 설정
-- `development.py`: 로컬 개발 설정
-- `production.py`: 비밀키·허용 호스트 검증과 HTTPS 설정
-- `test.py`: 임시 DB와 테스트용 설정
-- `apps/core`: 초기 화면·테스트 화면·헬스체크·지정 시제품 자료 제공
+- `backend/config/settings/base.py`: 경로·앱·DB·로깅 공통 설정
+- `backend/config/settings/development.py`: 로컬 개발 설정
+- `backend/config/settings/production.py`: 비밀키·허용 호스트 검증과 HTTPS 설정
+- `backend/config/settings/test.py`: 메모리 DB와 테스트용 설정
+- `backend/apps/core`: 초기 화면·테스트 화면·헬스체크·지정 시제품 자료 제공
 
 계정·로그인·세션·권한·Django 관리자·첨부파일 앱은 제거했습니다. Django의 `contenttypes`는 기본 DB 메타데이터로 유지하며, 현재 DB에는 계정 테이블이나 업무 테이블이 없습니다. 준비 상태 검사는 SQLite 연결과 마이그레이션·필수 테이블을 확인합니다.
 
@@ -37,6 +37,6 @@ SQLite는 운영 PC의 로컬 디스크에 둡니다. 개발자마다 자신의 
 
 ## 설정의 경계
 
-프로세스 환경변수 → 지정한 환경 파일 → 코드 기본값 순서입니다. 환경 파일 선택은 `HACCP_ENV_FILE` 또는 프로젝트 도구의 `--env-file`로 합니다. `serve`는 항상 운영 설정을 사용하고 `127.0.0.1`에만 바인딩합니다.
+프로세스 환경변수 → 지정한 환경 파일 → 코드 기본값 순서입니다. `manage.py`는 `HACCP_ENV_FILE`로 환경 파일을 선택합니다. 프로젝트 도구는 `--env-file`로 선택하며 생략하면 `.env`를 사용합니다. `--production`은 Django 설정 모듈만 선택하고 환경 파일을 바꾸지 않습니다. `serve`는 항상 운영 설정을 사용하고 `127.0.0.1`에만 바인딩합니다.
 
 Caddy가 받은 HTTP/HTTPS 정보를 덮어써 전달하고 Waitress는 로컬 프록시만 신뢰합니다. 정적 파일 루트는 `HACCP_DATA_DIR/static`입니다. `collectstatic`은 이 생성 폴더를 비우고 현재 정적 파일을 다시 수집하므로 원본 자료를 넣지 않습니다. 실제 HTTPS 배포 전 호스트·DNS·인증서와 사내 접속 범위를 설정합니다.
