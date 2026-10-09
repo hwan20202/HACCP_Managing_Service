@@ -1,0 +1,399 @@
+"""Production / inventory core models.
+
+The tables are created by sql/0001_core.sql (see migrations/0001_initial.py), not by
+Django. Every model here is managed=False: Django reads and writes the rows but never
+creates or alters the tables. Changing a table means a new SQL migration (rule S6).
+
+Rules that matter when writing code against these models:
+- Quantities are integers scaled by 1,000,000 (*_e6, rule S3). Use apps.inventory.quantity.
+- Datetimes are KST text (rule S4). KSTDateTimeField handles conversion.
+- stock_movements is append-only and inventory is maintained by a DB trigger (I2, I3).
+  Write a StockMovement to change stock; never write Inventory.
+"""
+
+from django.db import models
+
+from .fields import KSTDateTimeField, LocalNow
+
+# ---------------------------------------------------------------------------
+# 1. Reference codes (seeded by the SQL migration)
+# ---------------------------------------------------------------------------
+
+
+class ItemType(models.Model):
+    code = models.TextField(primary_key=True)
+    name = models.TextField()
+    code_prefix = models.TextField(null=True, blank=True)
+    sort_order = models.IntegerField(default=0)
+
+    class Meta:
+        managed = False
+        db_table = "item_types"
+        ordering = ["sort_order"]
+
+    def __str__(self):
+        return self.name
+
+
+class StockMovementType(models.Model):
+    code = models.TextField(primary_key=True)
+    name = models.TextField()
+    direction = models.IntegerField()
+
+    class Meta:
+        managed = False
+        db_table = "stock_movement_types"
+
+    def __str__(self):
+        return self.name
+
+
+class HoldSourceType(models.Model):
+    code = models.TextField(primary_key=True)
+    name = models.TextField()
+    requires_evidence = models.BooleanField(default=True)
+
+    class Meta:
+        managed = False
+        db_table = "hold_source_types"
+
+    def __str__(self):
+        return self.name
+
+
+class HoldDisposition(models.Model):
+    code = models.TextField(primary_key=True)
+    name = models.TextField()
+    lot_status_after = models.TextField(null=True, blank=True)
+
+    class Meta:
+        managed = False
+        db_table = "hold_dispositions"
+
+    def __str__(self):
+        return self.name
+
+
+# ---------------------------------------------------------------------------
+# 2. Master data
+# ---------------------------------------------------------------------------
+
+
+class Staff(models.Model):
+    staff_code = models.TextField(unique=True)
+    name = models.TextField()
+    is_active = models.BooleanField(default=True)
+    created_at = KSTDateTimeField(db_default=LocalNow(), editable=False)
+
+    class Meta:
+        managed = False
+        db_table = "staff"
+
+    def __str__(self):
+        return f"{self.name} ({self.staff_code})"
+
+
+class Supplier(models.Model):
+    supplier_code = models.TextField(unique=True)
+    name = models.TextField()
+    is_active = models.BooleanField(default=True)
+    created_at = KSTDateTimeField(db_default=LocalNow(), editable=False)
+
+    class Meta:
+        managed = False
+        db_table = "suppliers"
+
+    def __str__(self):
+        return self.name
+
+
+class Item(models.Model):
+    item_type = models.ForeignKey(
+        ItemType, models.PROTECT, to_field="code", db_column="item_type", related_name="items"
+    )
+    item_code = models.TextField(unique=True)
+    short_code = models.TextField(unique=True, null=True, blank=True)
+    name = models.TextField()
+    base_unit = models.TextField()
+    unit_weight_mg = models.BigIntegerField(null=True, blank=True)
+    shelf_life_days = models.IntegerField(null=True, blank=True)
+    origin_country = models.TextField(null=True, blank=True)
+    food_type = models.TextField(null=True, blank=True)
+    minimum_stock_e6 = models.BigIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = KSTDateTimeField(db_default=LocalNow(), editable=False)
+
+    class Meta:
+        managed = False
+        db_table = "items"
+
+    def __str__(self):
+        return f"{self.item_code} {self.name}"
+
+
+# ---------------------------------------------------------------------------
+# 3. LOT
+# ---------------------------------------------------------------------------
+
+
+class LotKind(models.TextChoices):
+    INCOMING = "INCOMING", "입고"
+    PRODUCED = "PRODUCED", "생산"
+
+
+class LotStatus(models.TextChoices):
+    QUARANTINE = "QUARANTINE", "검사대기"
+    AVAILABLE = "AVAILABLE", "사용가능"
+    CONSUMED = "CONSUMED", "소진"
+    REJECTED = "REJECTED", "부적합"
+    DISPOSED = "DISPOSED", "폐기"
+
+
+class Lot(models.Model):
+    lot_number = models.TextField()
+    item = models.ForeignKey(Item, models.PROTECT, related_name="lots")
+    lot_kind = models.TextField(choices=LotKind.choices)
+    status = models.TextField(choices=LotStatus.choices)
+    manufactured_date = models.DateField(null=True, blank=True)
+    expiration_date = models.DateField(null=True, blank=True)
+    created_at = KSTDateTimeField(db_default=LocalNow(), editable=False)
+    # Refreshed by trigger trg_lots_updated_at on every UPDATE.
+    updated_at = KSTDateTimeField(db_default=LocalNow(), editable=False)
+
+    class Meta:
+        managed = False
+        db_table = "lots"
+
+    def __str__(self):
+        return self.lot_number
+
+
+class LotNumberRule(models.Model):
+    lot_kind = models.TextField(choices=LotKind.choices)
+    item_type = models.ForeignKey(
+        ItemType,
+        models.PROTECT,
+        to_field="code",
+        db_column="item_type",
+        null=True,
+        blank=True,
+        related_name="lot_number_rules",
+    )
+    pattern = models.TextField()
+    effective_from = models.DateField()
+    is_active = models.BooleanField(default=True)
+    notes = models.TextField(null=True, blank=True)
+
+    class Meta:
+        managed = False
+        db_table = "lot_number_rules"
+
+
+class LotNumberSequence(models.Model):
+    seq_key = models.TextField(primary_key=True)
+    current_seq = models.IntegerField(default=0)
+    updated_at = KSTDateTimeField(db_default=LocalNow())
+
+    class Meta:
+        managed = False
+        db_table = "lot_number_sequences"
+
+
+# ---------------------------------------------------------------------------
+# 4. Stock movements / inventory (I1-I3)
+# ---------------------------------------------------------------------------
+
+
+class AppendOnlyError(Exception):
+    """Raised when code tries to change rows the schema treats as immutable."""
+
+
+class StockMovementQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise AppendOnlyError("stock_movements is append-only: add a CORRECTION movement (I2)")
+
+    def delete(self):
+        raise AppendOnlyError("stock_movements is append-only: add a CORRECTION movement (I2)")
+
+
+class StockMovement(models.Model):
+    lot = models.ForeignKey(Lot, models.PROTECT, related_name="movements")
+    movement_type = models.ForeignKey(
+        StockMovementType,
+        models.PROTECT,
+        to_field="code",
+        db_column="movement_type_code",
+        related_name="movements",
+    )
+    quantity_e6 = models.BigIntegerField()
+    corrects_movement = models.ForeignKey(
+        "self", models.PROTECT, null=True, blank=True, related_name="corrections"
+    )
+    staff = models.ForeignKey(Staff, models.PROTECT, related_name="stock_movements")
+    occurred_at = KSTDateTimeField()
+    reason = models.TextField(null=True, blank=True)
+    idempotency_key = models.TextField(unique=True)
+    created_at = KSTDateTimeField(db_default=LocalNow(), editable=False)
+
+    objects = StockMovementQuerySet.as_manager()
+
+    class Meta:
+        managed = False
+        db_table = "stock_movements"
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise AppendOnlyError("stock_movements is append-only: add a CORRECTION movement (I2)")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise AppendOnlyError("stock_movements is append-only: add a CORRECTION movement (I2)")
+
+
+class InventoryQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise AppendOnlyError("inventory is maintained by trigger trg_sm_inventory (I3)")
+
+    def delete(self):
+        raise AppendOnlyError("inventory is maintained by trigger trg_sm_inventory (I3)")
+
+
+class Inventory(models.Model):
+    """Current quantity per LOT. Read-only from the application (I3)."""
+
+    lot = models.OneToOneField(Lot, models.PROTECT, primary_key=True, related_name="inventory")
+    quantity_e6 = models.BigIntegerField(default=0)
+    updated_at = KSTDateTimeField(db_default=LocalNow(), editable=False)
+
+    objects = InventoryQuerySet.as_manager()
+
+    class Meta:
+        managed = False
+        db_table = "inventory"
+
+    def save(self, *args, **kwargs):
+        raise AppendOnlyError("inventory is maintained by trigger trg_sm_inventory (I3)")
+
+    def delete(self, *args, **kwargs):
+        raise AppendOnlyError("inventory is maintained by trigger trg_sm_inventory (I3)")
+
+
+# ---------------------------------------------------------------------------
+# 5. Incoming receipts (C2: one receipt = one LOT)
+# ---------------------------------------------------------------------------
+
+
+class ReceiptStatus(models.TextChoices):
+    COMPLETED = "COMPLETED", "완료"
+    CANCELLED = "CANCELLED", "취소"
+
+
+class IncomingReceipt(models.Model):
+    lot = models.OneToOneField(Lot, models.PROTECT, related_name="incoming_receipt")
+    supplier = models.ForeignKey(Supplier, models.PROTECT, related_name="incoming_receipts")
+    supplier_lot_number = models.TextField(null=True, blank=True)
+    received_date = models.DateField()
+    quantity_e6 = models.BigIntegerField()
+    staff = models.ForeignKey(Staff, models.PROTECT, related_name="incoming_receipts")
+    stock_movement = models.OneToOneField(
+        StockMovement, models.PROTECT, related_name="incoming_receipt"
+    )
+    receipt_status = models.TextField(
+        choices=ReceiptStatus.choices, default=ReceiptStatus.COMPLETED
+    )
+    cancelled_at = KSTDateTimeField(null=True, blank=True)
+    cancel_reason = models.TextField(null=True, blank=True)
+    created_at = KSTDateTimeField(db_default=LocalNow(), editable=False)
+
+    class Meta:
+        managed = False
+        db_table = "incoming_receipts"
+
+
+# ---------------------------------------------------------------------------
+# 6. LOT holds (I5)
+# ---------------------------------------------------------------------------
+
+
+class LotHold(models.Model):
+    lot = models.ForeignKey(Lot, models.PROTECT, related_name="holds")
+    source_type = models.ForeignKey(
+        HoldSourceType,
+        models.PROTECT,
+        to_field="code",
+        db_column="source_type",
+        related_name="holds",
+    )
+    # Document-domain ids. No FK yet: decided with the document ERD (record PK, not version).
+    deviation_action_id = models.BigIntegerField(null=True, blank=True)
+    source_document_id = models.BigIntegerField(null=True, blank=True)
+    parent_hold = models.ForeignKey(
+        "self", models.PROTECT, null=True, blank=True, related_name="propagated_holds"
+    )
+    reason = models.TextField()
+    held_by = models.ForeignKey(
+        Staff, models.PROTECT, db_column="held_by", related_name="holds_placed"
+    )
+    held_at = KSTDateTimeField()
+    released_by = models.ForeignKey(
+        Staff,
+        models.PROTECT,
+        db_column="released_by",
+        null=True,
+        blank=True,
+        related_name="holds_released",
+    )
+    released_at = KSTDateTimeField(null=True, blank=True)
+    disposition = models.ForeignKey(
+        HoldDisposition,
+        models.PROTECT,
+        to_field="code",
+        db_column="disposition",
+        null=True,
+        blank=True,
+        related_name="holds",
+    )
+    release_reason = models.TextField(null=True, blank=True)
+
+    class Meta:
+        managed = False
+        db_table = "lot_holds"
+
+
+# ---------------------------------------------------------------------------
+# 7. Event inbox / audit log
+# ---------------------------------------------------------------------------
+
+
+class DomainEventInbox(models.Model):
+    event_id = models.BigIntegerField(primary_key=True)
+    event_code = models.TextField()
+    processed_at = KSTDateTimeField(db_default=LocalNow())
+    result = models.TextField(
+        choices=[("APPLIED", "APPLIED"), ("SKIPPED", "SKIPPED"), ("FAILED", "FAILED")]
+    )
+    error_message = models.TextField(null=True, blank=True)
+
+    class Meta:
+        managed = False
+        db_table = "domain_event_inbox"
+
+
+class AuditLog(models.Model):
+    table_name = models.TextField()
+    record_id = models.TextField()
+    action = models.TextField(
+        choices=[("INSERT", "INSERT"), ("UPDATE", "UPDATE"), ("DELETE", "DELETE")]
+    )
+    before_json = models.JSONField(null=True, blank=True)
+    after_json = models.JSONField(null=True, blank=True)
+    reason = models.TextField(null=True, blank=True)
+    staff = models.ForeignKey(
+        Staff, models.PROTECT, null=True, blank=True, related_name="audit_logs"
+    )
+    source_event_id = models.BigIntegerField(null=True, blank=True)
+    occurred_at = KSTDateTimeField(db_default=LocalNow())
+
+    class Meta:
+        managed = False
+        db_table = "audit_logs"

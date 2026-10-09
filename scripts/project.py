@@ -56,8 +56,8 @@ def initialize(args):
 def check(args):
     if sys.version_info[:2] != (3, 14):
         raise SystemExit("This project is tested with Python 3.14. Use Python 3.14.x.")
-    if sqlite3.sqlite_version_info < (3, 31):
-        raise SystemExit("SQLite 3.31+ is required.")
+    if sqlite3.sqlite_version_info < (3, 37):
+        raise SystemExit("SQLite 3.37+ is required (STRICT tables).")
     print(f"Python {sys.version.split()[0]} | SQLite {sqlite3.sqlite_version}", flush=True)
     run_command("-m", "pip", "check")
     run_command("-m", "ruff", "check", ".")

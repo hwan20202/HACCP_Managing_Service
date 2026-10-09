@@ -32,6 +32,7 @@ INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.staticfiles",
     "apps.core",
+    "apps.inventory",
 ]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -57,7 +58,13 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": DATA_DIR / "db" / "app.sqlite3",
-        "OPTIONS": {"timeout": 20},
+        "OPTIONS": {
+            "timeout": 20,
+            # Core rule S1: WAL mode. Django itself sets foreign_keys=ON on every connection.
+            "init_command": "PRAGMA journal_mode=WAL;",
+            # Production core rule S5: every transaction.atomic() starts with BEGIN IMMEDIATE.
+            "transaction_mode": "IMMEDIATE",
+        },
     }
 }
 LANGUAGE_CODE = "ko-kr"

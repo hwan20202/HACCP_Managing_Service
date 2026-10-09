@@ -9,7 +9,7 @@
 | HTML·CSS·바닐라 JS | - | 화면 (빌드 도구 없음) |
 | Python | 3.14.x | 실행 언어 |
 | Django | 5.2.18 LTS | 웹 프레임워크 (URL·화면·ORM·마이그레이션 내장) |
-| SQLite | Python 내장, 3.31 이상 | DB (별도 서버 불필요) |
+| SQLite | Python 내장, 3.37 이상 (STRICT 테이블) | DB (별도 서버 불필요) |
 | Waitress | 3.0.2 | 운영용 서버 (Windows 지원) |
 | Caddy | 2.11.7 | 운영용 HTTPS·정적 파일 서버 |
 | Ruff | 0.16.10 | 코드 검사·형식 정리 |
