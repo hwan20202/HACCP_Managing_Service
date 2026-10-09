@@ -1,12 +1,18 @@
 import datetime
+import tempfile
 from decimal import Decimal
+from io import StringIO
+from pathlib import Path
 from unittest.mock import patch
 
 from django.conf import settings
+from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
 from django.test import SimpleTestCase, TestCase
 
 from .fields import KST, kst_now, parse_kst_text, to_kst_text
+from .lot_numbers import LotNumberError, next_lot_number, render, seq_to_letters
+from .master_import import MasterImportError, ensure_default_lot_rules, import_items
 from .models import (
     AppendOnlyError,
     Inventory,
@@ -14,6 +20,7 @@ from .models import (
     ItemType,
     Lot,
     LotKind,
+    LotNumberRule,
     LotStatus,
     Staff,
     StockMovement,
@@ -309,3 +316,132 @@ class ReadinessTests(TestCase):
         tables = [t for t in connection.introspection.table_names() if t != "lots"]
         with patch("apps.core.views.connection.introspection.table_names", return_value=tables):
             self.assertEqual(self.client.get("/health/ready/").status_code, 503)
+
+
+class SeqLetterTests(SimpleTestCase):
+    def test_bijective_letters(self):
+        cases = {1: "A", 2: "B", 26: "Z", 27: "AA", 52: "AZ", 53: "BA", 702: "ZZ", 703: "AAA"}
+        for number, letters in cases.items():
+            self.assertEqual(seq_to_letters(number), letters)
+
+
+class LotNumberTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        ensure_default_lot_rules()
+        cls.item = Item.objects.create(
+            item_type_id="RAW", item_code="1000019", name="테스트 원료", base_unit="kg"
+        )
+        cls.day = datetime.date(2026, 10, 9)
+
+    def draw(self, item=None, day=None):
+        return next_lot_number(
+            lot_kind=LotKind.INCOMING, item=item or self.item, base_date=day or self.day
+        )
+
+    def test_sequence_per_item_and_date(self):
+        self.assertEqual(self.draw(), "1000019-261009A")
+        self.assertEqual(self.draw(), "1000019-261009B")
+        self.assertEqual(self.draw(day=datetime.date(2026, 10, 10)), "1000019-261010A")
+        key = fetch_one(
+            "SELECT current_seq FROM lot_number_sequences WHERE seq_key = %s", ["1000019-261009"]
+        )
+        self.assertEqual(key[0], 2)
+
+    def test_goes_past_z(self):
+        numbers = [self.draw() for _ in range(28)]
+        self.assertEqual(numbers[25:], ["1000019-261009Z", "1000019-261009AA", "1000019-261009AB"])
+
+    def test_skips_numbers_that_already_exist(self):
+        Lot.objects.create(
+            lot_number="1000019-261009A",
+            item=self.item,
+            lot_kind=LotKind.INCOMING,
+            status=LotStatus.QUARANTINE,
+        )
+        self.assertEqual(self.draw(), "1000019-261009B")
+
+    def test_item_type_rule_wins_over_generic_rule(self):
+        LotNumberRule.objects.create(
+            lot_kind=LotKind.INCOMING,
+            item_type_id="RAW",
+            pattern="R{item_code}{received:yyyyMMdd}-{seq:000}",
+            effective_from=datetime.date(2026, 10, 1),
+        )
+        self.assertEqual(self.draw(), "R100001920261009-001")
+        # Before the specific rule takes effect the generic rule applies.
+        self.assertEqual(self.draw(day=datetime.date(2026, 9, 30)), "1000019-260930A")
+
+    def test_no_rule_is_an_error(self):
+        LotNumberRule.objects.update(is_active=False)
+        with self.assertRaises(LotNumberError):
+            self.draw()
+
+    def test_invalid_patterns(self):
+        for pattern in ["{item_code}", "{item_code}{seq:A}{seq:A}", "{nope}{seq:A}", "{seq:X}"]:
+            with self.assertRaises(LotNumberError, msg=pattern):
+                render(pattern, item=self.item, base_date=self.day, seq=1)
+
+    def test_must_run_inside_a_transaction(self):
+        with patch("apps.inventory.lot_numbers.connection.in_atomic_block", False):
+            with self.assertRaises(LotNumberError):
+                self.draw()
+
+
+class MasterImportTests(TestCase):
+    def test_sample_command_loads_and_is_idempotent(self):
+        out = StringIO()
+        call_command("seed_master", "--sample", stdout=out)
+        self.assertIn("staff: created 3, updated 0", out.getvalue())
+        self.assertIn("created default INCOMING rule", out.getvalue())
+        call_command("seed_master", "--sample", stdout=(out := StringIO()))
+        self.assertIn("items: created 0, updated 5", out.getvalue())
+        self.assertEqual(LotNumberRule.objects.count(), 1)
+        self.assertEqual(Item.objects.get(item_code="1000002").minimum_stock_e6, to_e6("20.5"))
+
+    def test_dry_run_saves_nothing(self):
+        call_command("seed_master", "--sample", "--dry-run", stdout=StringIO())
+        self.assertEqual(Staff.objects.count(), 0)
+        self.assertEqual(LotNumberRule.objects.count(), 0)
+
+    def test_invalid_rows_reject_the_whole_file(self):
+        rows = [
+            {"item_code": "1", "item_type": "RAW", "name": "a", "base_unit": "kg"},
+            {"item_code": "2", "item_type": "XXX", "name": "b", "base_unit": "kg"},
+            {"item_code": "3", "item_type": "RAW", "name": "", "base_unit": "kg"},
+            {"item_code": "1", "item_type": "RAW", "name": "c", "base_unit": "kg"},
+            {
+                "item_code": "4",
+                "item_type": "RAW",
+                "name": "d",
+                "base_unit": "kg",
+                "minimum_stock": "0.0000001",
+            },
+        ]
+        with self.assertRaises(MasterImportError) as caught:
+            import_items(rows)
+        self.assertEqual(len(caught.exception.errors), 4)
+        self.assertIn("line 3", caught.exception.errors[0])
+        self.assertEqual(Item.objects.count(), 0)
+
+    def test_csv_import_with_cp949(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "staff.csv"
+            path.write_text("staff_code,name,is_active\nS100,가상직원,N\n", encoding="cp949")
+            call_command(
+                "seed_master", "--staff", str(path), "--encoding", "cp949", stdout=StringIO()
+            )
+        staff = Staff.objects.get(staff_code="S100")
+        self.assertEqual(staff.name, "가상직원")
+        self.assertFalse(staff.is_active)
+
+    def test_item_type_change_after_lot_is_reported(self):
+        call_command("seed_master", "--sample", stdout=StringIO())
+        item = Item.objects.get(item_code="1000001")
+        Lot.objects.create(
+            lot_number="L1", item=item, lot_kind=LotKind.INCOMING, status=LotStatus.QUARANTINE
+        )
+        rows = [{"item_code": "1000001", "item_type": "SEMI", "name": "x", "base_unit": "kg"}]
+        with self.assertRaises(MasterImportError) as caught:
+            import_items(rows)
+        self.assertIn("rejected by the database", caught.exception.errors[0])
