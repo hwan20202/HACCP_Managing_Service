@@ -32,6 +32,8 @@ INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.staticfiles",
     "apps.core",
+    "apps.staff",
+    "apps.documents",
 ]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -86,3 +88,6 @@ LOGGING = {
     "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "standard"}},
     "root": {"handlers": ["console"], "level": "INFO"},
 }
+
+# 개발 콘솔(처리 단계 추적, DB 스냅샷 API). 개발 설정에서만 켤 수 있다(development.py).
+HACCP_DEV_CONSOLE = False
