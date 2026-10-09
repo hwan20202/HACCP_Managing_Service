@@ -10,11 +10,14 @@ from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
 from django.test import SimpleTestCase, TestCase
 
+from .document_bridge import incoming_received_payload
 from .fields import KST, kst_now, parse_kst_text, to_kst_text
 from .lot_numbers import LotNumberError, next_lot_number, render, seq_to_letters
 from .master_import import MasterImportError, ensure_default_lot_rules, import_items
 from .models import (
     AppendOnlyError,
+    AuditLog,
+    IncomingReceipt,
     Inventory,
     Item,
     ItemType,
@@ -22,11 +25,14 @@ from .models import (
     LotKind,
     LotNumberRule,
     LotStatus,
+    ReceiptStatus,
     Staff,
     StockMovement,
     StockMovementType,
+    Supplier,
 )
 from .quantity import from_e6, to_e6
+from .receiving import ReceiptInput, ReceivingError, cancel_receipt, register_receipt
 from .sql_runner import read_sql, split_statements
 
 CORE_TABLES = {
@@ -445,3 +451,148 @@ class MasterImportTests(TestCase):
         with self.assertRaises(MasterImportError) as caught:
             import_items(rows)
         self.assertIn("rejected by the database", caught.exception.errors[0])
+
+
+class ReceivingTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        call_command("seed_master", "--sample", stdout=StringIO())
+        cls.item = Item.objects.get(item_code="1000001")
+        cls.supplier = Supplier.objects.get(supplier_code="V001")
+        cls.staff = Staff.objects.get(staff_code="S001")
+        cls.today = kst_now().date()
+
+    def receive(self, key="k1", **overrides):
+        values = {
+            "item_id": self.item.pk,
+            "supplier_id": self.supplier.pk,
+            "staff_id": self.staff.pk,
+            "received_date": self.today,
+            "quantity": "50",
+            "idempotency_key": key,
+            "supplier_lot_number": "SUP-001",
+            "manufactured_date": datetime.date(2026, 9, 1),
+            "expiration_date": datetime.date(2027, 9, 1),
+        }
+        values.update(overrides)
+        return register_receipt(ReceiptInput(**values))
+
+    def test_register_creates_lot_movement_receipt_and_audit(self):
+        receipt = self.receive()
+        lot = receipt.lot
+        self.assertEqual(lot.status, LotStatus.QUARANTINE)
+        self.assertEqual(lot.lot_number, f"1000001-{self.today:%y%m%d}A")
+        self.assertEqual(receipt.stock_movement.movement_type_id, "RECEIPT")
+        self.assertEqual(Inventory.objects.get(lot=lot).quantity_e6, to_e6(50))
+        self.assertEqual(AuditLog.objects.get(record_id=str(receipt.pk)).action, "INSERT")
+        row = fetch_one(
+            "SELECT lot_number, supplier_name, quantity_e6, lot_status, receipt_status "
+            "FROM v_doc_incoming_lot WHERE lot_id = %s",
+            [lot.pk],
+        )
+        self.assertEqual(
+            row, (lot.lot_number, "가상원료상사", to_e6(50), "QUARANTINE", "COMPLETED")
+        )
+        self.assertEqual(fetch_all("SELECT * FROM v_inventory_mismatch"), [])
+
+    def test_second_receipt_same_day_gets_next_letter(self):
+        self.receive("k1")
+        self.assertTrue(self.receive("k2").lot.lot_number.endswith("B"))
+
+    def test_late_entry_is_dated_at_start_of_received_day(self):
+        day = self.today - datetime.timedelta(days=3)
+        receipt = self.receive(received_date=day)
+        self.assertEqual(
+            receipt.stock_movement.occurred_at, datetime.datetime.combine(day, datetime.time(), KST)
+        )
+        with self.assertRaises(ReceivingError):
+            self.receive("k2", received_date=self.today + datetime.timedelta(days=1))
+
+    def test_same_key_returns_first_receipt(self):
+        first = self.receive()
+        self.assertEqual(self.receive().pk, first.pk)
+        self.assertEqual(Lot.objects.count(), 1)
+        with self.assertRaises(ReceivingError):
+            self.receive(quantity="51")
+
+    def test_invalid_requests_save_nothing(self):
+        Supplier.objects.filter(pk=self.supplier.pk).update(is_active=False)
+        finished = Item.objects.get(item_code="4000001")
+        cases = [
+            {"supplier_id": self.supplier.pk},
+            {"item_id": finished.pk},
+            {"item_id": 999999},
+            {"quantity": "0"},
+            {"quantity": "abc"},
+            {"quantity": 1.5},
+            {"expiration_date": datetime.date(2026, 8, 1)},
+            {"idempotency_key": ""},
+        ]
+        for overrides in cases:
+            with self.subTest(overrides), self.assertRaises(ReceivingError):
+                self.receive(**{"key": "bad", **overrides})
+        self.assertEqual(Lot.objects.count(), 0)
+        self.assertEqual(StockMovement.objects.count(), 0)
+
+    def test_document_notification_failure_rolls_back(self):
+        target = "apps.inventory.document_bridge.notify_incoming_received"
+        with patch(target, side_effect=RuntimeError("down")), self.assertRaises(RuntimeError):
+            self.receive()
+        self.assertEqual(Lot.objects.count(), 0)
+        self.assertEqual(IncomingReceipt.objects.count(), 0)
+        with patch(target) as notify:
+            receipt = self.receive()
+        notify.assert_called_once_with(receipt)
+
+    def test_payload_matches_contract_c3(self):
+        payload = incoming_received_payload(self.receive())
+        self.assertEqual(payload["subject_type"], "LOT")
+        self.assertEqual(payload["quantity_e6"], to_e6(50))
+        self.assertEqual(payload["unit"], "kg")
+        self.assertEqual(payload["expiration_date"], "2027-09-01")
+
+    def test_cancel_offsets_stock_and_marks_receipt(self):
+        receipt = self.receive()
+        with patch("apps.inventory.document_bridge.notify_incoming_receipt_cancelled") as notify:
+            cancelled = cancel_receipt(
+                receipt_id=receipt.pk, staff_id=self.staff.pk, reason="오입력"
+            )
+        notify.assert_called_once()
+        self.assertEqual(cancelled.receipt_status, ReceiptStatus.CANCELLED)
+        self.assertEqual(cancelled.cancel_reason, "오입력")
+        self.assertEqual(Inventory.objects.get(lot=receipt.lot).quantity_e6, 0)
+        correction = StockMovement.objects.get(movement_type_id="CORRECTION_OUT")
+        self.assertEqual(correction.corrects_movement_id, receipt.stock_movement_id)
+        self.assertEqual(
+            AuditLog.objects.filter(record_id=str(receipt.pk)).order_by("pk").last().action,
+            "UPDATE",
+        )
+        balances = fetch_all(
+            "SELECT lot_balance_e6 FROM v_stock_ledger WHERE lot_number = %s "
+            "ORDER BY occurred_at, movement_id",
+            [receipt.lot.lot_number],
+        )
+        self.assertEqual(balances, [(to_e6(50),), (0,)])
+        # Cancelling again changes nothing.
+        cancel_receipt(receipt_id=receipt.pk, staff_id=self.staff.pk, reason="다시")
+        self.assertEqual(StockMovement.objects.filter(lot=receipt.lot).count(), 2)
+
+    def test_cancel_rules(self):
+        receipt = self.receive()
+        with self.assertRaises(ReceivingError):
+            cancel_receipt(receipt_id=receipt.pk, staff_id=self.staff.pk, reason=" ")
+        with self.assertRaises(ReceivingError):
+            cancel_receipt(receipt_id=999999, staff_id=self.staff.pk, reason="x")
+        StockMovement.objects.create(
+            lot=receipt.lot,
+            movement_type_id="ADJUST_OUT",
+            quantity_e6=to_e6(1),
+            staff=self.staff,
+            occurred_at=kst_now(),
+            reason="실사",
+            idempotency_key="adj-1",
+        )
+        with self.assertRaises(ReceivingError):
+            cancel_receipt(receipt_id=receipt.pk, staff_id=self.staff.pk, reason="x")
+        receipt.refresh_from_db()
+        self.assertEqual(receipt.receipt_status, ReceiptStatus.COMPLETED)
