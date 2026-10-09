@@ -8,3 +8,6 @@ HACCP_DEV_CONSOLE = env_bool("HACCP_DEV_CONSOLE", True)
 if HACCP_DEV_CONSOLE:
     INSTALLED_APPS = [*INSTALLED_APPS, "apps.devtools"]
     MIDDLEWARE = [*MIDDLEWARE, "apps.devtools.middleware.TraceMiddleware"]
+
+# [임시 진입점 T5] 개발에서는 기본으로 켠다.
+HACCP_TEMP_ENTRY = env_bool("HACCP_TEMP_ENTRY", True)

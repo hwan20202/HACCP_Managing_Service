@@ -3,4 +3,10 @@
 from config.urls import urlpatterns as base_patterns
 from django.urls import include, path
 
-urlpatterns = [*base_patterns, path("api/dev/", include("apps.devtools.urls"))]
+from apps.devtools.views import console_page
+
+urlpatterns = [
+    *base_patterns,
+    path("dev/", console_page, name="dev-console"),
+    path("api/dev/", include("apps.devtools.urls")),
+]

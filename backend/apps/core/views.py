@@ -18,7 +18,12 @@ logger = logging.getLogger(__name__)
 def home(request):
     if not settings.PROTOTYPE_DATA_FILE.is_file():
         return render(request, "prototype-missing.html")
-    return render(request, "index.html")
+    # [임시 진입점 T4] 개발 검증 사이드 탭과 개발 콘솔 링크 표시 여부
+    context = {
+        "temp_entry_enabled": settings.HACCP_TEMP_ENTRY,
+        "dev_console_enabled": settings.DEBUG and settings.HACCP_DEV_CONSOLE,
+    }
+    return render(request, "index.html", context)
 
 
 @require_safe

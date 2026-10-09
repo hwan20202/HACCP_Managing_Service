@@ -91,3 +91,5 @@ LOGGING = {
 
 # 개발 콘솔(처리 단계 추적, DB 스냅샷 API). 개발 설정에서만 켤 수 있다(development.py).
 HACCP_DEV_CONSOLE = False
+# [임시 진입점 T5] 시제품 사이드바의 "개발 검증 (임시)" 탭. 운영(사용 테스트)에서도 켤 수 있다.
+HACCP_TEMP_ENTRY = env_bool("HACCP_TEMP_ENTRY", False)

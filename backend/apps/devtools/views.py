@@ -1,6 +1,7 @@
 """개발 콘솔용 읽기 전용 API (/api/dev/). 허용 목록 테이블만, 문서 단위로 읽는다."""
 
 from django.http import JsonResponse
+from django.shortcuts import render
 from django.views.decorators.http import require_safe
 
 from apps.documents.flows import FLOWS
@@ -70,3 +71,8 @@ def trace_detail(request, trace_id):
     if data is None:
         return _json({"code": "NOT_FOUND", "message": "trace가 없거나 만료되었습니다."}, 404)
     return _json(data)
+
+
+@require_safe
+def console_page(request):
+    return render(request, "dev_console.html")

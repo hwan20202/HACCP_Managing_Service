@@ -1,0 +1,64 @@
+/* 개발 검증 (임시) 사용 화면 — 시제품 CSS 변수·클래스를 재사용하고 te- 접두어만 추가한다. */
+.te-badge { margin-left: 0.35rem; vertical-align: middle; }
+.te-nav-badge { background: #fff3cd; color: #856404; }
+.badge-neutral { background: #e9ecef; color: #495057; border: 1px solid #dee2e6; }
+
+.te-userbar { gap: 0.5rem; }
+.te-user-label { font-size: 0.78rem; color: var(--text-secondary); font-weight: 600; }
+.te-user-select { width: auto; min-width: 9rem; padding: 0.4rem 0.6rem; }
+.te-notice {
+  background: #fff3cd; border: 1px solid #ffeeba; color: #856404;
+  border-radius: var(--radius-md); padding: 0.6rem 0.9rem; margin-bottom: 1rem; font-size: 0.82rem;
+}
+
+.te-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.75rem; margin-bottom: 1rem; }
+.te-filters .form-group { margin: 0; }
+.te-filters .form-control { min-width: 8rem; }
+.te-check { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.82rem; color: var(--text-secondary); }
+.te-table-wrap { overflow-x: auto; }
+.te-row-link { cursor: pointer; }
+.te-row-link:hover td { background: var(--bg-card-hover); }
+.te-pager { display: flex; justify-content: center; align-items: center; gap: 0.5rem; margin-top: 1rem; font-size: 0.82rem; color: var(--text-muted); }
+.te-empty { text-align: center; padding: 2.5rem 1rem; color: var(--text-muted); }
+.te-skeleton td { color: transparent; background: linear-gradient(90deg, #f1f3f5, #e9ecef, #f1f3f5); background-size: 200% 100%; animation: te-shimmer 1.2s infinite; }
+@keyframes te-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+.te-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 1rem; }
+.te-card-meta { font-size: 0.75rem; color: var(--text-muted); margin: 0.25rem 0 0.75rem; }
+
+.te-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.75rem 1rem; }
+.te-section { margin-top: 1.25rem; }
+.te-section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem; }
+.te-section-title { font-weight: 700; font-size: 0.9rem; }
+.te-hint { font-size: 0.75rem; color: var(--text-muted); }
+.te-rows td { vertical-align: top; }
+.te-rows .form-control { padding: 0.35rem 0.5rem; font-size: 0.82rem; min-width: 5.5rem; }
+.te-row-new td { background: #e8f5e9; }
+.te-row-changed td { background: #fff8e1; }
+.te-row-deleted td { background: #fdecea; text-decoration: line-through; color: var(--text-muted); }
+.te-field-changed { border-color: #f0ad4e !important; }
+.te-field-error { border-color: var(--color-danger) !important; }
+.te-error-text { color: var(--color-danger); font-size: 0.72rem; margin-top: 0.2rem; }
+.te-error-box { border: 1px solid rgba(239,68,68,0.3); background: rgba(239,68,68,0.06); border-radius: var(--radius-md); padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.82rem; }
+.te-error-box ul { margin: 0.4rem 0 0 1.1rem; }
+.te-error-box a { color: var(--color-danger); }
+.te-judge-ok { color: var(--color-success); font-weight: 600; }
+.te-judge-ng { color: var(--color-danger); font-weight: 700; }
+.te-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.25rem; }
+.te-meta { font-size: 0.82rem; color: var(--text-secondary); display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; }
+.te-kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.5rem 1rem; font-size: 0.85rem; }
+.te-kv dt { color: var(--text-muted); font-size: 0.72rem; }
+.te-kv dd { margin: 0; font-weight: 600; }
+.te-placeholder { border: 1px dashed var(--border-strong); border-radius: var(--radius-lg); padding: 1rem; color: var(--text-muted); font-size: 0.85rem; margin-top: 1.25rem; }
+.te-status-note { font-size: 0.82rem; padding: 0.5rem 0.8rem; border-radius: var(--radius-md); background: #f1f3f5; margin-bottom: 1rem; }
+
+.te-modal-wrap { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 400; display: flex; align-items: center; justify-content: center; }
+.te-modal { background: var(--bg-surface); border-radius: var(--radius-xl); width: min(460px, 92vw); box-shadow: var(--shadow-lg); }
+.te-modal-body { padding: 1.25rem 1.5rem; font-size: 0.88rem; line-height: 1.6; }
+.te-modal-footer { display: flex; justify-content: flex-end; gap: 0.5rem; padding: 0 1.5rem 1.25rem; }
+.te-toast-container { z-index: 450; }
+.te-toast { font-size: 0.85rem; }
+.te-toast-success { border-left: 4px solid var(--color-success); }
+.te-toast-error { border-left: 4px solid var(--color-danger); }
+.te-toast-info { border-left: 4px solid var(--brand-primary); }
+.te-row-ng td { background: #fdecea; }

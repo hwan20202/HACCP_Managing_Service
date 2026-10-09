@@ -89,6 +89,8 @@ const App = {
       settings: '설정',
     };
     document.getElementById('breadcrumb').textContent = breadcrumbs[page] || page;
+    // [임시 진입점 T3] 개발 검증 탭은 temp-entry 모듈이 그린다 (dev-notes/common/temp-entry.md).
+    if (page.startsWith('temp-') && window.TempEntry) { TempEntry.mount(page, container); return; }
 
 
     let html = '';

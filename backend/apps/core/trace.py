@@ -33,6 +33,10 @@ class Step:
         self.result = "skip"
         self.detail = str(detail)
 
+    def note(self, detail):
+        """결과는 바꾸지 않고 설명만 남긴다(예: 조건부 UPDATE 영향 행 수)."""
+        self.detail = str(detail)
+
     def as_dict(self):
         return {
             "step_id": self.step_id,
@@ -49,6 +53,9 @@ class _NullStep:
         pass
 
     def skip(self, detail=""):
+        pass
+
+    def note(self, detail):
         pass
 
 

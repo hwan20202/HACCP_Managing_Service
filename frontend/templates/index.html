@@ -172,6 +172,29 @@
           <span>설정</span>
         </a>
       </div>
+      {% if temp_entry_enabled %}
+      <!-- [임시 진입점 T1] 개발 검증용 사이드 탭. 정식 메뉴 연결 시 이 블록을 삭제한다 (dev-notes/common/temp-entry.md). -->
+      <div class="nav-section te-nav-section">
+        <span class="nav-section-label">개발 검증 <span class="badge badge-warning te-badge">임시</span></span>
+        <a href="#" class="nav-item" data-page="temp-doc" id="nav-temp-doc">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 20h9"/>
+            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+          </svg>
+          <span>문서 작성</span>
+          <span class="nav-badge te-nav-badge">임시</span>
+        </a>
+        {% if dev_console_enabled %}
+        <a href="{% url 'dev-console' %}" class="nav-item" target="_blank" rel="noopener" id="nav-dev-console">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="4 17 10 11 4 5"/>
+            <line x1="12" y1="19" x2="20" y2="19"/>
+          </svg>
+          <span>개발 콘솔 ↗</span>
+        </a>
+        {% endif %}
+      </div>
+      {% endif %}
     </nav>
 
     <div class="sidebar-footer">
@@ -236,6 +259,14 @@
   <script src="{% static 'prototype/js/modules/quality.js' %}"></script>
   <script src="{% static 'prototype/js/modules/reports.js' %}"></script>
   <script src="{% static 'prototype/js/modules/standards.js' %}"></script>
+{% if temp_entry_enabled %}
+  <!-- [임시 진입점 T2] 개발 검증 사용 화면. app.js보다 먼저 로드한다. -->
+  <script>window.TEMP_ENTRY_CONFIG = {devConsole: {{ dev_console_enabled|yesno:"true,false" }}, devConsoleUrl: "{% if dev_console_enabled %}{% url 'dev-console' %}{% endif %}"};</script>
+  <link rel="stylesheet" href="{% static 'temp-entry/temp-entry.css' %}" />
+  <script src="{% static 'temp-entry/api-client.js' %}"></script>
+  <script src="{% static 'temp-entry/core.js' %}"></script>
+  <script src="{% static 'temp-entry/document/document.js' %}"></script>
+  {% endif %}
   <script src="{% static 'prototype/js/app.js' %}"></script>
 </body>
 </html>

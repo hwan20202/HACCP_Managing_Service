@@ -401,10 +401,11 @@ def update_document(actor_id, document_id, patch):
     now = timezone.now()
     try:
         with transaction.atomic():
-            with step("DOC-UPD-03", "DOC", "문서 잠금(조건부 UPDATE)"):
+            with step("DOC-UPD-03", "DOC", "문서 잠금(조건부 UPDATE)") as s:
                 locked = Document.objects.filter(
                     pk=document_id, deleted_at__isnull=True, status__in=EDITABLE
                 ).update(updated_at=now)
+                s.note(f"영향 행 {locked}")
             if locked == 0:
                 _lock_failure(document_id, "DOC-UPD-03a")
 
@@ -572,13 +573,14 @@ def update_document(actor_id, document_id, patch):
 def delete_document(actor_id, document_id):
     now = timezone.now()
     with transaction.atomic():
-        with step("DOC-DEL-02", "DOC", "삭제 표시(조건부 UPDATE)"):
+        with step("DOC-DEL-02", "DOC", "삭제 표시(조건부 UPDATE)") as s:
             marked = Document.objects.filter(
                 pk=document_id,
                 deleted_at__isnull=True,
                 status__in=DELETABLE,
                 submitted_at__isnull=True,
             ).update(deleted_at=now, deleted_by_id=actor_id, updated_at=now)
+            s.note(f"영향 행 {marked}")
         if marked == 0:
             _lock_failure(document_id, "DOC-DEL-02a", deletable=True)
     with step("DOC-DEL-03", "DOC", "완료"):
@@ -614,10 +616,11 @@ def lock_for_review(document_id):
     with step("DOC-LCK-00", "DOC", "트랜잭션 확인"):
         _require_transaction()
     now = timezone.now()
-    with step("DOC-LCK-01", "DOC", "상신 잠금(조건부 UPDATE)"):
+    with step("DOC-LCK-01", "DOC", "상신 잠금(조건부 UPDATE)") as s:
         changed = Document.objects.filter(
             pk=document_id, deleted_at__isnull=True, status__in=EDITABLE
         ).update(status="submitted", submitted_at=now, updated_at=now)
+        s.note(f"영향 행 {changed}")
     if changed == 0:
         _lock_failure(document_id, "DOC-LCK-01a")
     with step("DOC-LCK-02", "DOC", "결과"):
@@ -627,10 +630,11 @@ def lock_for_review(document_id):
 def mark_approved(document_id):
     """승인 확정: submitted → approved. WF 트랜잭션 안에서만 호출한다."""
     _require_transaction()
-    with step("DOC-APV-01", "DOC", "승인 확정(조건부 UPDATE)"):
+    with step("DOC-APV-01", "DOC", "승인 확정(조건부 UPDATE)") as s:
         changed = Document.objects.filter(
             pk=document_id, deleted_at__isnull=True, status="submitted"
         ).update(status="approved", updated_at=timezone.now())
+        s.note(f"영향 행 {changed}")
     if changed == 0:
         _transition_failure(document_id, "DOC-APV-01a")
     with step("DOC-APV-02", "DOC", "결과"):
@@ -640,10 +644,11 @@ def mark_approved(document_id):
 def mark_rejected(document_id):
     """반려: submitted → rejected. WF 트랜잭션 안에서만 호출한다."""
     _require_transaction()
-    with step("DOC-RJT-01", "DOC", "반려(조건부 UPDATE)"):
+    with step("DOC-RJT-01", "DOC", "반려(조건부 UPDATE)") as s:
         changed = Document.objects.filter(
             pk=document_id, deleted_at__isnull=True, status="submitted"
         ).update(status="rejected", updated_at=timezone.now())
+        s.note(f"영향 행 {changed}")
     if changed == 0:
         _transition_failure(document_id, "DOC-RJT-01a")
     with step("DOC-RJT-02", "DOC", "결과"):
