@@ -63,3 +63,24 @@
 .te-toast-info { border-left: 4px solid var(--brand-primary); }
 .te-row-ng td { background: #fdecea; }
 .te-pending { margin: 0.35rem 0 0 1.1rem; font-size: 0.8rem; }
+
+/* P3 결재 화면 (temp-entry/approval/approval.js) */
+.te-modal-wide { width: min(720px, 94vw); }
+.te-modal-wide .te-modal-body { max-height: 70vh; overflow-y: auto; }
+.te-approval { margin-top: 1.5rem; border-top: 2px solid var(--border-default); padding-top: 1rem; }
+.te-approval .te-meta { margin-bottom: 0.5rem; }
+.te-slot-table td, .te-slot-edit td { vertical-align: middle; }
+.te-slot-edit .form-control { padding: 0.35rem 0.5rem; font-size: 0.82rem; }
+.te-slot-mine td { background: #eef6ff; }
+.te-skipped { text-decoration: line-through; color: var(--text-muted); }
+.te-progress { margin-top: 0.4rem; }
+.te-my-slot { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; margin-top: 0.75rem; padding: 0.6rem 0.9rem; border: 1px solid #b6d4fe; background: #e7f1ff; border-radius: var(--radius-md); font-size: 0.85rem; }
+.te-my-actions { display: inline-flex; gap: 0.4rem; }
+.te-reject-reason { margin-top: 0.6rem; padding: 0.5rem 0.8rem; border-left: 4px solid var(--color-danger); background: rgba(239,68,68,0.06); font-size: 0.85rem; }
+.te-ok-note { background: #d1e7dd; color: #0f5132; }
+.te-history { margin-top: 0.9rem; font-size: 0.82rem; }
+.te-history summary { cursor: pointer; color: var(--text-secondary); font-weight: 600; }
+.te-history ul { margin: 0.5rem 0 0 1.1rem; display: grid; gap: 0.35rem; }
+.te-tabs { display: flex; gap: 0.4rem; margin-bottom: 0.9rem; }
+.te-nowrap { white-space: nowrap; }
+.te-snapshot { border-top: 1px dashed var(--border-strong); padding-top: 1rem; }

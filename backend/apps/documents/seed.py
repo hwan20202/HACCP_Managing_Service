@@ -152,8 +152,12 @@ def _ccp_rows(author, count=2):
     return rows
 
 
-def seed_documents(draft_count=24, today=None):
-    """draft 문서 여러 건 + submitted/approved/rejected 각 1건 + 논리 삭제 1건."""
+def seed_documents(draft_count=24, today=None, locked_states=True):
+    """draft 문서 여러 건 + submitted/approved/rejected 각 1건 + 논리 삭제 1건.
+
+    locked_states=False면 submitted/approved/rejected 문서를 만들지 않는다. 이 세 상태는 결재 기록과
+    짝이 맞아야 하므로(WF 결합 상태), P3부터는 devtools seed_dev_workflow가 WF 함수로 만든다.
+    """
     today = today or timezone.localdate()
     templates = ensure_templates()
     ccp = templates[("CCP_MONITORING", 1)]
@@ -189,8 +193,9 @@ def seed_documents(draft_count=24, today=None):
 
     for n in range(draft_count):
         make(n)
-    make(draft_count, "submitted", submitted_at=now)
-    make(draft_count + 1, "approved", submitted_at=now)
-    make(draft_count + 2, "rejected", submitted_at=now)
+    if locked_states:
+        make(draft_count, "submitted", submitted_at=now)
+        make(draft_count + 1, "approved", submitted_at=now)
+        make(draft_count + 2, "rejected", submitted_at=now)
     make(draft_count + 3, deleted_at=now, deleted_by_id=1)
     return created

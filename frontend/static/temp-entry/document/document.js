@@ -1,6 +1,6 @@
 // =============================================
 // 개발 검증 › 문서 작성 (P1 DOC 사용 화면)
-// 화면: DOC-SC-01 목록 · 02 양식 선택 · 03 작성/수정 폼 · 04 상세 · 05 삭제 확인
+// 화면: DOC-SC-01 목록 · 02 양식 선택 · 03 작성/수정 폼 · 04 상세(+ P3 결재 영역) · 05 삭제 확인
 // 설계: dev-notes/document/s1-screens.md, API: s2-spec.md 4장
 // =============================================
 (function () {
@@ -25,7 +25,9 @@
 
     start(root) {
       this.root = root;
-      this.showList();
+      const intent = T.takeIntent();
+      if (intent && intent.documentId) this.showDetail(intent.documentId);
+      else this.showList();
     },
 
     async loadTemplates() {
@@ -515,23 +517,7 @@
         rejected: '반려된 문서입니다. 수정할 수 있습니다(삭제는 불가 — 상신 이력 보존).',
       };
       if (d.status === 'draft' && d.submitted_at) notes.draft = '상신 이력이 있어 삭제할 수 없습니다.';
-      const sections = schema.sections.map((s) => {
-        const rows = d.sections.filter((x) => x.section_def === s.key);
-        if (!s.repeat) {
-          const v = rows[0] ? rows[0].values : {};
-          return `<div class="te-section"><div class="te-section-title">${esc(s.label)}</div>
-            <dl class="te-kv">${s.fields.map((fd) => `<div><dt>${esc(fd.label)}</dt><dd>${this.display(fd, v[fd.key])}</dd></div>`).join('')}</dl></div>`;
-        }
-        const hasJudge = s.fields.some((fd) => fd.limit);
-        const body = rows.map((x, i) => `<tr class="${this.judge(s, x.values) === 'ng' ? 'te-row-ng' : ''}">
-            <td>${i + 1}</td>${s.fields.map((fd) => `<td>${this.display(fd, x.values[fd.key])}</td>`).join('')}
-            ${hasJudge ? `<td>${this.judgeCell(s, x.values)}</td>` : ''}
-            <td class="te-hint">${T.fmtDateTime(x.recorded_at)} · staff ${x.recorded_by ?? '-'}</td></tr>`).join('')
-          || `<tr><td colspan="${s.fields.length + 3}" class="te-empty">행이 없습니다.</td></tr>`;
-        return `<div class="te-section"><div class="te-section-title">${esc(s.label)} <span class="te-hint">${rows.length}행</span></div>
-          <div class="te-table-wrap"><table class="data-table"><thead><tr><th>#</th>${s.fields.map((fd) => `<th>${esc(fd.label)}${fd.unit ? ` (${esc(fd.unit)})` : ''}</th>`).join('')}${hasJudge ? '<th>판정</th>' : ''}<th>기록</th></tr></thead>
-          <tbody>${body}</tbody></table></div></div>`;
-      }).join('');
+      const sections = this.sectionsHtml(schema, d);
       this.root.innerHTML = `
         <div class="fade-in">
           ${T.topBar(`문서 #${d.document_id} · ${d.template.name} v${d.template.version}`, '문서 상세', d.document_id)}
@@ -554,13 +540,37 @@
               <span>작성 ${T.fmtDateTime(d.created_at)}</span><span>최종 수정 ${T.fmtDateTime(d.updated_at)}</span>${d.submitted_at ? `<span>상신 ${T.fmtDateTime(d.submitted_at)}</span>` : ''}
             </div>
             ${sections}
-            <div class="te-placeholder">결재 기능은 다음 단계(P3)에서 이 영역에 추가됩니다.</div>
+            <div id="teApprovalArea"></div>
           </div>
         </div>`;
       this.rerenderTopBar(() => this.showDetail(id));
       this.root.querySelector('#btnList').addEventListener('click', () => this.showList());
       this.root.querySelector('#btnEdit')?.addEventListener('click', () => this.openForm({ document: d }));
       this.root.querySelector('#btnDelete')?.addEventListener('click', () => this.confirmDelete(d));
+      // P3 결재 영역 (WF-SC-01) — temp-entry/approval/approval.js
+      const area = this.root.querySelector('#teApprovalArea');
+      if (window.TempEntryApproval) window.TempEntryApproval.mountArea(area, d, () => this.showDetail(id));
+    },
+
+    // 문서 내용(섹션) 읽기 전용 표시. 결재 요청 상세(WF-SC-04)도 스냅샷을 이 함수로 그린다.
+    sectionsHtml(schema, d) {
+      return schema.sections.map((s) => {
+        const rows = d.sections.filter((x) => x.section_def === s.key);
+        if (!s.repeat) {
+          const v = rows[0] ? rows[0].values : {};
+          return `<div class="te-section"><div class="te-section-title">${esc(s.label)}</div>
+            <dl class="te-kv">${s.fields.map((fd) => `<div><dt>${esc(fd.label)}</dt><dd>${this.display(fd, v[fd.key])}</dd></div>`).join('')}</dl></div>`;
+        }
+        const hasJudge = s.fields.some((fd) => fd.limit);
+        const body = rows.map((x, i) => `<tr class="${this.judge(s, x.values) === 'ng' ? 'te-row-ng' : ''}">
+            <td>${i + 1}</td>${s.fields.map((fd) => `<td>${this.display(fd, x.values[fd.key])}</td>`).join('')}
+            ${hasJudge ? `<td>${this.judgeCell(s, x.values)}</td>` : ''}
+            <td class="te-hint">${T.fmtDateTime(x.recorded_at)} · staff ${x.recorded_by ?? '-'}</td></tr>`).join('')
+          || `<tr><td colspan="${s.fields.length + 3}" class="te-empty">행이 없습니다.</td></tr>`;
+        return `<div class="te-section"><div class="te-section-title">${esc(s.label)} <span class="te-hint">${rows.length}행</span></div>
+          <div class="te-table-wrap"><table class="data-table"><thead><tr><th>#</th>${s.fields.map((fd) => `<th>${esc(fd.label)}${fd.unit ? ` (${esc(fd.unit)})` : ''}</th>`).join('')}${hasJudge ? '<th>판정</th>' : ''}<th>기록</th></tr></thead>
+          <tbody>${body}</tbody></table></div></div>`;
+      }).join('');
     },
 
     display(field, value) {

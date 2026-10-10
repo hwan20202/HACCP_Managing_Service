@@ -184,6 +184,14 @@
           <span>문서 작성</span>
           <span class="nav-badge te-nav-badge">임시</span>
         </a>
+        <a href="#" class="nav-item" data-page="temp-approval" id="nav-temp-approval">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 11l3 3L22 4"/>
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+          </svg>
+          <span>결재함</span>
+          <span class="nav-badge te-nav-badge">임시</span>
+        </a>
         {% if dev_console_enabled %}
         <a href="{% url 'dev-console' %}" class="nav-item" target="_blank" rel="noopener" id="nav-dev-console">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -266,6 +274,7 @@
   <script src="{% static 'temp-entry/api-client.js' %}"></script>
   <script src="{% static 'temp-entry/core.js' %}"></script>
   <script src="{% static 'temp-entry/document/document.js' %}"></script>
+  <script src="{% static 'temp-entry/approval/approval.js' %}"></script>
   {% endif %}
   <script src="{% static 'prototype/js/app.js' %}"></script>
 </body>

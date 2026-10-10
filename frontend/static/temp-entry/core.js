@@ -22,16 +22,34 @@
 
     register(page, screen) { this.screens[page] = screen; },
 
+    // 다른 임시 화면으로 이동하면서 열 대상을 넘긴다(예: 결재 요청 상세 → 문서 상세).
+    intent: null,
+    open(page, intent) {
+      this.intent = intent || null;
+      App.navigate(page);
+    },
+    takeIntent() {
+      const value = this.intent;
+      this.intent = null;
+      return value;
+    },
+
     async mount(page, container) {
-      this.container = container;
+      // 화면마다 새 host에 그린다. 이전 화면의 늦게 끝난 비동기 렌더링은 떼어낸 host에 쓰여 보이지 않는다
+      // (예: 문서 상세를 읽는 중에 사이드바에서 결재함을 누른 경우).
+      container.innerHTML = '';
+      const host = document.createElement('div');
+      container.appendChild(host);
+      this.container = host;
       const screen = this.screens[page];
       if (!screen) {
-        container.innerHTML = '<div class="empty-state"><h3>준비 중</h3><p>등록되지 않은 임시 화면입니다.</p></div>';
+        host.innerHTML = '<div class="empty-state"><h3>준비 중</h3><p>등록되지 않은 임시 화면입니다.</p></div>';
         return;
       }
       document.getElementById('breadcrumb').textContent = `개발 검증 › ${screen.title}`;
       await this.loadStaff();
-      screen.start(container);
+      if (this.container !== host) return; // 그사이 다른 화면으로 이동함
+      screen.start(host);
     },
 
     async loadStaff() {
