@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from django.db import transaction
 
 from . import document_bridge
+from .errors import InventoryError, NotFound
 from .fields import KST, kst_now
 from .lot_numbers import next_lot_number
 from .models import (
@@ -35,8 +36,12 @@ from .quantity import from_e6, to_e6
 RECEIVABLE_ITEM_TYPES = {"RAW", "PACKAGING"}
 
 
-class ReceivingError(Exception):
+class ReceivingError(InventoryError):
     """A receipt request that cannot be applied. The message is user-facing (Korean)."""
+
+
+class ReceiptNotFound(ReceivingError, NotFound):
+    pass
 
 
 @dataclass(frozen=True)
@@ -185,7 +190,7 @@ def cancel_receipt(*, receipt_id: int, staff_id: int, reason: str) -> IncomingRe
             .first()
         )
         if receipt is None:
-            raise ReceivingError(f"입고 건을 찾을 수 없습니다. (id={receipt_id})")
+            raise ReceiptNotFound(f"입고 건을 찾을 수 없습니다. (id={receipt_id})")
         if receipt.receipt_status == ReceiptStatus.CANCELLED:
             return receipt
         staff = _active(Staff, staff_id, "담당자")

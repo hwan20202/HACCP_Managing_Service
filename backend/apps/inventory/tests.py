@@ -450,7 +450,7 @@ class MasterImportTests(TestCase):
         rows = [{"item_code": "1000001", "item_type": "SEMI", "name": "x", "base_unit": "kg"}]
         with self.assertRaises(MasterImportError) as caught:
             import_items(rows)
-        self.assertIn("rejected by the database", caught.exception.errors[0])
+        self.assertIn("DB 제약 위반", caught.exception.errors[0])
 
 
 class ReceivingTests(TestCase):

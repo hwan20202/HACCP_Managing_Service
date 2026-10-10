@@ -1,0 +1,177 @@
+"""원료수불대장 (stock ledger) for a period.
+
+For each LOT with stock activity: opening balance (before the period), every movement in the
+period with the running balance, inflow / outflow totals and the closing balance. LOTs are
+grouped by item with item totals.
+
+Period bounds are dates, both inclusive: date_from 00:00:00 <= occurred_at < date_to + 1 day.
+Quantities are *_e6 integers (rule S3); format with quantity.from_e6 for display.
+
+The query reads the base tables rather than v_stock_ledger because the view has no lot / item
+ids. SchemaTests keep the two in agreement (see test_ledger.py).
+"""
+
+import datetime
+from dataclasses import dataclass, field
+
+from django.db import connection
+
+from .fields import parse_kst_text
+
+
+@dataclass
+class LedgerLine:
+    movement_id: int
+    occurred_at: datetime.datetime
+    movement_code: str
+    movement_name: str
+    signed_quantity_e6: int
+    balance_e6: int
+    reason: str | None
+    staff_name: str
+    corrects_movement_id: int | None
+
+
+@dataclass
+class LedgerLot:
+    lot_id: int
+    lot_number: str
+    status: str
+    expiration_date: datetime.date | None
+    opening_e6: int = 0
+    in_e6: int = 0
+    out_e6: int = 0
+    lines: list[LedgerLine] = field(default_factory=list)
+
+    @property
+    def closing_e6(self):
+        return self.opening_e6 + self.in_e6 - self.out_e6
+
+
+@dataclass
+class LedgerItem:
+    item_id: int
+    item_code: str
+    item_name: str
+    item_type: str
+    base_unit: str
+    lots: list[LedgerLot] = field(default_factory=list)
+
+    @property
+    def opening_e6(self):
+        return sum(lot.opening_e6 for lot in self.lots)
+
+    @property
+    def in_e6(self):
+        return sum(lot.in_e6 for lot in self.lots)
+
+    @property
+    def out_e6(self):
+        return sum(lot.out_e6 for lot in self.lots)
+
+    @property
+    def closing_e6(self):
+        return sum(lot.closing_e6 for lot in self.lots)
+
+
+_BASE = """
+FROM stock_movements m
+JOIN stock_movement_types t ON t.code = m.movement_type_code
+JOIN lots l                 ON l.id = m.lot_id
+JOIN items i                ON i.id = l.item_id
+"""
+
+
+def _filters(item_type, item_id, lot_id):
+    clauses, params = [], []
+    if item_type:
+        clauses.append("i.item_type = %s")
+        params.append(item_type)
+    if item_id:
+        clauses.append("i.id = %s")
+        params.append(item_id)
+    if lot_id:
+        clauses.append("l.id = %s")
+        params.append(lot_id)
+    return clauses, params
+
+
+def stock_ledger(date_from, date_to, *, item_type=None, item_id=None, lot_id=None):
+    """Return list[LedgerItem] ordered by item code, LOT number, then time.
+
+    A LOT appears when it has a non-zero opening balance or any movement in the period.
+    """
+    if date_to < date_from:
+        raise ValueError("date_to must not be before date_from.")
+    start = date_from.isoformat()
+    end = (date_to + datetime.timedelta(days=1)).isoformat()
+    clauses, params = _filters(item_type, item_id, lot_id)
+    extra = "".join(f" AND {clause}" for clause in clauses)
+
+    item_cols = "i.id, i.item_code, i.name, i.item_type, i.base_unit"
+    lot_cols = "l.id, l.lot_number, l.status, l.expiration_date"
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"SELECT {item_cols}, {lot_cols}, SUM(m.quantity_e6 * t.direction) {_BASE}"
+            f" WHERE m.occurred_at < %s{extra}"
+            f" GROUP BY l.id HAVING SUM(m.quantity_e6 * t.direction) <> 0",
+            [start, *params],
+        )
+        openings = cursor.fetchall()
+        cursor.execute(
+            f"SELECT {item_cols}, {lot_cols}, m.id, m.occurred_at, t.code, t.name,"
+            f" m.quantity_e6 * t.direction, m.reason, st.name, m.corrects_movement_id"
+            f" {_BASE} JOIN staff st ON st.id = m.staff_id"
+            f" WHERE m.occurred_at >= %s AND m.occurred_at < %s{extra}"
+            f" ORDER BY i.item_code, l.lot_number, m.occurred_at, m.id",
+            [start, end, *params],
+        )
+        movements = cursor.fetchall()
+
+    items, lots = {}, {}
+
+    def lot_for(row):
+        item_id_, code, name, type_, unit, lot_id_, number, status, expiration = row[:9]
+        if item_id_ not in items:
+            items[item_id_] = LedgerItem(item_id_, code, name, type_, unit)
+        if lot_id_ not in lots:
+            lot = LedgerLot(
+                lot_id_,
+                number,
+                status,
+                datetime.date.fromisoformat(expiration) if expiration else None,
+            )
+            lots[lot_id_] = lot
+            items[item_id_].lots.append(lot)
+        return lots[lot_id_]
+
+    for row in openings:
+        lot_for(row).opening_e6 = row[9]
+    balances = {}
+    for row in movements:
+        lot = lot_for(row)
+        movement_id, occurred_at, code, name, signed, reason, staff, corrects = row[9:]
+        balance = balances.get(lot.lot_id, lot.opening_e6) + signed
+        balances[lot.lot_id] = balance
+        if signed > 0:
+            lot.in_e6 += signed
+        else:
+            lot.out_e6 -= signed
+        lot.lines.append(
+            LedgerLine(
+                movement_id,
+                parse_kst_text(occurred_at),
+                code,
+                name,
+                signed,
+                balance,
+                reason,
+                staff,
+                corrects,
+            )
+        )
+
+    result = sorted(items.values(), key=lambda item: item.item_code)
+    for item in result:
+        item.lots.sort(key=lambda lot: lot.lot_number)
+    return result

@@ -46,20 +46,25 @@ class ImportResult:
         return f"{self.label}: created {len(self.created)}, updated {len(self.updated)}"
 
 
+def _raw(row, key):
+    value = row.get(key)
+    return "" if value is None else str(value).strip()
+
+
 def _text(row, key, required=False):
-    value = (row.get(key) or "").strip()
+    value = _raw(row, key)
     if required and not value:
-        raise ValueError(f"'{key}' is required")
+        raise ValueError(f"'{key}' 값이 필요합니다")
     return value or None
 
 
 def _bool(row, key):
-    value = (row.get(key) or "").strip().lower()
+    value = _raw(row, key).lower()
     if not value or value in _TRUE:
         return True
     if value in _FALSE:
         return False
-    raise ValueError(f"'{key}' must be 1/0, Y/N or true/false (got '{row.get(key)}')")
+    raise ValueError(f"'{key}' 는 1/0, Y/N, true/false 중 하나여야 합니다 (입력: '{row.get(key)}')")
 
 
 def _positive_int(row, key):
@@ -69,10 +74,55 @@ def _positive_int(row, key):
     try:
         number = int(value.replace(",", ""))
     except ValueError as error:
-        raise ValueError(f"'{key}' must be a whole number (got '{value}')") from error
+        raise ValueError(f"'{key}' 는 정수여야 합니다 (입력: '{value}')") from error
     if number <= 0:
-        raise ValueError(f"'{key}' must be greater than 0")
+        raise ValueError(f"'{key}' 는 0보다 커야 합니다")
     return number
+
+
+def parse_staff_row(row):
+    return {
+        "code": _text(row, "staff_code", required=True),
+        "name": _text(row, "name", required=True),
+        "is_active": _bool(row, "is_active"),
+    }
+
+
+def parse_supplier_row(row):
+    return {
+        "code": _text(row, "supplier_code", required=True),
+        "name": _text(row, "name", required=True),
+        "is_active": _bool(row, "is_active"),
+    }
+
+
+def parse_item_row(row, item_types=None):
+    item_types = item_types or set(ItemType.objects.values_list("code", flat=True))
+    item_type = (_text(row, "item_type", required=True) or "").upper()
+    if item_type not in item_types:
+        raise ValueError(
+            f"'item_type' 은 {sorted(item_types)} 중 하나여야 합니다 (입력: '{item_type}')"
+        )
+    minimum_stock = _text(row, "minimum_stock")
+    try:
+        minimum_stock_e6 = to_e6(minimum_stock.replace(",", "")) if minimum_stock else 0
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"'minimum_stock' 값을 확인하세요: {error}") from error
+    if minimum_stock_e6 < 0:
+        raise ValueError("'minimum_stock' 은 음수일 수 없습니다")
+    return {
+        "code": _text(row, "item_code", required=True),
+        "item_type_id": item_type,
+        "name": _text(row, "name", required=True),
+        "base_unit": _text(row, "base_unit", required=True),
+        "short_code": _text(row, "short_code"),
+        "unit_weight_mg": _positive_int(row, "unit_weight_mg"),
+        "shelf_life_days": _positive_int(row, "shelf_life_days"),
+        "origin_country": _text(row, "origin_country"),
+        "food_type": _text(row, "food_type"),
+        "minimum_stock_e6": minimum_stock_e6,
+        "is_active": _bool(row, "is_active"),
+    }
 
 
 def _parse_rows(rows, label, parse):
@@ -86,7 +136,7 @@ def _parse_rows(rows, label, parse):
             continue
         code = values["code"]
         if code in seen:
-            errors.append(f"  line {line}: duplicate code '{code}' (also line {seen[code]})")
+            errors.append(f"  line {line}: 코드 '{code}' 중복 ({seen[code]}행과 같음)")
             continue
         seen[code] = line
         parsed.append((line, values))
@@ -104,7 +154,7 @@ def _upsert(model, code_field, parsed, label):
             with transaction.atomic():
                 _, created = model.objects.update_or_create(**{code_field: code}, defaults=values)
         except IntegrityError as error:
-            errors.append(f"  line {line}: '{code}' rejected by the database: {error}")
+            errors.append(f"  line {line}: '{code}' 저장 실패 (DB 제약 위반): {error}")
             continue
         (result.created if created else result.updated).append(code)
     if errors:
@@ -113,56 +163,18 @@ def _upsert(model, code_field, parsed, label):
 
 
 def import_staff(rows):
-    def parse(row):
-        return {
-            "code": _text(row, "staff_code", required=True),
-            "name": _text(row, "name", required=True),
-            "is_active": _bool(row, "is_active"),
-        }
-
-    return _upsert(Staff, "staff_code", _parse_rows(rows, "staff", parse), "staff")
+    return _upsert(Staff, "staff_code", _parse_rows(rows, "staff", parse_staff_row), "staff")
 
 
 def import_suppliers(rows):
-    def parse(row):
-        return {
-            "code": _text(row, "supplier_code", required=True),
-            "name": _text(row, "name", required=True),
-            "is_active": _bool(row, "is_active"),
-        }
-
-    return _upsert(Supplier, "supplier_code", _parse_rows(rows, "suppliers", parse), "suppliers")
+    parsed = _parse_rows(rows, "suppliers", parse_supplier_row)
+    return _upsert(Supplier, "supplier_code", parsed, "suppliers")
 
 
 def import_items(rows):
     item_types = set(ItemType.objects.values_list("code", flat=True))
-
-    def parse(row):
-        item_type = (_text(row, "item_type", required=True) or "").upper()
-        if item_type not in item_types:
-            raise ValueError(f"'item_type' must be one of {sorted(item_types)} (got '{item_type}')")
-        minimum_stock = _text(row, "minimum_stock")
-        try:
-            minimum_stock_e6 = to_e6(minimum_stock.replace(",", "")) if minimum_stock else 0
-        except ValueError as error:
-            raise ValueError(f"'minimum_stock': {error}") from error
-        if minimum_stock_e6 < 0:
-            raise ValueError("'minimum_stock' cannot be negative")
-        return {
-            "code": _text(row, "item_code", required=True),
-            "item_type_id": item_type,
-            "name": _text(row, "name", required=True),
-            "base_unit": _text(row, "base_unit", required=True),
-            "short_code": _text(row, "short_code"),
-            "unit_weight_mg": _positive_int(row, "unit_weight_mg"),
-            "shelf_life_days": _positive_int(row, "shelf_life_days"),
-            "origin_country": _text(row, "origin_country"),
-            "food_type": _text(row, "food_type"),
-            "minimum_stock_e6": minimum_stock_e6,
-            "is_active": _bool(row, "is_active"),
-        }
-
-    return _upsert(Item, "item_code", _parse_rows(rows, "items", parse), "items")
+    parsed = _parse_rows(rows, "items", lambda row: parse_item_row(row, item_types))
+    return _upsert(Item, "item_code", parsed, "items")
 
 
 def ensure_default_lot_rules():
