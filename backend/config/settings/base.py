@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     "apps.staff",
     "apps.documents",
     "apps.approvals",
+    "apps.document_workflow",
 ]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",

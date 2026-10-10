@@ -6,12 +6,13 @@ from django.views.decorators.http import require_safe
 
 from apps.approvals.flows import FLOWS as APR_FLOWS
 from apps.approvals.models import Approval, ApprovalRequest
+from apps.document_workflow.flows import FLOWS as WF_FLOWS
 from apps.documents.flows import FLOWS as DOC_FLOWS
 from apps.documents.models import DocSection, Document, DocumentTemplate
 
 from .middleware import recall
 
-FLOWS = {**DOC_FLOWS, **APR_FLOWS}
+FLOWS = {**DOC_FLOWS, **APR_FLOWS, **WF_FLOWS}
 
 
 def _plain(value):

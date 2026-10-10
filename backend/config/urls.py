@@ -13,6 +13,7 @@ urlpatterns = [
 urlpatterns += [
     path("api/v1/", include("apps.documents.urls")),
     path("api/v1/", include("apps.approvals.urls")),
+    path("api/v1/", include("apps.document_workflow.urls")),
 ]
 
 # 개발 콘솔 API는 개발 설정에서 켰을 때만 등록한다. 운영 설정에서는 경로 자체가 없다.
