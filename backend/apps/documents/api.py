@@ -21,7 +21,7 @@ from apps.staff.services import actor_from_header
 from . import errors, services
 
 CREATE_KEYS = ("template_id", "subject", "work_date", "assignee_id", "due_at", "sections")
-PATCH_KEYS = ("document", "sections")
+PATCH_KEYS = ("expected_version", "document", "sections")
 PATCH_SECTION_KEYS = ("add", "update", "delete")
 
 
@@ -83,6 +83,7 @@ def document_collection(request):
 
 def _check_patch_shape(body):
     reject_unknown_keys(body, PATCH_KEYS)
+    services._expected_version(body)  # DOC-VR-14: 없거나 형식이 틀리면 400 INVALID_REQUEST
     document = body.get("document", {})
     sections = body.get("sections", {})
     if not isinstance(document, dict) or not isinstance(sections, dict):

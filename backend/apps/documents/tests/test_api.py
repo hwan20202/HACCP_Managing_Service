@@ -21,8 +21,13 @@ class ApiTestCase(TestCase):
     def setUpTestData(cls):
         cls.t = setup_reference_data()
 
-    def send(self, method, path, body=None, staff=3, raw=None):
+    def send(self, method, path, body=None, staff=3, raw=None, auto_version=True):
         headers = {} if staff is None else {"HTTP_X_STAFF_ID": str(staff)}
+        if method == "patch" and auto_version and isinstance(body, dict):
+            # ISS-001 이전 테스트: expected_version이 없으면 현재 DB 버전을 넣는다.
+            document_id = int(path.rsplit("/", 1)[-1])
+            current = Document.objects.filter(pk=document_id).values_list("version", flat=True)
+            body = {"expected_version": current.first() or 1, **body}
         data = raw if raw is not None else (json.dumps(body) if body is not None else None)
         return getattr(self.client, method)(
             f"/api/v1/{path}", data=data, content_type="application/json", **headers
@@ -256,6 +261,43 @@ class TraceApiTests(ApiTestCase):
             self.client.get("/api/dev/flows/DOC-DEL").json()["steps"], flows.FLOWS["DOC-DEL"]
         )
         self.assertEqual(self.client.get("/api/dev/flows/NOPE").status_code, 404)
+
+
+class VersionApiTests(ApiTestCase):
+    def test_tc064_expected_version_validation(self):
+        doc, _ = make_document(self.t["ccp"])
+        path = f"documents/{doc.document_id}"
+        for body in (
+            {"document": {"subject": "x"}},
+            {"expected_version": "1", "document": {"subject": "x"}},
+            {"expected_version": 0, "document": {"subject": "x"}},
+            {"expected_version": True, "document": {"subject": "x"}},
+        ):
+            with self.subTest(body):
+                self.assertError(
+                    self.send("patch", path, body, auto_version=False), 400, "INVALID_REQUEST"
+                )
+
+    def test_tc064_conflict_response(self):
+        doc, _ = make_document(self.t["ccp"])
+        path = f"documents/{doc.document_id}"
+        ok = self.send(
+            "patch", path, {"expected_version": 1, "document": {"subject": "A"}}, auto_version=False
+        )
+        self.assertEqual(ok.json()["version"], 2)
+        stale = self.send(
+            "patch", path, {"expected_version": 1, "document": {"subject": "B"}}, auto_version=False
+        )
+        self.assertError(stale, 409, "VERSION_CONFLICT")
+        self.assertEqual(stale.json()["details"][0]["current"], 2)
+
+    def test_tc067_version_in_responses(self):
+        doc, _ = make_document(self.t["ccp"])
+        self.assertEqual(
+            self.client.get(f"/api/v1/documents/{doc.document_id}").json()["version"], 1
+        )
+        items = self.client.get("/api/v1/documents").json()["items"]
+        self.assertTrue(all("version" in item for item in items))
 
 
 class TraceDisabledTests(ApiTestCase):

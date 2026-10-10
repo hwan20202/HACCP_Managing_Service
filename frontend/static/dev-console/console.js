@@ -291,6 +291,7 @@
         const d = need(await docWithRounds(2), '행 2개 이상인 draft');
         const rounds = d.sections.filter((s) => s.section_def === 'rounds');
         return { func: 'update', id: d.document_id, body: J({
+          expected_version: d.version,
           document: { subject: `${d.subject || ''} (수정)` },
           sections: {
             update: [{ section_id: rounds[0].section_id, values: { temp: 85.5, note: '콘솔 수정' } }],
@@ -299,9 +300,9 @@
           } }) };
       } },
     { id: 'DOC-PS-06', label: '결재중 문서 수정 거부', expect: '409 DOCUMENT_LOCKED · DOC-UPD-03(영향 0행) → 03a 실패 · DB 변화 없음',
-      prepare: async () => ({ func: 'update', id: need(await findDoc('submitted'), 'submitted').document_id, body: J({ document: { subject: '바뀌면 안 됨' } }) }) },
+      prepare: async () => { const d = need(await findDoc('submitted'), 'submitted'); return { func: 'update', id: d.document_id, body: J({ expected_version: d.version, document: { subject: '바뀌면 안 됨' } }) }; } },
     { id: 'DOC-PS-07', label: '반려 문서 수정', expect: '200 · 잠금 통과 · 상태는 rejected 유지',
-      prepare: async () => ({ func: 'update', id: need(await findDoc('rejected'), 'rejected').document_id, body: J({ document: { subject: '반려 후 수정' } }) }) },
+      prepare: async () => { const d = need(await findDoc('rejected'), 'rejected'); return { func: 'update', id: d.document_id, body: J({ expected_version: d.version, document: { subject: '반려 후 수정' } }) }; } },
     { id: 'DOC-PS-08', label: '삭제 정상(논리)', expect: '204 · DOC-DEL 3단계 · document 행 유지, deleted_at/by 채워짐',
       prepare: async () => ({ func: 'delete', id: need(await findDoc('draft', (d) => !d.submitted_at), '상신 이력 없는 draft').document_id }) },
     { id: 'DOC-PS-09', label: '삭제 거부(승인 문서)', expect: '409 DOCUMENT_NOT_DELETABLE · DOC-DEL-02a 실패',
@@ -312,11 +313,11 @@
       prepare: async () => { const d = new Date(); const to = d.toISOString().slice(0, 10); d.setDate(d.getDate() - 30); return { func: 'list', query: `from=${d.toISOString().slice(0, 10)}&to=${to}&status=draft&page=2` }; } },
     { id: 'DOC-PS-12', label: '같은 측정시점 중복 입력', expect: '409 DUPLICATE_ROUND · DOC-CRT-06(앱 검증)에서 막힘 · DB 변화 없음',
       prepare: async () => ({ func: 'create', body: J(ccpBody(await ccpTemplateId(), ['09:00', '09:00'])) }) },
-    { id: 'DOC-PS-13', label: '동시 수정(서로 다른 행)', expect: '두 요청 모두 200 · 잠금으로 직렬 처리 · 두 변경 모두 반영 (같은 필드 충돌 감지는 ISS-001)',
+    { id: 'DOC-PS-13', label: '동시 수정(같은 버전)', expect: '하나는 200, 하나는 409 VERSION_CONFLICT · 잠금으로 직렬 처리 · 먼저 처리된 변경만 반영 (ISS-001)',
       prepare: async () => {
         const d = need(await docWithRounds(2), '행 2개 이상인 draft');
         const rounds = d.sections.filter((s) => s.section_def === 'rounds');
-        const body = (row, temp) => J({ sections: { update: [{ section_id: row.section_id, values: { temp } }] } });
+        const body = (row, temp) => J({ expected_version: d.version, sections: { update: [{ section_id: row.section_id, values: { temp } }] } });
         return { func: 'update', id: d.document_id, body: body(rounds[0], 91),
           script: async (exec) => {
             const before = await snapshot(d.document_id);
@@ -326,16 +327,27 @@
             ]);
           } };
       } },
-    { id: 'DOC-PS-14', label: '이미 삭제된 행 수정', expect: '1번째 200(행 삭제) → 2번째 409 SECTION_ROW_NOT_FOUND · 2번째는 전체 롤백',
+    { id: 'DOC-PS-14', label: '이미 삭제된 행 수정', expect: '1번째 200(행 삭제) → 2번째(새 버전으로) 409 SECTION_ROW_NOT_FOUND · 2번째는 전체 롤백',
       prepare: async () => {
         const d = need(await docWithRounds(2), '행 2개 이상인 draft');
         const row = d.sections.filter((s) => s.section_def === 'rounds').pop();
-        const del = J({ sections: { delete: [row.section_id] } });
-        const upd = J({ sections: { update: [{ section_id: row.section_id, values: { temp: 99 } }] } });
-        return { func: 'update', id: d.document_id, body: upd,
+        const del = J({ expected_version: d.version, sections: { delete: [row.section_id] } });
+        const upd = (v) => J({ expected_version: v, sections: { update: [{ section_id: row.section_id, values: { temp: 99 } }] } });
+        return { func: 'update', id: d.document_id, body: del,
           script: async (exec) => {
-            await exec({ func: 'update', id: d.document_id, body: del, staff: api.staffId });
-            await exec({ func: 'update', id: d.document_id, body: upd, staff: api.staffId });
+            const first = await exec({ func: 'update', id: d.document_id, body: del, staff: api.staffId });
+            const next = first.record.ok ? first.record.data.version : d.version + 1;
+            await exec({ func: 'update', id: d.document_id, body: upd(next), staff: api.staffId });
+          } };
+      } },
+    { id: 'DOC-PS-15', label: '오래된 버전으로 수정(충돌)', expect: '1번째 200(버전 +1) → 2번째(같은 옛 버전) 409 VERSION_CONFLICT · DOC-UPD-03 영향 행 0 → 03a 실패 · DB 변화 없음',
+      prepare: async () => {
+        const d = need(await findDoc('draft', (x) => !x.submitted_at), '상신 이력 없는 draft');
+        const body = (subject) => J({ expected_version: d.version, document: { subject } });
+        return { func: 'update', id: d.document_id, body: body('먼저 저장'),
+          script: async (exec) => {
+            await exec({ func: 'update', id: d.document_id, body: body('먼저 저장'), staff: api.staffId });
+            await exec({ func: 'update', id: d.document_id, body: body('나중 저장(덮어쓰기 시도)'), staff: '4' });
           } };
       } },
   ];

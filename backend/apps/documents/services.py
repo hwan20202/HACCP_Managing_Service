@@ -12,6 +12,7 @@ from django.db import IntegrityError, models, transaction
 from django.db.models import F, Func, OuterRef, Subquery, Value
 from django.utils import timezone
 
+from apps.core.http import ApiError
 from apps.core.trace import step
 from apps.staff import services as staff_services
 from apps.staff.models import Staff
@@ -71,6 +72,7 @@ def _document_head(document):
         "created_at": _iso(document.created_at),
         "updated_at": _iso(document.updated_at),
         "submitted_at": _iso(document.submitted_at),
+        "version": document.version,
     }
 
 
@@ -375,18 +377,32 @@ def _patch_parts(patch):
     )
 
 
-def _lock_failure(document_id, step_id, *, deletable=False):
-    """조건부 UPDATE가 0행일 때 이유를 구분한다(404 / 409)."""
+def _lock_failure(document_id, step_id, *, deletable=False, expected_version=None):
+    """조건부 UPDATE가 0행일 때 이유를 구분한다: 404 → 409 상태 → 409 버전 순서."""
     with step(step_id, "DOC", "잠금 실패 사유 확인"):
         row = (
             Document.objects.filter(pk=document_id)
-            .values("status", "deleted_at", "submitted_at")
+            .values("status", "deleted_at", "submitted_at", "version", "updated_at")
             .first()
         )
         if row is None or row["deleted_at"] is not None:
             raise errors.DocumentNotFound()
         if deletable:
             raise errors.DocumentNotDeletable()
+        if row["status"] in EDITABLE and expected_version is not None:
+            if row["version"] != expected_version:
+                raise errors.VersionConflict(
+                    details=[
+                        {
+                            "path": "expected_version",
+                            "code": "conflict",
+                            "message": f"내가 연 버전 {expected_version}, 현재 {row['version']}",
+                            "expected": expected_version,
+                            "current": row["version"],
+                            "updated_at": _iso(row["updated_at"]),
+                        }
+                    ]
+                )
         raise errors.DocumentLocked(
             details=[
                 {"path": "status", "code": row["status"], "message": f"현재 상태: {row['status']}"}
@@ -394,7 +410,25 @@ def _lock_failure(document_id, step_id, *, deletable=False):
         )
 
 
+def _expected_version(patch):
+    value = patch.get("expected_version")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ApiError(
+            "expected_version(화면이 읽은 문서 버전)이 필요합니다.",
+            [
+                {
+                    "path": "expected_version",
+                    "code": "required",
+                    "message": "1 이상의 정수여야 합니다.",
+                }
+            ],
+        )
+    return value
+
+
 def update_document(actor_id, document_id, patch):
+    """바뀐 부분만 반영한다. patch["expected_version"]이 현재 버전과 같아야 한다(ISS-001)."""
+    expected_version = _expected_version(patch)
     doc_fields, adds, updates, deletes = _patch_parts(patch)
     if not (doc_fields or adds or updates or deletes):
         raise errors.NoChanges()
@@ -403,11 +437,14 @@ def update_document(actor_id, document_id, patch):
         with transaction.atomic():
             with step("DOC-UPD-03", "DOC", "문서 잠금(조건부 UPDATE)") as s:
                 locked = Document.objects.filter(
-                    pk=document_id, deleted_at__isnull=True, status__in=EDITABLE
-                ).update(updated_at=now)
+                    pk=document_id,
+                    deleted_at__isnull=True,
+                    status__in=EDITABLE,
+                    version=expected_version,
+                ).update(updated_at=now, version=F("version") + 1)
                 s.note(f"영향 행 {locked}")
             if locked == 0:
-                _lock_failure(document_id, "DOC-UPD-03a")
+                _lock_failure(document_id, "DOC-UPD-03a", expected_version=expected_version)
 
             with step("DOC-UPD-04", "DOC", "현재 데이터 읽기"):
                 document = Document.objects.select_related("template").get(pk=document_id)
@@ -579,7 +616,9 @@ def delete_document(actor_id, document_id):
                 deleted_at__isnull=True,
                 status__in=DELETABLE,
                 submitted_at__isnull=True,
-            ).update(deleted_at=now, deleted_by_id=actor_id, updated_at=now)
+            ).update(
+                deleted_at=now, deleted_by_id=actor_id, updated_at=now, version=F("version") + 1
+            )
             s.note(f"영향 행 {marked}")
         if marked == 0:
             _lock_failure(document_id, "DOC-DEL-02a", deletable=True)
@@ -598,7 +637,7 @@ def _require_transaction():
 def _lifecycle_result(document_id):
     row = (
         Document.objects.filter(pk=document_id)
-        .values("document_id", "template_id", "status", "submitted_at")
+        .values("document_id", "template_id", "status", "submitted_at", "version")
         .get()
     )
     row["submitted_at"] = _iso(row["submitted_at"])
@@ -619,7 +658,7 @@ def lock_for_review(document_id):
     with step("DOC-LCK-01", "DOC", "상신 잠금(조건부 UPDATE)") as s:
         changed = Document.objects.filter(
             pk=document_id, deleted_at__isnull=True, status__in=EDITABLE
-        ).update(status="submitted", submitted_at=now, updated_at=now)
+        ).update(status="submitted", submitted_at=now, updated_at=now, version=F("version") + 1)
         s.note(f"영향 행 {changed}")
     if changed == 0:
         _lock_failure(document_id, "DOC-LCK-01a")
@@ -633,7 +672,7 @@ def mark_approved(document_id):
     with step("DOC-APV-01", "DOC", "승인 확정(조건부 UPDATE)") as s:
         changed = Document.objects.filter(
             pk=document_id, deleted_at__isnull=True, status="submitted"
-        ).update(status="approved", updated_at=timezone.now())
+        ).update(status="approved", updated_at=timezone.now(), version=F("version") + 1)
         s.note(f"영향 행 {changed}")
     if changed == 0:
         _transition_failure(document_id, "DOC-APV-01a")
@@ -647,7 +686,7 @@ def mark_rejected(document_id):
     with step("DOC-RJT-01", "DOC", "반려(조건부 UPDATE)") as s:
         changed = Document.objects.filter(
             pk=document_id, deleted_at__isnull=True, status="submitted"
-        ).update(status="rejected", updated_at=timezone.now())
+        ).update(status="rejected", updated_at=timezone.now(), version=F("version") + 1)
         s.note(f"영향 행 {changed}")
     if changed == 0:
         _transition_failure(document_id, "DOC-RJT-01a")

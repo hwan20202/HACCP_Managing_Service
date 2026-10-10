@@ -162,7 +162,7 @@
     },
 
     // ================================================= DOC-SC-03 작성/수정 폼
-    async openForm({ templateId, document }) {
+    async openForm({ templateId, document, pending }) {
       const tid = document ? document.template.template_id : templateId;
       const r = await api.get(`templates/${tid}`);
       if (!r.ok) { T.toast(T.errorText(r), 'error'); return; }
@@ -186,6 +186,7 @@
       this.form = {
         mode: document ? 'edit' : 'create', template: r.data, schema, sectionByKey, document,
         rows, basic, originalBasic: { ...basic }, nextUid: uid, errors: {}, errorList: [],
+        pending: pending || [],
       };
       if (!document) schema.sections.filter((s) => s.repeat).forEach((s) => this.addRow(s.key, false));
       this.renderForm();
@@ -320,6 +321,7 @@
       this.root.innerHTML = `
         <div class="fade-in">
           ${T.topBar(title, f.mode === 'edit' ? '바뀐 부분만 저장됩니다. 노란색=변경, 초록색=추가, 취소선=삭제 예정' : '기본 정보와 영역 값을 입력하세요.', d && d.document_id)}
+          ${f.pending.length ? `<div class="te-notice"><strong>다른 사용자가 먼저 수정해서 최신 내용으로 다시 열었습니다.</strong> 아래 변경을 다시 입력하세요.<ul class="te-pending">${f.pending.map((p) => `<li>${esc(p)}</li>`).join('')}</ul></div>` : ''}
           ${f.errorList.length ? `<div class="te-error-box"><strong>입력값을 확인하세요.</strong><ul>${f.errorList.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div>` : ''}
           <div class="card">
             <div class="card-header"><div class="card-title">문서 정보</div><div class="te-hint">작성자: ${esc(author)}</div></div>
@@ -403,7 +405,7 @@
         }));
         result = await api.post('documents', { template_id: f.template.template_id, ...this.basicPayload(f.basic), sections });
       } else {
-        const body = {};
+        const body = { expected_version: f.document.version };
         const docChanges = this.basicPayload(this.basicChanges());
         if (Object.keys(docChanges).length) body.document = docChanges;
         const add = []; const update = []; const del = [];
@@ -426,12 +428,52 @@
         return;
       }
       const data = result.data || {};
+      if (data.code === 'VERSION_CONFLICT') {
+        await this.handleConflict(data);
+        return;
+      }
       if (data.code === 'DOCUMENT_LOCKED' || data.code === 'DOCUMENT_NOT_FOUND') {
         await T.modal({ title: '저장할 수 없습니다', body: `<p>${esc(data.message)}</p>`, buttons: [{ label: data.code === 'DOCUMENT_LOCKED' ? '상세로' : '목록으로', value: true, cls: 'btn-primary' }] });
         if (data.code === 'DOCUMENT_LOCKED') this.showDetail(f.document.document_id); else this.showList();
         return;
       }
       this.applyErrors(data, pathMap);
+    },
+
+    // ================================================= DOC-SC-06 수정 충돌 (ISS-001)
+    changeSummary() {
+      const f = this.form;
+      const labels = { subject: '대상', work_date: '작업일', assignee_id: '담당자', due_at: '마감' };
+      const out = Object.entries(this.basicChanges()).map(([k, v]) => `${labels[k]}: ${v === '' ? '(비움)' : (k === 'assignee_id' ? `staff ${v}` : v)}`);
+      f.schema.sections.forEach((s) => {
+        const fieldLabel = (key) => (s.fields.find((fd) => fd.key === key) || { label: key }).label;
+        const fmt = (values) => Object.entries(values).map(([k, v]) => `${fieldLabel(k)} ${v === null ? '(비움)' : v}`).join(', ');
+        f.rows.filter((r) => r.key === s.key).forEach((r, i) => {
+          const state = this.rowState(r);
+          const where = s.repeat ? `${s.label} ${i + 1}행` : s.label;
+          if (state === 'changed') out.push(`${where}: ${fmt(this.rowPatch(r))}`);
+          else if (state === 'deleted') out.push(`${where} 삭제`);
+          else if (state === 'new') out.push(`${s.label} 행 추가: ${fmt(r.values)}`);
+        });
+      });
+      return out;
+    },
+
+    async handleConflict(data) {
+      const f = this.form;
+      const info = (data.details || [])[0] || {};
+      const pending = this.changeSummary();
+      const reopen = await T.modal({
+        title: '다른 사용자가 먼저 수정했습니다',
+        body: `<p>이 문서는 내가 연 뒤에 다시 저장되었습니다.<br>
+          <span class="te-hint">내가 연 버전 ${esc(info.expected ?? f.document.version)} → 현재 버전 ${esc(info.current ?? '?')}${info.updated_at ? `, 마지막 수정 ${esc(T.fmtDateTime(info.updated_at))}` : ''}</span></p>
+          ${pending.length ? `<p style="margin-top:.6rem"><b>내가 바꾼 내용</b> (다시 입력해야 함)</p><ul class="te-pending">${pending.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>` : ''}`,
+        buttons: [{ label: '이 화면에 머물기', value: false }, { label: '최신 내용으로 다시 열기', value: true, cls: 'btn-primary' }],
+      });
+      if (!reopen) return;
+      const latest = await api.get(`documents/${f.document.document_id}`);
+      if (!latest.ok) { T.toast(T.errorText(latest), 'error'); this.showList(); return; }
+      this.openForm({ document: latest.data, pending });
     },
 
     applyErrors(data, pathMap) {

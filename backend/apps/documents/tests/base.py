@@ -97,4 +97,16 @@ def snapshot(document_id):
     return document, sections
 
 
+def update_current(actor_id, document_id, patch):
+    """수정 호출 도우미: expected_version이 없으면 현재 DB 버전을 넣는다(ISS-001 이전 테스트)."""
+    from apps.documents import services
+
+    patch = dict(patch)
+    if "expected_version" not in patch:
+        patch["expected_version"] = (
+            Document.objects.filter(pk=document_id).values_list("version", flat=True).first() or 1
+        )
+    return services.update_document(actor_id, document_id, patch)
+
+
 __all__ = ["DocumentTemplate", "ccp_payload", "make_document", "setup_reference_data", "snapshot"]

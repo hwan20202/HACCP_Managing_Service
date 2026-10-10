@@ -5,9 +5,16 @@ from unittest.mock import patch
 from django.db import DatabaseError, transaction
 from django.test import TestCase, TransactionTestCase
 
+from apps.core.http import ApiError
 from apps.documents import errors, services
 from apps.documents.models import DocSection, Document
-from apps.documents.tests.base import ccp_payload, make_document, setup_reference_data, snapshot
+from apps.documents.tests.base import (
+    ccp_payload,
+    make_document,
+    setup_reference_data,
+    snapshot,
+    update_current,
+)
 
 
 class ReferenceTests(TestCase):
@@ -237,7 +244,7 @@ class UpdateTests(TestCase):
     def test_tc050_only_changes_are_applied(self):
         info_before = DocSection.objects.get(pk=self.rows["info"].section_id)
         r1_before = DocSection.objects.get(pk=self.rows["r1"].section_id)
-        result = services.update_document(4, self.doc.document_id, self.full_patch())
+        result = update_current(4, self.doc.document_id, self.full_patch())
         self.doc.refresh_from_db()
         self.assertEqual(self.doc.subject, "CCP-2B/라인B")
         self.assertGreater(self.doc.updated_at, self.doc.created_at)
@@ -263,12 +270,12 @@ class UpdateTests(TestCase):
                 doc, rows = make_document(self.t["ccp"], status=status)
                 before = snapshot(doc.document_id)
                 with self.assertRaises(errors.DocumentLocked):
-                    services.update_document(3, doc.document_id, {"document": {"subject": "x"}})
+                    update_current(3, doc.document_id, {"document": {"subject": "x"}})
                 self.assertEqual(snapshot(doc.document_id), before)
 
     def test_tc053_rejected_is_editable(self):
         doc, _ = make_document(self.t["ccp"], status="rejected")
-        services.update_document(3, doc.document_id, {"document": {"subject": "수정"}})
+        update_current(3, doc.document_id, {"document": {"subject": "수정"}})
         doc.refresh_from_db()
         self.assertEqual((doc.subject, doc.status), ("수정", "rejected"))
 
@@ -280,7 +287,7 @@ class UpdateTests(TestCase):
             "sections": {"delete": [other_rows["r1"].section_id]},
         }
         with self.assertRaises(errors.SectionRowNotFound):
-            services.update_document(3, self.doc.document_id, patch_body)
+            update_current(3, self.doc.document_id, patch_body)
         self.assertEqual(snapshot(self.doc.document_id), before)  # 잠금 UPDATE까지 롤백
 
     def test_tc055_single_row_section(self):
@@ -289,7 +296,7 @@ class UpdateTests(TestCase):
             {"sections": {"add": [{"section_def": "info", "values": {}}]}},
         ):
             with self.subTest(body), self.assertRaises(errors.ValidationFailed):
-                services.update_document(3, self.doc.document_id, body)
+                update_current(3, self.doc.document_id, body)
 
     def test_tc056_required_checked_after_merge(self):
         body = {
@@ -298,7 +305,7 @@ class UpdateTests(TestCase):
             }
         }
         with self.assertRaises(errors.ValidationFailed) as ctx:
-            services.update_document(3, self.doc.document_id, body)
+            update_current(3, self.doc.document_id, body)
         self.assertEqual(ctx.exception.details[0]["code"], "required")
 
     def test_tc057_duplicate_round_and_delete_then_add(self):
@@ -307,8 +314,8 @@ class UpdateTests(TestCase):
             "values": {"round": "09:00", "temp": 86, "hold_sec": 16, "measured_by": 3},
         }
         with self.assertRaises(errors.DuplicateRound):
-            services.update_document(3, self.doc.document_id, {"sections": {"add": [add_0900]}})
-        services.update_document(
+            update_current(3, self.doc.document_id, {"sections": {"add": [add_0900]}})
+        update_current(
             3,
             self.doc.document_id,
             {"sections": {"delete": [self.rows["r1"].section_id], "add": [add_0900]}},
@@ -319,13 +326,13 @@ class UpdateTests(TestCase):
 
     def test_no_changes(self):
         with self.assertRaises(errors.NoChanges):
-            services.update_document(3, self.doc.document_id, {})
+            update_current(3, self.doc.document_id, {})
 
     def test_tc060_failure_rolls_back_everything(self):
         before = snapshot(self.doc.document_id)
         with patch.object(DocSection.objects, "bulk_create", side_effect=DatabaseError("boom")):
             with self.assertRaises(DatabaseError):
-                services.update_document(3, self.doc.document_id, self.full_patch())
+                update_current(3, self.doc.document_id, self.full_patch())
         self.assertEqual(snapshot(self.doc.document_id), before)
 
 
@@ -426,3 +433,69 @@ class LifecycleOutsideTransactionTests(TransactionTestCase):
             services.mark_approved(doc.document_id)
         doc.refresh_from_db()
         self.assertEqual(doc.status, "approved")
+
+
+class VersionTests(TestCase):
+    """ISS-001: 문서 단위 버전 번호로 동시 수정 충돌을 감지한다."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.t = setup_reference_data()
+
+    def version(self, doc):
+        return Document.objects.get(pk=doc.document_id).version
+
+    def test_tc063_stale_version_is_rejected(self):
+        doc, _ = make_document(self.t["ccp"])
+        services.update_document(
+            3, doc.document_id, {"expected_version": 1, "document": {"subject": "A"}}
+        )
+        before = snapshot(doc.document_id)
+        with self.assertRaises(errors.VersionConflict) as ctx:
+            services.update_document(
+                4, doc.document_id, {"expected_version": 1, "document": {"subject": "B"}}
+            )
+        detail = ctx.exception.details[0]
+        self.assertEqual((detail["expected"], detail["current"]), (1, 2))
+        self.assertEqual(snapshot(doc.document_id), before)  # version·updated_at 포함 변화 없음
+
+    def test_expected_version_required_in_service(self):
+        doc, _ = make_document(self.t["ccp"])
+        for bad in (None, "1", 0, True):
+            with self.subTest(bad), self.assertRaises(ApiError) as ctx:
+                services.update_document(
+                    3, doc.document_id, {"expected_version": bad, "document": {"subject": "x"}}
+                )
+            self.assertEqual(ctx.exception.code, "INVALID_REQUEST")
+
+    def test_tc065_every_write_increments_version(self):
+        created = services.create_document(3, ccp_payload(self.t["ccp"]))
+        doc = Document.objects.get(pk=created["document_id"])
+        self.assertEqual(created["version"], 1)
+        steps = [
+            lambda: services.update_document(
+                3, doc.document_id, {"expected_version": 1, "document": {"subject": "1"}}
+            ),
+            lambda: services.lock_for_review(doc.document_id),
+            lambda: services.mark_rejected(doc.document_id),
+            lambda: services.update_document(
+                3, doc.document_id, {"expected_version": 4, "document": {"subject": "2"}}
+            ),
+            lambda: services.lock_for_review(doc.document_id),
+            lambda: services.mark_approved(doc.document_id),
+        ]
+        versions = []
+        for call in steps:
+            call()
+            versions.append(self.version(doc))
+        self.assertEqual(versions, [2, 3, 4, 5, 6, 7])
+        other, _ = make_document(self.t["ccp"])
+        services.delete_document(3, other.document_id)
+        self.assertEqual(self.version(other), 2)
+
+    def test_tc066_status_is_reported_before_version(self):
+        doc, _ = make_document(self.t["ccp"], status="submitted")
+        with self.assertRaises(errors.DocumentLocked):
+            services.update_document(
+                3, doc.document_id, {"expected_version": 99, "document": {"subject": "x"}}
+            )

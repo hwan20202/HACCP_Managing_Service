@@ -57,6 +57,8 @@ class Document(models.Model):
     submitted_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField()
     updated_at = models.DateTimeField()
+    # ERD v3 A6: 낙관적 잠금 버전. 모든 쓰기마다 +1 (ISS-001)
+    version = models.IntegerField(default=1, db_default=1)
     deleted_at = models.DateTimeField(null=True, blank=True)
     deleted_by = models.ForeignKey(
         Staff,

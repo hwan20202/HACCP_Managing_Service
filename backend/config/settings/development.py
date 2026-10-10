@@ -11,3 +11,7 @@ if HACCP_DEV_CONSOLE:
 
 # [임시 진입점 T5] 개발에서는 기본으로 켠다.
 HACCP_TEMP_ENTRY = env_bool("HACCP_TEMP_ENTRY", True)
+
+# 개발 서버가 정적 파일을 no-cache로 보내도록 runserver를 확장한다(브라우저가 예전 JS를 쓰지 않게).
+# Django는 INSTALLED_APPS 앞쪽 앱의 명령을 쓰므로 맨 앞에 둔다.
+INSTALLED_APPS = ["apps.devserver", *INSTALLED_APPS]

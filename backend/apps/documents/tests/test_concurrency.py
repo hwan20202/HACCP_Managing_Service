@@ -76,13 +76,17 @@ class ConcurrencyTests(TransactionTestCase):
 
         return wrapper
 
-    def test_tc061_two_updates_serialize(self):
+    def test_tc061_same_version_second_conflicts(self):
+        """같은 버전을 읽은 두 수정: 직렬 처리되고 나중 요청은 VERSION_CONFLICT (ISS-001)."""
         r1, r2 = self.rows["r1"].section_id, self.rows["r2"].section_id
         first = self.hold_inside(
             lambda: services.update_document(
                 3,
                 self.doc.document_id,
-                {"sections": {"update": [{"section_id": r1, "values": {"temp": 91}}]}},
+                {
+                    "expected_version": 1,
+                    "sections": {"update": [{"section_id": r1, "values": {"temp": 91}}]},
+                },
             )
         )
 
@@ -90,18 +94,24 @@ class ConcurrencyTests(TransactionTestCase):
             return services.update_document(
                 4,
                 self.doc.document_id,
-                {"sections": {"update": [{"section_id": r2, "values": {"temp": 92}}]}},
+                {
+                    "expected_version": 1,
+                    "sections": {"update": [{"section_id": r2, "values": {"temp": 92}}]},
+                },
             )
 
         results = self.run_threads(first, second)
-        self.assertEqual([results[k][0] for k in ("first", "second")], ["ok", "ok"], results)
+        self.assertEqual(results["first"][0], "ok", results)
+        self.assertIsInstance(results["second"][1], errors.VersionConflict)
         self.assertEqual(DocSection.objects.get(pk=r1).values_json["temp"], 91)
-        self.assertEqual(DocSection.objects.get(pk=r2).values_json["temp"], 92)
+        self.assertEqual(DocSection.objects.get(pk=r2).values_json["temp"], 87.0)
 
     def test_tc062_update_first_then_lock(self):
         first = self.hold_inside(
             lambda: services.update_document(
-                3, self.doc.document_id, {"document": {"subject": "수정 후 상신"}}
+                3,
+                self.doc.document_id,
+                {"expected_version": 1, "document": {"subject": "수정 후 상신"}},
             )
         )
 
@@ -124,7 +134,9 @@ class ConcurrencyTests(TransactionTestCase):
 
         def second(locked, release):
             return services.update_document(
-                3, self.doc.document_id, {"document": {"subject": "늦은 수정"}}
+                3,
+                self.doc.document_id,
+                {"expected_version": 1, "document": {"subject": "늦은 수정"}},
             )
 
         results = self.run_threads(first, second)

@@ -62,3 +62,4 @@
 .te-toast-error { border-left: 4px solid var(--color-danger); }
 .te-toast-info { border-left: 4px solid var(--brand-primary); }
 .te-row-ng td { background: #fdecea; }
+.te-pending { margin: 0.35rem 0 0 1.1rem; font-size: 0.8rem; }

@@ -43,6 +43,14 @@ class DocumentNotDeletable(DocumentError):
     )
 
 
+class VersionConflict(DocumentError):
+    status, code, message = (
+        409,
+        "VERSION_CONFLICT",
+        "다른 사용자가 먼저 수정했습니다. 최신 내용을 다시 불러오세요.",
+    )
+
+
 class SectionRowNotFound(DocumentError):
     status, code, message = 409, "SECTION_ROW_NOT_FOUND", "대상 행이 이 문서에 없습니다."
 

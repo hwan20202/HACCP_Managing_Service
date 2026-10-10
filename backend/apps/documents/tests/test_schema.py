@@ -27,6 +27,7 @@ EXPECTED_COLUMNS = {
         "submitted_at": False,
         "created_at": True,
         "updated_at": True,
+        "version": True,
         "deleted_at": False,
         "deleted_by": False,
     },
