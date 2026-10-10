@@ -96,4 +96,5 @@ class SchemaMatchesErdV2Tests(TestCase):
 
     def test_out_of_scope_tables_are_not_created(self):
         tables = {row[0] for row in self.query("SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertFalse({"approval", "file", "deviation_action"} & tables)
+        # approval·approval_request는 ERD v4에서 결재 도메인이 만든다(APR S4).
+        self.assertFalse({"file", "deviation_action"} & tables)

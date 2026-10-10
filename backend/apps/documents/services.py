@@ -650,18 +650,24 @@ def _transition_failure(document_id, step_id):
         raise errors.InvalidTransition() if exists else errors.DocumentNotFound()
 
 
-def lock_for_review(document_id):
-    """상신 잠금: draft/rejected → submitted. WF 트랜잭션 안에서만 호출한다."""
+def lock_for_review(document_id, expected_version=None):
+    """상신 잠금: draft/rejected → submitted. WF 트랜잭션 안에서만 호출한다.
+
+    expected_version을 주면 화면이 본 버전과 같을 때만 잠근다(WF 변경 요청 C-1).
+    """
     with step("DOC-LCK-00", "DOC", "트랜잭션 확인"):
         _require_transaction()
     now = timezone.now()
     with step("DOC-LCK-01", "DOC", "상신 잠금(조건부 UPDATE)") as s:
-        changed = Document.objects.filter(
-            pk=document_id, deleted_at__isnull=True, status__in=EDITABLE
-        ).update(status="submitted", submitted_at=now, updated_at=now, version=F("version") + 1)
+        filters = {"pk": document_id, "deleted_at__isnull": True, "status__in": EDITABLE}
+        if expected_version is not None:
+            filters["version"] = expected_version
+        changed = Document.objects.filter(**filters).update(
+            status="submitted", submitted_at=now, updated_at=now, version=F("version") + 1
+        )
         s.note(f"영향 행 {changed}")
     if changed == 0:
-        _lock_failure(document_id, "DOC-LCK-01a")
+        _lock_failure(document_id, "DOC-LCK-01a", expected_version=expected_version)
     with step("DOC-LCK-02", "DOC", "결과"):
         return _lifecycle_result(document_id)
 

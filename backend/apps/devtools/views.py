@@ -4,10 +4,14 @@ from django.http import JsonResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_safe
 
-from apps.documents.flows import FLOWS
+from apps.approvals.flows import FLOWS as APR_FLOWS
+from apps.approvals.models import Approval, ApprovalRequest
+from apps.documents.flows import FLOWS as DOC_FLOWS
 from apps.documents.models import DocSection, Document, DocumentTemplate
 
 from .middleware import recall
+
+FLOWS = {**DOC_FLOWS, **APR_FLOWS}
 
 
 def _plain(value):
@@ -37,9 +41,21 @@ def snapshot(request):
     document = documents[0]
     sections = _rows(DocSection.objects.filter(document_id=document_id).order_by("section_id"))
     template = _rows(DocumentTemplate.objects.filter(pk=document["template_id"]))
+    requests = _rows(
+        ApprovalRequest.objects.filter(document_id=document_id)
+        .defer("snapshot_json")
+        .order_by("attempt")
+    )
+    for row in requests:
+        row.pop("snapshot_json", None)
+    slots = _rows(
+        Approval.objects.filter(request__document_id=document_id).order_by("request_id", "slot_no")
+    )
     staff_ids = sorted(
         {document[k] for k in ("created_by_id", "assignee_id", "deleted_by_id") if document[k]}
         | {row["recorded_by_id"] for row in sections if row["recorded_by_id"]}
+        | {row["requested_by_id"] for row in requests}
+        | {row["approver_id"] for row in slots}
     )
     return _json(
         {
@@ -51,6 +67,8 @@ def snapshot(request):
                 "doc_section": sections,
                 "document_template": template,
                 "staff": [{"staff_id": i} for i in staff_ids],
+                "approval_request": requests,
+                "approval": slots,
             },
         }
     )

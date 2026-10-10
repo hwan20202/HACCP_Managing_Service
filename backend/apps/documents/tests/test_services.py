@@ -499,3 +499,26 @@ class VersionTests(TestCase):
             services.update_document(
                 3, doc.document_id, {"expected_version": 99, "document": {"subject": "x"}}
             )
+
+
+class LockVersionTests(TestCase):
+    """WF 변경 요청 C-1: 상신 잠금도 화면이 본 버전을 확인한다."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.t = setup_reference_data()
+
+    def test_tc086_lock_with_expected_version(self):
+        doc, _ = make_document(self.t["ccp"])
+        update_current(3, doc.document_id, {"document": {"subject": "v2"}})
+        before = snapshot(doc.document_id)
+        with self.assertRaises(errors.VersionConflict):
+            services.lock_for_review(doc.document_id, expected_version=1)
+        self.assertEqual(snapshot(doc.document_id), before)
+        result = services.lock_for_review(doc.document_id, expected_version=2)
+        self.assertEqual((result["status"], result["version"]), ("submitted", 3))
+
+    def test_tc086_status_before_version(self):
+        doc, _ = make_document(self.t["ccp"], status="approved")
+        with self.assertRaises(errors.DocumentLocked):
+            services.lock_for_review(doc.document_id, expected_version=99)
