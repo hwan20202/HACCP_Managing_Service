@@ -3,8 +3,9 @@
 Pattern tokens
     {item_code}          items.item_code
     {item_type}          items.item_type (RAW, PACKAGING, ...)
-    {received:FMT}       the base date (received date for INCOMING, production date for PRODUCED)
-                         FMT tokens: yyyy, yy, MM, dd  e.g. {received:yyMMdd} -> 261009
+    {date:FMT}           the base date: received date for INCOMING, manufacturing date for
+                         PRODUCED. FMT tokens: yyyy, yy, MM, dd  e.g. {date:yyMMdd} -> 261009
+    {received:FMT}       same as {date:FMT} (older name, kept for existing rules)
     {seq:A}              per-key sequence as letters: A..Z, AA..AZ, BA.. (no upper limit)
     {seq:000}            per-key sequence as zero-padded number, width = number of zeros
 
@@ -73,9 +74,9 @@ def render(pattern, *, item, base_date, seq=None):
             return item.item_code
         if name == "item_type":
             return item.item_type_id
-        if name == "received":
+        if name in {"date", "received"}:
             if not fmt:
-                raise LotNumberError("Date token needs a format, e.g. {received:yyMMdd}.")
+                raise LotNumberError("Date token needs a format, e.g. {date:yyMMdd}.")
             return _format_date(base_date, fmt)
         if name == "seq":
             return "" if seq is None else _format_seq(seq, fmt)

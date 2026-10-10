@@ -261,3 +261,36 @@ class StockAndLedgerApiTests(ApiTestCase):
         self.assertEqual(response.status_code, 400)
         response = self.get("/ledger/", **{"from": "2024-01-01", "to": "2026-01-01"})
         self.assertEqual(response.status_code, 400)
+
+
+class LedgerChangesApiTests(ApiTestCase):
+    def test_changes_endpoint(self):
+        self.receive()
+        params = {"from": self.today, "to": self.today}
+        before = self.get("/ledger/changes/", since="2000-01-01T00:00:00", **params).json()
+        self.assertTrue(before["changed"])
+        self.assertEqual(before["results"][0]["affects"], "PERIOD")
+        self.assertEqual(before["results"][0]["quantity"], "50")
+        after = self.get("/ledger/changes/", since="2999-01-01T00:00:00", **params).json()
+        self.assertEqual(after, {"changed": False, "results": []})
+        self.assertEqual(
+            self.get("/ledger/changes/", since="2026-10-01", **params).status_code, 400
+        )
+
+
+class JudgmentApiTests(ApiTestCase):
+    def test_judgment_endpoint(self):
+        receipt = self.receive()
+        url = f"/lots/{receipt['lot_id']}/judgment/"
+        response = self.post(url, {"result": "pass", "staff_id": self.staff.pk, "document_id": 5})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["status"], "AVAILABLE")
+        changed = self.post(url, {"result": "FAIL", "staff_id": self.staff.pk})
+        self.assertEqual(changed.status_code, 400)
+        self.assertIn("사유", changed.json()["error"]["message"])
+        self.assertEqual(
+            self.post(
+                "/lots/999999/judgment/", {"result": "PASS", "staff_id": self.staff.pk}
+            ).status_code,
+            404,
+        )

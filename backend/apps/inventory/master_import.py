@@ -22,7 +22,8 @@ from django.db import IntegrityError, transaction
 from .models import Item, ItemType, LotKind, LotNumberRule, Staff, Supplier
 from .quantity import to_e6
 
-DEFAULT_INCOMING_PATTERN = "{item_code}-{received:yyMMdd}{seq:A}"
+DEFAULT_INCOMING_PATTERN = "{item_code}-{received:yyMMdd}{seq:A}"  # 품목코드 + 입고일 (9/30)
+DEFAULT_PRODUCED_PATTERN = "{item_code}-{date:yyMMdd}{seq:A}"  # 품목코드 + 제조일 (9/30)
 DEFAULT_RULE_EFFECTIVE_FROM = datetime.date(2026, 1, 1)
 
 _TRUE = {"1", "y", "yes", "true", "t", "사용"}
@@ -178,13 +179,22 @@ def import_items(rows):
 
 
 def ensure_default_lot_rules():
-    """Create the default INCOMING rule when no active INCOMING rule exists. Returns it or None."""
-    if LotNumberRule.objects.filter(lot_kind=LotKind.INCOMING, is_active=True).exists():
-        return None
-    return LotNumberRule.objects.create(
-        lot_kind=LotKind.INCOMING,
-        item_type=None,
-        pattern=DEFAULT_INCOMING_PATTERN,
-        effective_from=DEFAULT_RULE_EFFECTIVE_FROM,
-        notes="기본 입고 LOT 규칙 (seed_master 생성)",
-    )
+    """Create a default rule for each LOT kind that has no active rule. Returns the new rules."""
+    defaults = [
+        (LotKind.INCOMING, DEFAULT_INCOMING_PATTERN, "기본 입고 LOT 규칙 (seed_master 생성)"),
+        (LotKind.PRODUCED, DEFAULT_PRODUCED_PATTERN, "기본 생산 LOT 규칙 (seed_master 생성)"),
+    ]
+    created = []
+    for kind, pattern, notes in defaults:
+        if LotNumberRule.objects.filter(lot_kind=kind, is_active=True).exists():
+            continue
+        created.append(
+            LotNumberRule.objects.create(
+                lot_kind=kind,
+                item_type=None,
+                pattern=pattern,
+                effective_from=DEFAULT_RULE_EFFECTIVE_FROM,
+                notes=notes,
+            )
+        )
+    return created

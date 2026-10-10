@@ -1,4 +1,4 @@
-"""Load master data (staff, suppliers, items) and the default LOT number rule.
+"""Load master data (staff, suppliers, items) and the default LOT number rules.
 
     python backend/manage.py seed_master --sample
     python backend/manage.py seed_master --staff data/import/staff.csv \
@@ -75,9 +75,10 @@ class Command(BaseCommand):
                 for key, importer in importers:
                     if key in sources:
                         self.stdout.write(str(importer(sources[key])))
-                rule = ensure_default_lot_rules()
-                if rule:
-                    self.stdout.write(f"lot rule: created default INCOMING rule '{rule.pattern}'")
+                for rule in ensure_default_lot_rules():
+                    self.stdout.write(
+                        f"lot rule: created default {rule.lot_kind} rule '{rule.pattern}'"
+                    )
                 if options["dry_run"]:
                     transaction.set_rollback(True)
         except MasterImportError as error:

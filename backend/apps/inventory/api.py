@@ -23,7 +23,8 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from . import serializers as out
 from .errors import InventoryError, NotFound
 from .fields import KST
-from .ledger import stock_ledger
+from .judgment import apply_incoming_judgment
+from .ledger import stock_ledger, stock_ledger_changes_since
 from .master_import import parse_item_row, parse_staff_row, parse_supplier_row
 from .models import (
     IncomingReceipt,
@@ -374,6 +375,25 @@ def lot_detail(request, pk):
     return ok(data)
 
 
+@endpoint("POST")
+def lot_judgment(request, pk):
+    """Incoming inspection result for the LOT (PASS / FAIL). Normally called by the document app
+    as a function; exposed here for screens and testing."""
+    data = request.data
+    _required(data, "result", "staff_id")
+    lot = apply_incoming_judgment(
+        lot_id=pk,
+        result=str(data["result"]).upper(),
+        staff_id=_int(data["staff_id"], "staff_id"),
+        document_id=_int(data.get("document_id"), "document_id"),
+        judged_at=_datetime(data.get("judged_at"), "judged_at") or None,
+        reason=data.get("reason"),
+    )
+    lot = Lot.objects.select_related("item").get(pk=lot.pk)
+    quantity = Inventory.objects.filter(lot=lot).values_list("quantity_e6", flat=True).first()
+    return ok(out.lot(lot, quantity or 0))
+
+
 @endpoint("GET")
 def stock_lots(request):
     status = request.GET.get("status")
@@ -427,6 +447,21 @@ def ledger(request):
             "results": [out.ledger_item(row) for row in items],
         }
     )
+
+
+@endpoint("GET")
+def ledger_changes(request):
+    """Movements recorded since an approval that change the ledger for the period."""
+    since = _datetime(request.GET.get("since"), "since")
+    if not isinstance(since, datetime.datetime):
+        raise BadRequest(
+            "'since' 는 승인 일시(YYYY-MM-DDTHH:MM:SS)여야 합니다.", {"since": "invalid"}
+        )
+    params = ledger_params(request)
+    changes = stock_ledger_changes_since(
+        since, params.pop("date_from"), params.pop("date_to"), **params
+    )
+    return ok({"changed": bool(changes), "results": [out.ledger_change(c) for c in changes]})
 
 
 # ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 from django.db import connection
 
-from .fields import parse_kst_text
+from .fields import parse_kst_text, to_kst_text
 
 
 @dataclass
@@ -175,3 +175,65 @@ def stock_ledger(date_from, date_to, *, item_type=None, item_id=None, lot_id=Non
     for item in result:
         item.lots.sort(key=lambda lot: lot.lot_number)
     return result
+
+
+@dataclass
+class LedgerChange:
+    movement_id: int
+    lot_id: int
+    lot_number: str
+    item_id: int
+    item_code: str
+    occurred_at: datetime.datetime
+    created_at: datetime.datetime
+    movement_code: str
+    movement_name: str
+    signed_quantity_e6: int
+    reason: str | None
+    staff_name: str
+    corrects_movement_id: int | None
+    affects: str  # "OPENING" (before date_from: changes the carried-over balance) or "PERIOD"
+
+
+def stock_ledger_changes_since(
+    since, date_from, date_to, *, item_type=None, item_id=None, lot_id=None
+):
+    """Movements recorded at or after `since` that change the ledger for date_from..date_to.
+
+    For checking whether an approved ledger is still current. A movement matters when it was
+    recorded (created_at) at or after the approval and happened (occurred_at) before the end
+    of the period: before date_from it changes the opening balance, inside the period it
+    changes the lines. Corrections carry the original's occurred_at, so they are caught too.
+
+    `since` is compared at second precision and inclusively, so a movement recorded in the
+    same second as the approval is reported (a false alarm is safer than a missed change).
+    LOT / item master changes (expiration date, names) are not movements and are not covered.
+    """
+    if date_to < date_from:
+        raise ValueError("date_to must not be before date_from.")
+    since_text = to_kst_text(since) if isinstance(since, datetime.datetime) else str(since)
+    start = date_from.isoformat()
+    end = (date_to + datetime.timedelta(days=1)).isoformat()
+    clauses, params = _filters(item_type, item_id, lot_id)
+    extra = "".join(f" AND {clause}" for clause in clauses)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT m.id, l.id, l.lot_number, i.id, i.item_code, m.occurred_at, m.created_at,"
+            " t.code, t.name, m.quantity_e6 * t.direction, m.reason, st.name,"
+            " m.corrects_movement_id"
+            f" {_BASE} JOIN staff st ON st.id = m.staff_id"
+            f" WHERE m.created_at >= %s AND m.occurred_at < %s{extra}"
+            " ORDER BY m.created_at, m.id",
+            [since_text, end, *params],
+        )
+        rows = cursor.fetchall()
+    return [
+        LedgerChange(
+            *row[:5],
+            parse_kst_text(row[5]),
+            parse_kst_text(row[6]),
+            *row[7:],
+            "OPENING" if row[5] < start else "PERIOD",
+        )
+        for row in rows
+    ]

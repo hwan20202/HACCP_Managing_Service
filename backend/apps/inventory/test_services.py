@@ -10,7 +10,8 @@ from django.test import TestCase
 
 from .errors import InventoryError, NotFound
 from .fields import KST, kst_now
-from .ledger import stock_ledger
+from .judgment import apply_incoming_judgment
+from .ledger import stock_ledger, stock_ledger_changes_since
 from .models import AuditLog, Inventory, Item, Lot, LotStatus, Staff, StockMovement, Supplier
 from .movements import (
     adjust_stock,
@@ -427,3 +428,122 @@ class CheckInventoryCommandTests(ServiceTestCase):
         Lot.objects.filter(pk=lot.pk).update(status=LotStatus.CONSUMED)
         with self.assertRaises(CommandError):
             call_command("check_inventory", stdout=StringIO())
+
+
+class LedgerChangeTests(ServiceTestCase):
+    def raw_move(self, lot, code, quantity, occurred_at, created_at, key, **extra):
+        return StockMovement.objects.create(
+            lot=lot,
+            movement_type_id=code,
+            quantity_e6=to_e6(quantity),
+            staff=self.staff,
+            occurred_at=occurred_at,
+            created_at=created_at,
+            idempotency_key=key,
+            **extra,
+        )
+
+    def test_changes_after_approval_that_affect_the_period(self):
+        lot = self.receive(self.raw_a, "50", self.day1, "r1").lot  # recorded before approval
+        approved_at = kst_now() + datetime.timedelta(hours=1)
+        later = approved_at + datetime.timedelta(hours=1)
+        period_start = self.day1 + datetime.timedelta(days=2)
+        period_end = self.day2
+        before = self.raw_move(lot, "ADJUST_OUT", "1", at(self.day1, 12), later, "a1", reason="x")
+        inside = self.raw_move(lot, "ADJUST_OUT", "2", at(self.day2, 8), later, "a2", reason="x")
+        self.raw_move(lot, "ADJUST_OUT", "3", at(self.today, 8), later, "a3", reason="x")
+
+        changes = stock_ledger_changes_since(
+            approved_at, period_start, period_end, item_id=self.raw_a.pk
+        )
+        self.assertEqual(
+            [(c.movement_id, c.affects) for c in changes],
+            [(before.pk, "OPENING"), (inside.pk, "PERIOD")],
+        )
+        self.assertEqual(changes[0].signed_quantity_e6, -to_e6(1))
+
+    def test_nothing_new_means_no_changes(self):
+        self.receive(self.raw_a, "50", self.day1, "r1")
+        approved_at = kst_now() + datetime.timedelta(hours=1)
+        self.assertEqual(stock_ledger_changes_since(approved_at, self.day1, self.today), [])
+
+    def test_same_second_counts_as_changed(self):
+        self.receive(self.raw_a, "50", self.day1, "r1")
+        recorded = StockMovement.objects.get().created_at
+        changes = stock_ledger_changes_since(recorded, self.day1, self.today)
+        self.assertEqual(len(changes), 1)
+
+
+class JudgmentTests(ServiceTestCase):
+    def setUp(self):
+        self.lot = self.receive(self.raw_a, "50", self.day2, "r1").lot
+
+    def judge(self, result, reason=None, lot=None):
+        return apply_incoming_judgment(
+            lot_id=(lot or self.lot).pk,
+            result=result,
+            staff_id=self.staff.pk,
+            document_id=77,
+            reason=reason,
+        )
+
+    def test_pass_and_fail_set_status(self):
+        self.assertEqual(self.judge("PASS").status, LotStatus.AVAILABLE)
+        other = self.receive(self.raw_a, "5", self.day2, "r2").lot
+        self.assertEqual(self.judge("FAIL", lot=other).status, LotStatus.REJECTED)
+        log = AuditLog.objects.filter(table_name="lots", record_id=str(self.lot.pk)).get()
+        self.assertEqual(log.after_json["judgment"], "PASS")
+        self.assertEqual(log.after_json["document_id"], 77)
+
+    def test_same_result_again_changes_nothing(self):
+        self.judge("PASS")
+        self.judge("PASS")
+        self.assertEqual(AuditLog.objects.filter(table_name="lots").count(), 1)
+
+    def test_rejudgment_needs_reason_and_untouched_lot(self):
+        self.judge("PASS")
+        with self.assertRaises(InventoryError):
+            self.judge("FAIL")  # no reason
+        self.assertEqual(self.judge("FAIL", reason="재검토 결과 이물").status, LotStatus.REJECTED)
+        self.assertEqual(self.judge("PASS", reason="오판정 정정").status, LotStatus.AVAILABLE)
+        adjust_stock(
+            lot_id=self.lot.pk,
+            direction="OUT",
+            quantity="1",
+            reason="사용",
+            staff_id=self.staff.pk,
+            idempotency_key="a1",
+        )
+        with self.assertRaises(InventoryError):
+            self.judge("FAIL", reason="늦게 발견")
+
+    def test_fail_then_return_closes_the_lot(self):
+        self.judge("FAIL")
+        return_to_supplier(
+            lot_id=self.lot.pk,
+            reason="육안검사 부적합 전량 반품",
+            staff_id=self.staff.pk,
+            idempotency_key="ret1",
+        )
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.status, LotStatus.DISPOSED)
+        with self.assertRaises(InventoryError):
+            self.judge("PASS", reason="정정")
+
+    def test_rejects_invalid_targets(self):
+        with self.assertRaises(InventoryError):
+            self.judge("CONDITIONAL")
+        opening = self.opening(self.raw_a, "3", "o1", lot_number="OLD-1").lot
+        with self.assertRaises(InventoryError):
+            self.judge("PASS", lot=opening)
+        cancel_receipt(receipt_id=self.lot.incoming_receipt.pk, staff_id=self.staff.pk, reason="x")
+        with self.assertRaises(InventoryError):
+            self.judge("PASS")
+        with self.assertRaises(NotFound):
+            apply_incoming_judgment(lot_id=999999, result="PASS", staff_id=self.staff.pk)
+
+    def test_judged_lot_becomes_usable_stock(self):
+        self.judge("PASS")
+        row = lot_stock(item_id=self.raw_a.pk)[0]
+        self.assertTrue(row.is_usable)
+        self.assertEqual(item_stock(item_id=self.raw_a.pk)[0].usable_e6, to_e6(50))

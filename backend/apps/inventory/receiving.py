@@ -1,9 +1,9 @@
 """Incoming receipt registration and cancellation (C2: one receipt = one LOT).
 
 register_receipt():  lots(QUARANTINE) -> stock_movements(RECEIPT) -> incoming_receipts
-                     -> audit_logs -> notify document domain        (one transaction)
+                     -> audit_logs -> document_bridge hook          (one transaction)
 cancel_receipt():    stock_movements(CORRECTION_OUT, full quantity) -> receipt CANCELLED
-                     -> audit_logs -> notify document domain        (one transaction)
+                     -> audit_logs -> document_bridge hook          (one transaction)
 
 Both run in transaction.atomic(), which settings turn into BEGIN IMMEDIATE (rule S5).
 Messages in ReceivingError are shown to users, so they are in Korean.
@@ -169,7 +169,7 @@ def register_receipt(data: ReceiptInput) -> IncomingReceipt:
             after_json=_receipt_snapshot(receipt),
             staff=staff,
         )
-        document_bridge.notify_incoming_received(receipt)
+        document_bridge.incoming_received(lot_id=lot.pk)
     return receipt
 
 
@@ -229,5 +229,7 @@ def cancel_receipt(*, receipt_id: int, staff_id: int, reason: str) -> IncomingRe
             reason=reason,
             staff=staff,
         )
-        document_bridge.notify_incoming_receipt_cancelled(receipt)
+        document_bridge.incoming_receipt_cancelled(
+            lot_id=receipt.lot_id, reason=reason, staff_id=staff.pk
+        )
     return receipt

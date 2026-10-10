@@ -10,7 +10,6 @@ from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
 from django.test import SimpleTestCase, TestCase
 
-from .document_bridge import incoming_received_payload
 from .fields import KST, kst_now, parse_kst_text, to_kst_text
 from .lot_numbers import LotNumberError, next_lot_number, render, seq_to_letters
 from .master_import import MasterImportError, ensure_default_lot_rules, import_items
@@ -378,6 +377,22 @@ class LotNumberTests(TestCase):
         # Before the specific rule takes effect the generic rule applies.
         self.assertEqual(self.draw(day=datetime.date(2026, 9, 30)), "1000019-260930A")
 
+    def test_produced_lot_uses_manufacturing_date(self):
+        finished = Item.objects.create(
+            item_type_id="FINISHED", item_code="4000019", name="테스트 완제품", base_unit="개"
+        )
+        number = next_lot_number(lot_kind=LotKind.PRODUCED, item=finished, base_date=self.day)
+        self.assertEqual(number, "4000019-261009A")
+        again = next_lot_number(lot_kind=LotKind.PRODUCED, item=finished, base_date=self.day)
+        self.assertEqual(again, "4000019-261009B")
+
+    def test_date_and_received_tokens_are_the_same(self):
+        new = render("{item_code}-{date:yyMMdd}{seq:A}", item=self.item, base_date=self.day, seq=1)
+        old = render(
+            "{item_code}-{received:yyMMdd}{seq:A}", item=self.item, base_date=self.day, seq=1
+        )
+        self.assertEqual(new, old)
+
     def test_no_rule_is_an_error(self):
         LotNumberRule.objects.update(is_active=False)
         with self.assertRaises(LotNumberError):
@@ -400,9 +415,10 @@ class MasterImportTests(TestCase):
         call_command("seed_master", "--sample", stdout=out)
         self.assertIn("staff: created 3, updated 0", out.getvalue())
         self.assertIn("created default INCOMING rule", out.getvalue())
+        self.assertIn("created default PRODUCED rule", out.getvalue())
         call_command("seed_master", "--sample", stdout=(out := StringIO()))
         self.assertIn("items: created 0, updated 5", out.getvalue())
-        self.assertEqual(LotNumberRule.objects.count(), 1)
+        self.assertEqual(LotNumberRule.objects.count(), 2)
         self.assertEqual(Item.objects.get(item_code="1000002").minimum_stock_e6, to_e6("20.5"))
 
     def test_dry_run_saves_nothing(self):
@@ -535,29 +551,24 @@ class ReceivingTests(TestCase):
         self.assertEqual(StockMovement.objects.count(), 0)
 
     def test_document_notification_failure_rolls_back(self):
-        target = "apps.inventory.document_bridge.notify_incoming_received"
+        target = "apps.inventory.document_bridge.incoming_received"
         with patch(target, side_effect=RuntimeError("down")), self.assertRaises(RuntimeError):
             self.receive()
         self.assertEqual(Lot.objects.count(), 0)
         self.assertEqual(IncomingReceipt.objects.count(), 0)
         with patch(target) as notify:
             receipt = self.receive()
-        notify.assert_called_once_with(receipt)
-
-    def test_payload_matches_contract_c3(self):
-        payload = incoming_received_payload(self.receive())
-        self.assertEqual(payload["subject_type"], "LOT")
-        self.assertEqual(payload["quantity_e6"], to_e6(50))
-        self.assertEqual(payload["unit"], "kg")
-        self.assertEqual(payload["expiration_date"], "2027-09-01")
+        notify.assert_called_once_with(lot_id=receipt.lot_id)
 
     def test_cancel_offsets_stock_and_marks_receipt(self):
         receipt = self.receive()
-        with patch("apps.inventory.document_bridge.notify_incoming_receipt_cancelled") as notify:
+        with patch("apps.inventory.document_bridge.incoming_receipt_cancelled") as notify:
             cancelled = cancel_receipt(
                 receipt_id=receipt.pk, staff_id=self.staff.pk, reason="오입력"
             )
-        notify.assert_called_once()
+        notify.assert_called_once_with(
+            lot_id=receipt.lot_id, reason="오입력", staff_id=self.staff.pk
+        )
         self.assertEqual(cancelled.receipt_status, ReceiptStatus.CANCELLED)
         self.assertEqual(cancelled.cancel_reason, "오입력")
         self.assertEqual(Inventory.objects.get(lot=receipt.lot).quantity_e6, 0)

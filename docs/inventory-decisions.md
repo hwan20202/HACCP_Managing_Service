@@ -14,6 +14,21 @@
 | 입고 LOT 번호 | `{item_code}-{received:yyMMdd}{seq:A}`, 같은 품목·날짜 안에서 A→Z→AA→AB… | 팀 결정 |
 | 기준정보 | 저장소에는 가상 샘플만. 실제 자료는 `data/` 아래 CSV 로 `seed_master` | CONTRIBUTING |
 | 생산 테이블 이름 | 생산지시가 아닌 제조배치 중심 `production_batches` (다음 마이그레이션) | 팀 결정 |
+| 입고 LOT 분리 | 같은 날 같은 원료라도 입고 건별 별도 LOT 허용 (성적서가 다를 수 있음) | 10/7 현업 |
+| 원산지 | 원산지가 다르면 별도 품목코드 | 10/7 현업 |
+| 부적합 원료 | 육안검사 FAIL 은 전량 반품 (수불 기록 방식은 대기) | 10/7 현업 |
+| 생산 LOT 번호 | 품목코드 + 제조일, 같은 날 여러 건이면 A/B | 9/30 현업 |
+| 생산 기록 시점 | 작업 종료 후 사후 입력 중심 (실시간 MES 아님) | 9/30 현업 |
+| BOM vs 실제 투입 | 표준 소요량과 실제 투입량은 별도 기록 | 9/30 현업 |
+| 다단계 BOM | 원료 → 반제품 → 완제품. 반제품도 판매·재투입 가능, 품목 유형으로 기능 제한 안 함 | 10/7 멘토링 |
+| 완제품 재투입 | 자체 생산품이 다른 제품의 원료가 될 수 있음 (다단계 추적 필요) | 10/7 현업 |
+| 보관·출고 단위 | 보관 박스·출고 포장 단위가 달라도 새 LOT 아님. 환은 개수 단위 차감 | 10/7 현업 |
+| CCP 영향 범위 | 제조배치 단위로 판단·보류. 배치 없는 독립 점검도 있음 | 10/7 현업 |
+| 소급 작성 | 전날 날짜로 작성·수정 허용 | 10/7 현업 |
+| 문서 연동 방식 | 앱 간 직접 함수 호출, 식별자만 전달하고 문서 쪽이 조회. 입고 문서는 `lot_id` 로 `v_doc_incoming_lot`, 원료수불대장(D04)은 `ledger.stock_ledger()` (이월·입출고·누적·기말 계산 포함) | 질의 5 |
+| `domain_event` | 문서 앱의 외부 알림 API 용 Outbox. 앱 간 데이터 전달 용도 아님. 수불은 쓰지 않음 | 질의 5 |
+| 승인본 보존 | 문서 쪽이 결재 시점 스냅샷 보존. 수불은 변경 감지 조회(`stock_ledger_changes_since`) 제공 | 질의 5 |
+| 판정 반영 시점 | 육안검사 작성완료 시 문서 앱이 `judgment.apply_incoming_judgment()` 호출. 결재 승인·반려는 LOT 상태 무관 | 질의 3 |
 
 ## 가정 (기본값으로 구현, 확정 시 수정)
 
@@ -22,8 +37,10 @@
 | 입고 가능 품목 유형 | 원료(RAW)·포장재(PACKAGING) | `receiving.RECEIVABLE_ITEM_TYPES` |
 | 지난 날짜 입고 | 그날 00:00:00 으로 기록 (그날 다른 이동보다 앞에 오도록) | `receiving._occurred_at` |
 | 입고 취소 | 입고 후 사용·조정이 없을 때만. 전량 CORRECTION_OUT, LOT 상태는 그대로 | `receiving.cancel_receipt` |
-| 입고 직후 LOT 상태 | QUARANTINE (판정 반영 전). 통합 입고(육안검사 동시 저장)가 붙으면 판정에 따라 바로 AVAILABLE / REJECTED | 판정 반영 개발 시 |
-| FAIL 입고 처리 | 입고는 등록하고 LOT 를 REJECTED 로 둔 뒤 반품·폐기를 수불로 기록 (현업 확인 필요) | 판정 반영 개발 시 |
+| 입고 직후 LOT 상태 | QUARANTINE, 판정 반영 시 PASS → AVAILABLE / FAIL → REJECTED. 통합 입고가 붙으면 같은 트랜잭션에서 바로 반영 | `judgment.STATUS_FOR` |
+| FAIL 입고 처리 | 입고는 등록하고 LOT 를 REJECTED 로 둔 뒤 전량 반품을 수불로 기록 (`return_to_supplier`, 전량 → DISPOSED). 판정 함수는 상태만 바꾸고 반품은 별도 호출 | `judgment.py` |
+| 판정 변경 | 같은 판정 재전송은 무시. 바꾸려면 사유 필수. PASS → FAIL 은 RECEIPT 외 이동이 없을 때만, FAIL → PASS 는 반품·폐기 전만 | `judgment.apply_incoming_judgment` |
+| 변경 감지 조건 | 승인 시각 이후(같은 초 포함) 등록, 발생 일시가 기간 종료일 이전. 기간 전이면 이월 영향(OPENING), 기간 안이면 PERIOD. LOT·품목 정보 변경은 미포함 | `ledger.stock_ledger_changes_since` |
 | 반품·폐기 후 LOT 상태 | 재고가 0 이 되면 DISPOSED. 일부만이면 상태 유지. 정정으로 재고가 되살아나면 직전 상태로 복구 | `movements._outflow_or_adjust`, `correct_movement` |
 | 정정 대상 | 입고(RECEIPT)는 정정 대신 입고 취소. 정정 기록 자체는 다시 정정 불가 | `movements.NOT_CORRECTABLE` |
 | 정정 일시 | 원 기록과 같은 일시 (수불대장에서 그 시점부터 바로잡힘) | `movements.correct_movement` |
@@ -36,9 +53,8 @@
 
 | 항목 | 기다리는 것 | 현재 상태 |
 |---|---|---|
-| 문서 쪽 알림 전달 방식 | 질의 5 (이벤트 vs 직접 호출) | `document_bridge.py` 빈 함수. 페이로드는 C3 형식으로 생성 |
+| 문서 쪽 훅 내용 | 문서 앱 함수 제공 | `document_bridge.incoming_received(lot_id)`, `incoming_receipt_cancelled(lot_id, reason, staff_id)` — 지금은 아무것도 안 함 |
 | 통합 입고 (육안검사 동시 저장) | 문서 쪽 `get_incoming_inspection_form()`, `create_incoming_inspection(...)` 형식 합의 | 미착수 |
-| 판정 수정·결재 반려 시 처리 | 위와 함께 | 미착수 |
 | `lot_holds` 문서 FK, HOLD 서비스 | 10/11 ERD, CCP 개발 시점 | 테이블만 있음 |
 | 수불대장 결재·스냅샷 | 문서 쪽 담당 | 조회·CSV 만 제공 |
 | BOM·제조배치·투입·CCP | 다음 마이그레이션 | 미착수 |
@@ -56,9 +72,11 @@
 | `receipts/` | GET, POST | 입고 목록(`from`, `to`, `supplier_id`, `item_id`, `status`, `limit`, `offset`) / 입고 등록 |
 | `receipts/<id>/`, `receipts/<id>/cancel/` | GET / POST | 입고 상세 / 입고 취소 |
 | `lots/<id>/` | GET | LOT 상세 + 수불 이력 |
+| `lots/<id>/judgment/` | POST | 입고 육안검사 판정 반영 (`result`: PASS / FAIL, 변경 시 `reason`) |
 | `stock/lots/` | GET | LOT별 재고 (`item_type`, `item_id`, `status`, `include_empty`, `expiring_within_days`) |
 | `stock/items/` | GET | 품목별 재고 (`below_minimum=1` 이면 최소재고 미달만) |
 | `ledger/`, `ledger/export.csv` | GET | 원료수불대장 (`from`, `to` 필수) / CSV 내려받기 |
+| `ledger/changes/` | GET | 승인 이후 변경 감지 (`since`, `from`, `to` 필수) |
 | `movements/opening-balance/` | POST | 기초재고 이관 |
 | `movements/adjust/` | POST | 재고조정 (`direction`: IN / OUT) |
 | `movements/return/`, `movements/disposal/` | POST | 공급처 반품 / 폐기 (`quantity` 생략 시 전량) |
@@ -68,6 +86,6 @@
 
 | 명령 | 내용 |
 |---|---|
-| `manage.py seed_master --sample` | 가상 기준정보 + 기본 입고 LOT 규칙 |
+| `manage.py seed_master --sample` | 가상 기준정보 + 기본 입고·생산 LOT 규칙 |
 | `manage.py seed_master --items data/import/items.csv --encoding cp949 [--dry-run]` | 실제 기준정보 CSV 가져오기 |
 | `manage.py check_inventory` | 재고·수불 정합성 점검 (문제 있으면 오류 종료) |

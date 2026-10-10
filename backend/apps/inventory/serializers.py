@@ -203,3 +203,22 @@ def ledger_item(row):
             for lot_row in row.lots
         ],
     }
+
+
+def ledger_change(row):
+    return {
+        "movement_id": row.movement_id,
+        "lot_id": row.lot_id,
+        "lot_number": row.lot_number,
+        "item_id": row.item_id,
+        "item_code": row.item_code,
+        "occurred_at": iso(row.occurred_at),
+        "created_at": iso(row.created_at),
+        "movement_type": row.movement_code,
+        "movement_name": row.movement_name,
+        "quantity": qty(row.signed_quantity_e6),
+        "reason": row.reason,
+        "staff_name": row.staff_name,
+        "corrects_movement_id": row.corrects_movement_id,
+        "affects": row.affects,
+    }
