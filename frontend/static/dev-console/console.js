@@ -37,6 +37,17 @@
     devCreate: { label: '개선조치 쓰기 (F19·A15)', method: 'POST', flow: 'DOC-DVC', uses: ['id', 'body'], path: (s) => `documents/${s.id}/deviations`, doc: (s) => s.id },
     devUpdate: { label: '개선조치 수정 (F20·A16)', method: 'PATCH', flow: 'DOC-DVU', uses: ['id', 'body', 'docId'], path: (s) => `deviations/${s.id}`, doc: (s) => s.docId },
     devDelete: { label: '개선조치 삭제 (F21·A17)', method: 'DELETE', flow: 'DOC-DVD', uses: ['id', 'query', 'docId'], path: (s) => `deviations/${s.id}${s.query ? `?${s.query}` : ''}`, doc: (s) => s.docId },
+    // ---- P5 REQ 작성 요구 — doc-requirements/s2-spec.md 2.2. ④는 LOT·배치 단위 스냅샷(scope)
+    reqLot: { label: 'REQ 테스트 입고 + 작성 요구 (D04→F01)', method: 'POST', flow: 'REQ-DEV-LOT', uses: ['body'], path: () => '/api/dev/req/lots',
+      scope: (s, r) => (r && r.ok ? `lot_id=${r.data.lot.lot_id}` : null) },
+    reqLotRe: { label: 'REQ 같은 LOT 다시 호출 (D06→F01)', method: 'POST', flow: 'REQ-DEV-RE-LOT', uses: ['id'], path: (s) => `/api/dev/req/lots/${s.id}/require`,
+      scope: (s) => `lot_id=${s.id}` },
+    reqBatch: { label: 'REQ 테스트 배치 + 작성 요구 (D05→F02)', method: 'POST', flow: 'REQ-DEV-BAT', uses: ['body'], path: () => '/api/dev/req/batches',
+      scope: (s, r) => (r && r.ok ? `batch_id=${r.data.batch.production_batch_id}` : null) },
+    reqBatchRe: { label: 'REQ 같은 배치 다시 호출 (D07→F02)', method: 'POST', flow: 'REQ-DEV-RE-BAT', uses: ['id'], path: (s) => `/api/dev/req/batches/${s.id}/require`,
+      scope: (s) => `batch_id=${s.id}` },
+    lotDocs: { label: 'REQ LOT별 연결 문서 (F03·A01)', method: 'GET', flow: 'REQ-FND', uses: ['id'], path: (s) => `lots/${s.id}/documents`, scope: (s) => `lot_id=${s.id}` },
+    batchDocs: { label: 'REQ 배치별 연결 문서 (F04·A02)', method: 'GET', flow: 'REQ-FND-B', uses: ['id'], path: (s) => `batches/${s.id}/documents`, scope: (s) => `batch_id=${s.id}` },
   };
   const flowOf = (fn, record) => (typeof fn.flow === 'function' ? fn.flow(record) : fn.flow);
 
@@ -64,8 +75,23 @@
     };
   }
 
+  const scopeSnapshot = (q) => (q ? devGet(`/api/dev/snapshot?${q}`) : Promise.resolve(null));
+
   async function execute(spec, { before } = {}) {
     const fn = FUNCS[spec.func];
+    if (fn.scope) {
+      // P5 REQ: 문서 하나가 아니라 LOT·배치 하나에 걸린 행(lots·입고 기록·document·doc_section·document_ref)
+      const scopeBefore = fn.scope(spec, null);
+      const snapBefore = before !== undefined ? before : await scopeSnapshot(scopeBefore);
+      const record = await api.request(fn.method, fn.path(spec), spec.body, { staffId: spec.staff });
+      let trace = record.data && typeof record.data === 'object' && record.data.trace;
+      if (!trace && record.traceId) trace = await devGet(`/api/dev/traces/${record.traceId}`);
+      const scope = fn.scope(spec, record) || scopeBefore;
+      const snapAfter = await scopeSnapshot(scope);
+      const entry = { spec, fn, record, trace, before: snapBefore, after: snapAfter, scope, preset: state.preset };
+      state.history.push(entry);
+      return entry;
+    }
     const docBefore = fn.doc ? fn.doc(spec, null) : null;
     const snapBefore = before !== undefined ? before : await snapshot(docBefore);
     const record = await api.request(fn.method, fn.path(spec), spec.body, { staffId: spec.staff });
@@ -118,18 +144,29 @@
   // ---------------------------------------------------------------- ③ 처리 로직
   function compareFlow(flowId, steps) {
     const expected = state.flows[flowId] || [];
+    // P5 REQ 흐름은 안에 DOC·APR 단계를 품고 반복(#n 번호·공정)이 있다(s2-flows 9장, D-070 G3):
+    // 이 흐름의 단계만 골라 연속 반복을 하나로 줄여 비교하고, 안쪽 단계는 칩 대신 개수로만 보인다.
+    const nested = flowId.startsWith('REQ-');
     const byId = Object.fromEntries(steps.map((s) => [s.step_id, s]));
     const chips = expected.map((id) => ({ id, cls: byId[id] ? byId[id].result : 'none' }));
-    steps.filter((s) => !expected.includes(s.step_id)).forEach((s) => chips.push({ id: s.step_id, cls: s.result === 'fail' ? 'fail extra' : 'extra' }));
-    const mainRun = steps.map((s) => s.step_id).filter((id) => !id.endsWith('a'));
+    const own = (s) => !nested || s.step_id.startsWith('REQ-');
+    const inner = nested ? steps.filter((s) => !own(s)) : [];
+    steps.filter((s) => own(s) && !expected.includes(s.step_id))
+      .forEach((s) => chips.push({ id: s.step_id, cls: s.result === 'fail' ? 'fail extra' : 'extra' }));
+    let mainRun = steps.map((s) => s.step_id).filter((id) => (nested ? expected.includes(id) : !id.endsWith('a')));
+    if (nested) mainRun = mainRun.filter((id, i) => i === 0 || mainRun[i - 1] !== id);
     const inOrder = mainRun.every((id, i) => expected[i] === id);
-    const failed = steps.find((s) => s.result === 'fail');
+    const failed = steps.find((s) => s.result === 'fail' && own(s));
     const reached = expected.filter((id) => byId[id]).length;
     let summary;
     if (!inOrder) summary = `<span class="dc-status-err">⚠ 순서 불일치 — 도식(${flowId})과 실행 순서가 다릅니다</span>`;
     else if (failed) summary = `<span class="dc-status-err">실패 경로: ${esc(failed.step_id)}에서 중단 (${reached}/${expected.length} 단계)</span>`;
     else if (reached === expected.length) summary = `<span class="dc-status-ok">도식 일치 ✅ ${reached}/${expected.length}</span>`;
     else summary = `<span class="dc-status-err">⚠ 누락 단계 있음 (${reached}/${expected.length})</span>`;
+    if (nested && inner.length) {
+      const innerFail = inner.filter((s) => s.result === 'fail').length;
+      summary += ` <span class="te-hint">· 안쪽 DOC·APR 단계 ${inner.length}개${innerFail ? `(실패 ${innerFail} — 예: 잠긴 육안검사에서 다음 번호로)` : ''}</span>`;
+    }
     return { chips, summary };
   }
 
@@ -162,6 +199,7 @@
     document: 'document_id', doc_section: 'section_id', document_template: 'template_id', staff: 'staff_id',
     approval_request: 'request_id', approval: 'approval_id',
     document_ref: 'ref_id', deviation_action: 'deviation_id',
+    lots: 'id', production_batches: 'id', dev_lot_receipts: 'lot_id', dev_batch_plans: 'production_batch_id',
   };
   // 복합 PK 테이블 (ERD v5 A12)
   const keyOf = (name, row) => (name === 'deviation_checker' ? `${row.deviation_id}-${row.staff_id}` : row[PK[name]]);
@@ -206,8 +244,26 @@
   }
 
   function renderDb(entry) {
+    if (entry.linked) {
+      $('#dcDbTitle').textContent = '';
+      $('#dcDbBody').innerHTML = '<div class="dc-empty">작성 요구 화면에서 연 trace라 실행 전/후 스냅샷이 없습니다. 같은 호출을 콘솔 프리셋(REQ-PS-…)으로 실행하면 비교할 수 있습니다.</div>';
+      return;
+    }
     const onlyChanged = $('#dcOnlyChanged').checked;
     const { before, after, docId } = entry;
+    if (entry.scope !== undefined) {
+      if (!entry.scope) {
+        $('#dcDbTitle').textContent = '';
+        $('#dcDbBody').innerHTML = '<div class="dc-empty">새 LOT·배치가 만들어지지 않았습니다(실패 → 호출자 트랜잭션 롤백). LOT·문서·참조 모두 없음.</div>';
+        return;
+      }
+      const sb = (before && before.tables) || {};
+      const sa = (after && after.tables) || {};
+      $('#dcDbTitle').innerHTML = `${esc(entry.scope.replace('=', ' = '))} ${!before || !before.exists ? '<span class="te-hint">· 실행 전 없음</span>' : ''}`;
+      $('#dcDbBody').innerHTML = ['lots', 'dev_lot_receipts', 'production_batches', 'dev_batch_plans', 'document', 'doc_section', 'document_ref']
+        .filter((t) => t in sa || t in sb).map((t) => diffTable(t, sb[t], sa[t], onlyChanged)).join('');
+      return;
+    }
     if (!docId) {
       $('#dcDbTitle').textContent = '';
       $('#dcDbBody').innerHTML = '<div class="dc-empty">문서 단위 기능이 아니라서(목록·양식·staff) 비교할 행이 없습니다. 조회 기능은 DB를 바꾸지 않습니다.</div>';
@@ -569,6 +625,78 @@
       } },
   );
 
+  // ---------------------------------------------------------------- 프리셋 REQ-PS-01~10 (doc-requirements/s1-screens.md 6장)
+  const REQ_HINT = 'seed_dev_p4로 시드를 넣거나 작성 요구 화면에서 LOT 생성을 먼저 하세요';
+  const reqList = async (kind, q = '') => { const r = await devGet(`/api/dev/req/${kind}${q}`); return r ? r.items : []; };
+  const localDay = (offset = 0) => { const d = new Date(); d.setDate(d.getDate() + offset); return d.toLocaleDateString('sv-SE'); };
+  async function freeDay() {
+    // 그날 육안검사가 없는 날(테스트 입고가 없는 날)을 오늘-40일부터 거슬러 찾는다
+    for (let back = 40; back < 400; back += 1) {
+      const day = localDay(-back);
+      if (!(await reqList('lots', `?date=${day}`)).length) return day;
+    }
+    throw new Error('빈 날짜를 찾지 못했습니다.');
+  }
+  async function itemId(name) {
+    const items = await reqList('items');
+    const hit = items.find((i) => i.name === name) || items[0];
+    if (!hit) throw new Error(`개발 품목이 없습니다. ${REQ_HINT}.`);
+    return hit.id;
+  }
+  const lotBody = async (day, extra = {}) => ({ item_id: await itemId('유자'), material_kind: '원료', supplier_name: '콘솔농협',
+    received_date: day, quantity: 100, unit: 'kg', ...extra });
+  const d03Of = (lot) => lot.documents.find((d) => d.type_code === 'D03');
+  async function lotWhere(pred, what) {
+    const hit = (await reqList('lots')).find(pred);
+    if (!hit) throw new Error(`${what} LOT이 없습니다. ${REQ_HINT}.`);
+    return hit;
+  }
+
+  PRESETS.push(
+    { id: 'REQ-PS-01', label: '입고 정상(그날 육안검사 없음)', expect: '201 · REQ-DEV-LOT 도식 일치(안쪽 DOC-GOC ×3·FND·ARR) · lots·dev_lot_receipts +1, document +3(D01·D02·D03 새로 만듦), doc_section(info 초기값·LOT 행), document_ref +3(D03은 행 단위)',
+      prepare: async () => ({ func: 'reqLot', body: J(await lotBody(await freeDay())) }) },
+    { id: 'REQ-PS-02', label: '같은 LOT 다시 호출', expect: '200 · REQ-DEV-RE-LOT 도식 일치 · REQ-LOT-05 건너뜀(행 이미 있음), 안쪽 DOC-GOC-01a(이미 있음) · 결과 이미 있음/행 이미 있음 · dev_lot_receipts.touched_at만 변경(자기 쓰기 먼저)',
+      prepare: async () => ({ func: 'reqLotRe', id: String((await lotWhere((l) => d03Of(l), 'D03 행이 있는')).lot_id) }) },
+    { id: 'REQ-PS-03', label: '같은 날 두 번째 LOT', expect: '201 · D03 "행 추가"(그날 작성중 육안검사에) · doc_section +1, document_ref +1, 그 D03 version +1',
+      prepare: async () => {
+        const lot = await lotWhere((l) => { const d = d03Of(l); return d && ['draft', 'rejected'].includes(d.status); }, '육안검사가 작성중·반려인');
+        return { func: 'reqLot', body: J(await lotBody(lot.received_date, { supplier_name: '콘솔농협(두 번째)' })) };
+      } },
+    { id: 'REQ-PS-04', label: '그날 육안검사가 잠겨 있음', expect: '201 · 안쪽 DOC-ARR-01a 실패(DOCUMENT_LOCKED) → 다음 번호 N1·N2 · D03 결과 "…번째 문서(#2 이상)" · 새 D03(…#n) +1',
+      prepare: async () => {
+        const lot = await lotWhere((l) => { const d = d03Of(l); return d && ['completed', 'submitted', 'approved'].includes(d.status); }, '육안검사가 작성완료·결재중·승인인');
+        return { func: 'reqLot', body: J(await lotBody(lot.received_date, { supplier_name: '콘솔농협(잠긴 날)' })) };
+      } },
+    { id: 'REQ-PS-05', label: '동시에 두 LOT 입고', expect: '두 요청 모두 201 · 두 트랜잭션이 직렬 처리(첫 SQL 쓰기 잠금) · 그날 D03 1건, LOT 행 2(한쪽은 새로 만듦, 다른 쪽은 행 추가)',
+      prepare: async () => {
+        const day = await freeDay();
+        const a = { func: 'reqLot', body: J(await lotBody(day, { supplier_name: '콘솔농협(A)' })) };
+        const b = { func: 'reqLot', body: J(await lotBody(day, { supplier_name: '콘솔농협(B)' })) };
+        return { ...a, script: async (exec) => { await Promise.all([exec({ ...a, staff: api.staffId }), exec({ ...b, staff: api.staffId })]); } };
+      } },
+    { id: 'REQ-PS-06', label: '작성 요구 중 실패 → 롤백', expect: '500 SIMULATED_FAILURE · REQ-LOT 전체 통과 뒤 REQ-DEV-03 실패 → 호출자 트랜잭션 롤백 · LOT·입고 기록·문서·참조 모두 없음',
+      prepare: async () => ({ func: 'reqLot', body: J(await lotBody(await freeDay(), { fail_after: true })) }) },
+    { id: 'REQ-PS-07', label: '생산 시작(제조)', expect: '201 · REQ-DEV-BAT 도식 일치(REQ-BAT-03 ×3) · production_batches·dev_batch_plans +1, document +3(CCP-1P·2B·3P), document_ref(배치 + 공정) +3',
+      prepare: async () => ({ func: 'reqBatch', body: J({ item_id: await itemId('유자차'), process_type: 'MANUFACTURE', manufactured_date: localDay(0), quantity_kg: 900 }) }) },
+    { id: 'REQ-PS-08', label: '같은 배치 다시 호출 / 포장 배치', expect: '① 200 · 이미 있음 ×3, touched_at만 변경 ② 201 · REQ-BAT-03 건너뜀(공정 없음) · 문서 0',
+      prepare: async () => {
+        const batch = (await reqList('batches')).find((b) => b.process_type === 'MANUFACTURE' && b.status !== 'CANCELLED' && b.documents.length);
+        if (!batch) throw new Error(`CCP 문서가 있는 제조 배치가 없습니다. ${REQ_HINT}.`);
+        const re = { func: 'reqBatchRe', id: String(batch.production_batch_id) };
+        const pack = { func: 'reqBatch', body: J({ item_id: await itemId('파우치'), process_type: 'PACKAGING', manufactured_date: localDay(0), quantity_kg: 50 }) };
+        return { ...re, script: async (exec) => { await exec({ ...re, staff: api.staffId }); await exec({ ...pack, staff: api.staffId }); } };
+      } },
+    { id: 'REQ-PS-09', label: '없는 LOT id로 조회', expect: '404 LOT_NOT_FOUND · REQ-FND-01(입고 뷰 읽기)에서 실패 · DB 변화 없음',
+      prepare: async () => ({ func: 'lotDocs', id: '99999' }) },
+    { id: 'REQ-PS-10', label: 'LOT별 연결 문서', expect: '200 · REQ-FND 4단계(안쪽 DOC-FND-01, APR-LAT-01) · SQL 4개 · D03 행은 승인본 기준 판정(작성중 값 안 씀) · DB 변화 없음',
+      prepare: async () => {
+        const lot = await lotWhere((l) => { const d = d03Of(l); return d && d.status === 'approved'; }, '육안검사가 승인된')
+          .catch(() => lotWhere(() => true, '테스트 입고'));
+        return { func: 'lotDocs', id: String(lot.lot_id) };
+      } },
+  );
+
+
   async function loadPreset() {
     const p = PRESETS.find((x) => x.id === $('#dcPreset').value);
     if (!p) { state.preset = null; $('#dcPresetDesc').textContent = '기능을 고르고 실행하세요. 프리셋을 불러오면 입력이 채워집니다.'; return; }
@@ -591,6 +719,29 @@
     }
   }
 
+  // ---------------------------------------------------------------- 작성 요구 화면에서 연 trace (?trace=<id>, REQ-SC-04)
+  function guessFlow(trace) {
+    const path = (trace.path || '').split('?')[0];
+    if (/\/api\/dev\/req\/lots\/\d+\/require$/.test(path)) return 'REQ-DEV-RE-LOT';
+    if (/\/api\/dev\/req\/batches\/\d+\/require$/.test(path)) return 'REQ-DEV-RE-BAT';
+    if (path.endsWith('/api/dev/req/lots')) return 'REQ-DEV-LOT';
+    if (path.endsWith('/api/dev/req/batches')) return 'REQ-DEV-BAT';
+    if (/\/api\/v1\/lots\/\d+\/documents$/.test(path)) return 'REQ-FND';
+    if (/\/api\/v1\/batches\/\d+\/documents$/.test(path)) return 'REQ-FND-B';
+    return '';
+  }
+
+  async function openTrace(id) {
+    const trace = await devGet(`/api/dev/traces/${encodeURIComponent(id)}`);
+    if (!trace) { $('#dcPresetDesc').textContent = `trace ${id}가 없거나 만료되었습니다(서버 메모리에 최근 200건만 보관).`; return; }
+    const record = { at: new Date(), ok: trace.status < 400, status: trace.status, statusText: '', ms: '-', traceId: id, data: null,
+      request: { method: trace.method, url: trace.path, headers: {}, body: null } };
+    const entry = { spec: {}, fn: { flow: guessFlow(trace) }, record, trace, linked: true, preset: null };
+    state.history.push(entry);
+    $('#dcPresetDesc').innerHTML = '작성 요구 화면에서 연 호출입니다(<b>③ 처리 로직</b>). 요청·응답 본문과 ④ DB 비교는 콘솔에서 직접 실행한 호출에만 있습니다.';
+    show(entry);
+  }
+
   // ---------------------------------------------------------------- 초기화
   function toggleInputs() {
     const uses = FUNCS[$('#dcFunc').value].uses;
@@ -608,7 +759,7 @@
     $('#dcStaff').addEventListener('change', (e) => api.setStaff(e.target.value));
     $('#dcFunc').innerHTML = Object.entries(FUNCS).map(([k, f]) => `<option value="${k}">${esc(f.label)}</option>`).join('');
     const group = (unit, label) => `<optgroup label="${label}">${PRESETS.filter((p) => (p.unit || p.id.split('-')[0]) === unit).map((p) => `<option value="${p.id}">${p.id} ${esc(p.label)}</option>`).join('')}</optgroup>`;
-    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4)');
+    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4)') + group('REQ', 'REQ 작성 요구 (P5)');
     $('#dcFunc').addEventListener('change', () => { state.preset = null; toggleInputs(); });
     ['#dcId', '#dcQuery', '#dcBody', '#dcDocId'].forEach((sel) => $(sel).addEventListener('input', () => { if (state.preset && state.preset.script) state.preset = null; }));
     $('#dcLoadPreset').addEventListener('click', loadPreset);
@@ -618,6 +769,8 @@
     state.flows = flows ? flows.flows : {};
     toggleInputs();
     renderHistory();
+    const traceParam = new URLSearchParams(location.search).get('trace');
+    if (traceParam) { openTrace(traceParam); return; }
     const docId = new URLSearchParams(location.search).get('document_id');
     if (docId) {
       $('#dcFunc').value = 'get';

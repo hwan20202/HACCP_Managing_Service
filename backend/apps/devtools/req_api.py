@@ -224,7 +224,7 @@ def _finish(fail_after, payload, status):
         with step("REQ-DEV-03", "API", "실패 흉내(롤백 확인)"):
             raise req_errors.SimulatedFailure()
     with step("REQ-DEV-04", "API", "결과"):
-        return json_response(payload, status=status)
+        return json_response(payload() if callable(payload) else payload, status=status)
 
 
 @csrf_exempt
@@ -257,7 +257,7 @@ def lot_collection(request):
             )
         result = req.require_for_lot(actor, lot_id)
         return _finish(
-            data["fail_after"], {"lot": sources.incoming_lot(lot_id), "result": result}, 201
+            data["fail_after"], lambda: {"lot": sources.incoming_lot(lot_id), "result": result}, 201
         )
 
 
@@ -285,7 +285,7 @@ def batch_collection(request):
             )
         result = req.require_for_batch(actor, batch_id)
         return _finish(
-            data["fail_after"], {"batch": sources.batch(batch_id), "result": result}, 201
+            data["fail_after"], lambda: {"batch": sources.batch(batch_id), "result": result}, 201
         )
 
 

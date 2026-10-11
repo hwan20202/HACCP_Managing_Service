@@ -192,6 +192,16 @@
           <span>결재함</span>
           <span class="nav-badge te-nav-badge">임시</span>
         </a>
+        {% if req_test_enabled %}
+        <a href="#" class="nav-item" data-page="temp-req" id="nav-temp-req">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+            <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+          </svg>
+          <span>작성 요구</span>
+          <span class="nav-badge te-nav-badge">임시</span>
+        </a>
+        {% endif %}
         {% if dev_console_enabled %}
         <a href="{% url 'dev-console' %}" class="nav-item" target="_blank" rel="noopener" id="nav-dev-console">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -275,6 +285,7 @@
   <script src="{% static 'temp-entry/core.js' %}"></script>
   <script src="{% static 'temp-entry/document/document.js' %}"></script>
   <script src="{% static 'temp-entry/approval/approval.js' %}"></script>
+  <script src="{% static 'temp-entry/requirement/requirement.js' %}"></script>
   {% endif %}
   <script src="{% static 'prototype/js/app.js' %}"></script>
 </body>

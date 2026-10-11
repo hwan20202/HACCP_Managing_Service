@@ -211,3 +211,20 @@ class DevListApiTests(ReqTestCase):
     def test_tc043_not_routed_without_console(self):
         self.assertEqual(self.client.get("/api/dev/req/lots").status_code, 404)
         self.assertEqual(self.post("/api/dev/req/lots", LOT_BODY).status_code, 404)
+
+
+@DEV
+class DevSnapshotTests(ReqTestCase):
+    """P5 S5: 개발 콘솔 ④ 패널용 LOT·배치 단위 스냅샷."""
+
+    def test_scope_snapshot(self):
+        self.post("/api/dev/req/lots/88/require")
+        data = self.client.get("/api/dev/snapshot?lot_id=88").json()
+        self.assertEqual((data["scope"], data["exists"]), ({"lot": 88}, True))
+        self.assertEqual(len(data["tables"]["document"]), 3)
+        self.assertEqual([r["lot_id"] for r in data["tables"]["dev_lot_receipts"]], [88])
+        self.assertEqual(data["tables"]["lots"][0]["lot_number"], "RM-1011-01")
+        data = self.client.get("/api/dev/snapshot?batch_id=12").json()
+        self.assertEqual((data["exists"], data["tables"]["document"]), (True, []))
+        self.assertFalse(self.client.get("/api/dev/snapshot?lot_id=999").json()["exists"])
+        self.assertEqual(self.client.get("/api/dev/snapshot?lot_id=x").status_code, 400)

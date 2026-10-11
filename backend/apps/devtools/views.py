@@ -37,8 +37,58 @@ def _json(data, status=200):
     return JsonResponse(data, status=status, json_dumps_params={"ensure_ascii": False})
 
 
+def _sql_rows(sql, params):
+    from django.db import connection
+
+    with connection.cursor() as cursor:
+        cursor.execute(sql, params)
+        names = [c[0] for c in cursor.description]
+        return [dict(zip(names, row)) for row in cursor.fetchall()]
+
+
+def _scope_snapshot(kind, target_id):
+    """P5 작성 요구 ④ 패널: LOT·배치 하나에 걸린 행. 수불 임시 테이블은 devstock이 있을 때만."""
+    from django.apps import apps as django_apps
+
+    column = "lot_id" if kind == "lot" else "production_batch_id"
+    refs_of_target = DocumentRef.objects.filter(**{column: target_id})
+    doc_ids = sorted(set(refs_of_target.values_list("document_id", flat=True)))
+    tables = {
+        "document": _rows(Document.objects.filter(pk__in=doc_ids).order_by("document_id")),
+        "doc_section": _rows(
+            DocSection.objects.filter(document_id__in=doc_ids).order_by("section_id")
+        ),
+        "document_ref": _rows(
+            DocumentRef.objects.filter(document_id__in=doc_ids).order_by("ref_id")
+        ),
+    }
+    exists = False
+    if django_apps.is_installed("apps.devstock"):
+        if kind == "lot":
+            tables["lots"] = _sql_rows("SELECT * FROM lots WHERE id = %s", [target_id])
+            tables["dev_lot_receipts"] = _sql_rows(
+                "SELECT * FROM dev_lot_receipts WHERE lot_id = %s", [target_id]
+            )
+            exists = bool(tables["lots"])
+        else:
+            tables["production_batches"] = _sql_rows(
+                "SELECT * FROM production_batches WHERE id = %s", [target_id]
+            )
+            tables["dev_batch_plans"] = _sql_rows(
+                "SELECT * FROM dev_batch_plans WHERE production_batch_id = %s", [target_id]
+            )
+            exists = bool(tables["production_batches"])
+    return _json({"scope": {kind: target_id}, "exists": exists, "tables": tables})
+
+
 @require_safe
 def snapshot(request):
+    for kind, key in (("lot", "lot_id"), ("batch", "batch_id")):
+        if key in request.GET:
+            value = request.GET[key]
+            if not value.isdigit():
+                return _json({"code": "INVALID_REQUEST", "message": f"{key}는 숫자입니다."}, 400)
+            return _scope_snapshot(kind, int(value))
     raw = request.GET.get("document_id", "")
     if not raw.isdigit():
         return _json({"code": "INVALID_REQUEST", "message": "document_id가 필요합니다."}, 400)

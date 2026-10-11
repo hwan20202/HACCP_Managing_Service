@@ -74,6 +74,22 @@
     else if (!docLevel.length) parts.push('LOT 0건');
     return parts.join(' / ');
   }
+  // 문서 상세용: 같은 문구에 LOT마다 "LOT별 연결 문서"(REQ-SC-05) 링크(REQ-S1-Q4)
+  function targetHtml(d) {
+    const refs = d.refs || [];
+    if (!d.record_key || !refs.length) return esc(d.subject || '-');
+    const lotLink = (r) => `<a href="#" class="te-lot-link" data-lot="${r.lot_id}" title="이 LOT의 연결 문서">${esc(r.label || r.lot_id)}</a>`;
+    const docLevel = refs.filter((r) => r.section_id === null);
+    const parts = docLevel.map((r) => {
+      if (r.production_batch_id !== null) return esc(`배치 ${r.label || r.production_batch_id}${r.process_code ? ` · ${r.process_code}` : ''}`);
+      if (r.lot_id !== null) return `LOT ${lotLink(r)}`;
+      return esc(r.label || r.process_code || '-');
+    });
+    const rowLots = refs.filter((r) => r.section_id !== null && r.lot_id !== null);
+    if (rowLots.length) parts.push(`LOT ${rowLots.length}건 (${rowLots.map(lotLink).join(', ')})`);
+    else if (!docLevel.length) parts.push('LOT 0건');
+    return parts.join(' / ');
+  }
   // 측정일시(datetime) 행이 있는 양식의 기간: 작업일 ~ 마지막 측정일(D-051 F11, 저장 컬럼 없음)
   function periodText(schema, d) {
     const dates = [];
@@ -735,7 +751,7 @@
             </div>
             ${notes[d.status] ? `<div class="te-status-note">${notes[d.status]}</div>` : ''}
             <div class="te-meta">
-              <span>대상 <b id="teTarget">${esc(targetText(d))}</b></span><span>작업일 <b>${d.work_date}</b></span>
+              <span>대상 <b id="teTarget">${targetHtml(d)}</b></span><span>작업일 <b>${d.work_date}</b></span>
               <span>작성자 <b>staff ${d.created_by}</b></span><span>담당자 <b>${d.assignee_id ? `staff ${d.assignee_id}` : '-'}</b></span>${inspector}
               <span>마감 <b>${T.fmtDateTime(d.due_at)}</b></span>${periodText(schema, d)}
             </div>
@@ -758,6 +774,10 @@
       $('#btnDelete')?.addEventListener('click', () => this.confirmDelete(d));
       $('#btnComplete')?.addEventListener('click', () => this.confirmComplete(d, schema));
       $('#btnReopen')?.addEventListener('click', () => this.reopen(d));
+      this.root.querySelectorAll('#teTarget [data-lot]').forEach((a) => a.addEventListener('click', (e) => {
+        e.preventDefault();
+        T.open('temp-lot-docs', { lotId: Number(a.dataset.lot), back: { page: 'temp-doc', documentId: d.document_id } });
+      }));
       this.root.querySelectorAll('[data-dev-for]').forEach((b) => b.addEventListener('click', () => {
         this.devDrafts.push({ section_id: Number(b.dataset.devFor), description: b.dataset.devText });
         this.renderDeviations(d, schema);

@@ -102,3 +102,24 @@
 .te-checkers .te-check { gap: 0.15rem; }
 .te-dev-add { margin-top: 0.3rem; }
 .te-btn-complete { background: var(--color-success); border-color: var(--color-success); }
+
+/* P5 작성 요구 (temp-entry/requirement/requirement.js) */
+.te-req-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; margin-bottom: 1rem; }
+.te-req-day { margin-left: auto; display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.82rem; color: var(--text-secondary); }
+.te-req-day .form-control { width: auto; }
+.te-sub { font-size: 0.92rem; font-weight: 700; margin: 1.1rem 0 0.5rem; }
+.te-empty { padding: 0.9rem; border: 1px dashed var(--border-strong); border-radius: var(--radius-md); color: var(--text-muted); font-size: 0.85rem; }
+.te-req-result { margin-top: 1.5rem; border-top: 2px solid var(--border-default); padding-top: 1rem; }
+.te-req-result-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.75rem; margin-bottom: 0.6rem; font-size: 0.88rem; }
+.te-req-res-created, .te-req-res-row_added { color: var(--color-success); font-weight: 600; }
+.te-req-res-existing, .te-req-res-row_existing { color: var(--text-secondary); }
+.te-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem 1rem; }
+.te-field label { display: block; font-size: 0.78rem; color: var(--text-secondary); margin-bottom: 0.25rem; }
+.te-field .te-radio { display: flex; gap: 1rem; font-size: 0.85rem; padding-top: 0.35rem; }
+.te-field .te-radio label { display: inline-flex; gap: 0.3rem; align-items: center; color: var(--text-primary); margin: 0; }
+.te-inline { display: flex; gap: 0.4rem; }
+.te-field-error { color: var(--color-danger); font-size: 0.75rem; margin-top: 0.2rem; }
+.te-form-error { color: var(--color-danger); font-size: 0.82rem; margin-top: 0.6rem; min-height: 1em; }
+.form-control.is-invalid { border-color: var(--color-danger); }
+.te-fail-after { margin-top: 0.9rem; }
+.te-lot-link { color: var(--brand-primary); text-decoration: underline; }

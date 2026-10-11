@@ -22,6 +22,10 @@ def home(request):
     context = {
         "temp_entry_enabled": settings.HACCP_TEMP_ENTRY,
         "dev_console_enabled": settings.DEBUG and settings.HACCP_DEV_CONSOLE,
+        # P5 REQ-SC-01 작성 요구 테스트 화면: 개발 콘솔 + devstock이 있을 때만(REQ-S1-Q1)
+        "req_test_enabled": settings.DEBUG
+        and settings.HACCP_DEV_CONSOLE
+        and apps.is_installed("apps.devstock"),
     }
     return render(request, "index.html", context)
 

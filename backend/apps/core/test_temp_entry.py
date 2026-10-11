@@ -43,6 +43,11 @@ class TempEntryTabTests(SimpleTestCase):
             response = self.client.get("/")
         self.assertContains(response, 'id="nav-dev-console"')
         self.assertContains(response, 'devConsole: true, devConsoleUrl: "/dev/"')
+        # P5 REQ-SC-01: 개발 콘솔 + devstock(테스트 설정에 설치됨)일 때만 "작성 요구 [임시]"
+        self.assertContains(response, 'id="nav-temp-req"')
+        with override_settings(HACCP_TEMP_ENTRY=True, DEBUG=False, HACCP_DEV_CONSOLE=False):
+            self.assertNotContains(self.client.get("/"), 'id="nav-temp-req"')
+        self.assertContains(response, "temp-entry/requirement/requirement.js")
 
     def test_temp_entry_scripts_load_before_app_js(self):
         with override_settings(HACCP_TEMP_ENTRY=True):
