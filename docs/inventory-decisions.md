@@ -6,9 +6,15 @@
 
 | 항목 | 내용 | 근거 |
 |---|---|---|
-| 프로젝트 구조 | 한 Django 프로젝트·한 SQLite DB. 생산 코어 테이블은 `sql/0001_core.sql` 이 만들고 모델은 `managed=False` | 질의 1 |
-| 공통 모델 소유 | `staff`, `lots` 등은 inventory 앱 소유. 문서 앱은 `("inventory", "0001_initial")` 에 의존하고 `inventory.Staff`, `inventory.Lot` 로 FK | 질의 1 |
-| HOLD 근거 문서 | `lot_holds.source_document_id` 는 문서 **기록** PK (버전 아님). FK 는 ERD 확정 후 | 질의 2 |
+| 프로젝트 구조 | 한 Django 프로젝트·한 SQLite DB. 테이블은 `sql/0001_core.sql`·`sql/0002_production.sql` 이 만들고 모델은 `managed=False` | 질의 1 |
+| 공통 모델 소유 | `staff`, `lots`, `items`, `production_batches` 는 inventory 앱 소유. 문서 앱은 `("inventory", "0002_production")` 에 의존하고 `inventory.Staff`·`Lot`·`Item`·`ProductionBatch` 로 FK. 문서 쪽 임시 `staff` 는 수불 스키마로 옮길 예정 (문서는 staff id 만 사용) | 질의 1, 10/11 ERD |
+| HOLD 근거 문서 | `lot_holds.source_document_id` = 문서 `document.document_id` (버전·스냅샷 아님). 마이그레이션 순환을 피해 FK 미설정. 최신 내용·승인본은 문서 쪽 메소드로 조회 | 질의 2, 10/11 ERD |
+| 개선조치 | 문서 영역 내부(`deviation_action`)에서만 관리. 수불은 문서 참조까지만 → `lot_holds.deviation_action_id` 삭제 | 10/11 ERD |
+| 문서 ↔ 업무 대상 | 문서 쪽 `document_ref` 테이블이 `lot_id`·`production_batch_id`·`item_id` 를 종류별 FK 로 가짐 (`subject_type`/`subject_id` 방식 폐기) | 10/11 ERD |
+| LOT 번호 유일성 | `lots.lot_number` 전체 UNIQUE (이전: 품목 안에서만). 채번 규칙에 품목코드가 들어가 실제 데이터와 같고, LOT 번호만으로 찾을 수 있어야 함 (라벨·회수). 기초재고 이관 시 품목 간 중복 번호는 품목코드를 붙여 구분 | 10/12 |
+| LOT 상태 | 품질 판정만: QUARANTINE / AVAILABLE / REJECTED. 소진·폐기(CONSUMED / DISPOSED) 삭제 — 재고 유무는 `inventory`, 비운 경위는 수불 이동이 나타냄 | 10/12 |
+| 문서용 뷰 형식 | 이름·행 범위는 문서 쪽 요청에 맞추고 수량·단위·코드는 수불 규칙 유지. `v_doc_incoming_lot` 은 모든 LOT (입고 정보는 LEFT JOIN, `lot_kind`·`item_id`·`item_type_name`·`origin_country` 추가). `v_doc_batch` 는 `production_batch_id`·`status` 로 이름 변경, 수량은 `output_quantity_e6` + `base_unit` (kg 아님) | 10/12 |
+| `domain_event_inbox` | 삭제 (문서 이벤트를 받지 않음). `audit_logs.source_event_id` 도 삭제, `staff_id` 필수 | 10/11 ERD |
 | 육안검사 판정 | PASS / FAIL 두 가지. CONDITIONAL 은 이번 범위 제외 | 질의 3 |
 | 로그인 | MVP 범위 아님. 처리자는 요청 본문의 `staff_id` 로 받음 | 팀 결정 |
 | 입고 LOT 번호 | `{item_code}-{received:yyMMdd}{seq:A}`, 같은 품목·날짜 안에서 A→Z→AA→AB… | 팀 결정 |
@@ -30,7 +36,8 @@
 | 문서 연동 방식 | 앱 간 직접 함수 호출, 식별자만 전달하고 문서 쪽이 조회. 입고 문서는 `lot_id` 로 `v_doc_incoming_lot`, 원료수불대장(D04)은 `ledger.stock_ledger()` (이월·입출고·누적·기말 계산 포함) | 질의 5 |
 | `domain_event` | 문서 앱의 외부 알림 API 용 Outbox. 앱 간 데이터 전달 용도 아님. 수불은 쓰지 않음 | 질의 5 |
 | 승인본 보존 | 문서 쪽이 결재 시점 스냅샷 보존. 수불은 변경 감지 조회(`stock_ledger_changes_since`) 제공 | 질의 5 |
-| 판정 반영 시점 | 육안검사 작성완료 시 문서 앱이 `judgment.apply_incoming_judgment()` 호출. 결재 승인·반려는 LOT 상태 무관 | 질의 3 |
+| 판정 반영 시점 | 입고 화면에서 판정을 함께 보내면 입고 트랜잭션 안에서 바로 반영 (커밋 시 AVAILABLE / REJECTED). 미확정이면 QUARANTINE 으로 저장하고, 육안검사일지 작성완료 시 문서 앱이 `judgment.apply_incoming_judgment()` 호출. 결재 승인·반려는 LOT 상태 무관 | 질의 3, 10/10 협의 |
+| FAIL 입고 | 입고는 등록하고 LOT 를 REJECTED 로 둔 뒤 전량 반품을 수불로 기록 (PM 확인 대기) | 10/10 협의 |
 
 ## 가정 (기본값으로 구현, 확정 시 수정)
 
@@ -39,11 +46,9 @@
 | 입고 가능 품목 유형 | 원료(RAW)·포장재(PACKAGING) | `receiving.RECEIVABLE_ITEM_TYPES` |
 | 지난 날짜 입고 | 그날 00:00:00 으로 기록 (그날 다른 이동보다 앞에 오도록) | `receiving._occurred_at` |
 | 입고 취소 | 입고 후 사용·조정이 없을 때만. 전량 CORRECTION_OUT, LOT 상태는 그대로 | `receiving.cancel_receipt` |
-| 입고 직후 LOT 상태 | QUARANTINE, 판정 반영 시 PASS → AVAILABLE / FAIL → REJECTED. 통합 입고가 붙으면 같은 트랜잭션에서 바로 반영 | `judgment.STATUS_FOR` |
-| FAIL 입고 처리 | 입고는 등록하고 LOT 를 REJECTED 로 둔 뒤 전량 반품을 수불로 기록 (`return_to_supplier`, 전량 → DISPOSED). 판정 함수는 상태만 바꾸고 반품은 별도 호출 | `judgment.py` |
+| FAIL 입고 처리 | 판정 함수는 상태(REJECTED)만 바꾸고, 반품은 `return_to_supplier` 별도 호출 (상태는 REJECTED 유지) | `judgment.py` |
 | 판정 변경 | 같은 판정 재전송은 무시. 바꾸려면 사유 필수. PASS → FAIL 은 RECEIPT 외 이동이 없을 때만, FAIL → PASS 는 반품·폐기 전만 | `judgment.apply_incoming_judgment` |
 | 변경 감지 조건 | 승인 시각 이후(같은 초 포함) 등록, 발생 일시가 기간 종료일 이전. 기간 전이면 이월 영향(OPENING), 기간 안이면 PERIOD. LOT·품목 정보 변경은 미포함 | `ledger.stock_ledger_changes_since` |
-| 반품·폐기 후 LOT 상태 | 재고가 0 이 되면 DISPOSED. 일부만이면 상태 유지. 정정으로 재고가 되살아나면 직전 상태로 복구 | `movements._outflow_or_adjust`, `correct_movement` |
 | 정정 대상 | 입고(RECEIPT)는 정정 대신 입고 취소. 정정 기록 자체는 다시 정정 불가 | `movements.NOT_CORRECTABLE` |
 | 정정 일시 | 원 기록과 같은 일시 (수불대장에서 그 시점부터 바로잡힘) | `movements.correct_movement` |
 | 소급 출고 | 그 시점 이후 잔량이 한 번이라도 음수가 되면 거부 | `movements._check_outflow` |
@@ -56,13 +61,14 @@
 | 항목 | 기다리는 것 | 현재 상태 |
 |---|---|---|
 | 문서 쪽 훅 내용 | 문서 앱 함수 제공 | `document_bridge.incoming_received(lot_id)`, `incoming_receipt_cancelled(lot_id, reason, staff_id)` — 지금은 아무것도 안 함 |
-| 통합 입고 (육안검사 동시 저장) | 문서 쪽 `get_incoming_inspection_form()`, `create_incoming_inspection(...)` 형식 합의 | 미착수 |
-| `lot_holds` 문서 FK, HOLD 서비스 | 10/11 ERD, CCP 개발 시점 | 테이블만 있음 |
+| 통합 입고 (육안검사 동시 저장) | 문서 쪽 `get_incoming_inspection_form()`, `create_incoming_inspection(...)` 형식 합의 | 판정 동시 반영(`ReceiptInput.judgment`)은 완료. 체크리스트 저장은 문서 함수 대기 |
+| 배치 HOLD·HOLD 서비스 | 배치 HOLD 위치와 산출 LOT 전파 방식 (A1 안: HOLD 테이블 하나로 LOT·배치 공용) | `lot_holds` 테이블만 있음. 정해지면 새 마이그레이션에서 재정의 (사용처 없음) |
+| 결재 후 과거 수불 정정 | 승인된 달의 소급 수불을 막고 정정 이동으로만 받을지 (기간 잠금 안), 문서 쪽 "월별 D04 승인 여부" 함수 필요 | 미정 (10/11 ERD Q5-3) |
 | 수불대장 결재·스냅샷 | 문서 쪽 담당 | 조회·CSV 만 제공 |
-| BOM·제조배치·투입·CCP | 다음 마이그레이션 | 미착수 |
+| BOM·제조배치·투입 서비스, CCP | 생산 서비스 개발 | 스키마 0002 확정·마이그레이션 연결 완료, 서비스 미착수 |
 | 화면 | 기존 시제품 활용 여부 | API 까지 완료 |
 | LOT 번호 형식 | 세 안 중 결정. ① 현재 기본값 `{item_code}-yyMMdd{A}` ② BOM v4(멘토안): 원료 `약어+입고일`, 완제품 `제조일+근무조(A 주간/B 야간/C 오후)` ③ 실제 생산일지: `yyyyMMdd-NNN` | 규칙은 `lot_number_rules` 데이터. ②는 `{short_code}`·`{shift}` 토큰 추가 필요, ③은 현재 토큰으로 가능 |
-| 같은 날 같은 품목 두 번 | 입고·생산 모두 구분 방법(순번 `-1`/`-2`, 근무조 등). `UNIQUE(item_id, lot_number)` 라 구분자가 없으면 두 번째 등록이 거부됨 | 현재는 `{seq}` 로 항상 구분 |
+| 같은 날 같은 품목 두 번 | 입고·생산 모두 구분 방법(순번 `-1`/`-2`, 근무조 등). `lot_number` 전체 UNIQUE 라 구분자가 없으면 두 번째 등록이 거부됨 (품목코드 없는 형식 ③ 이면 품목 간에도 순번 공유) | 현재는 `{seq}` 로 항상 구분 |
 | 품목코드 재정리 | 7자리, 맨 앞 1 원료·2 포장재·3 반제품·4 완제품. 기존 4코드 중 반제품은 3코드로, 완제품 4코드 새로 받음 | 코드는 TEXT 로 저장만 함. 유형은 `item_type` 열이 결정(코드 앞자리와 무관) |
 | 반제품·완제품 겸용 | 같은 배치를 3코드(투입용)·4코드(판매용)로 나눌 때 LOT 연결 방법 | 0002 `production_outputs` 1:N 으로 한 배치에서 두 품목 산출 가능 — 확정 필요 |
 | 원료수불대장 출력 | 기존 양식(`data/reference/slack-2026-10/원료수불대장.xlsx`): 원료별 시트, 입고일·입고처·입고(kg)·출고일자·출고(kg)·재고(kg)·투입 제품명·비고·육안 | `stock_ledger()` 로 계산 가능. 투입 제품명은 0002 생산 투입 연결 후, 양식 맞춘 출력은 화면 작업 때 |
@@ -77,7 +83,7 @@
 | `item-types/`, `movement-types/` | GET | 코드 목록 |
 | `staff/`, `suppliers/`, `items/` | GET, POST | 목록(`active`, `q`, `item_type`) / 등록 |
 | `staff/<id>/`, `suppliers/<id>/`, `items/<id>/` | GET, PATCH | 조회 / 수정 (코드 변경 불가) |
-| `receipts/` | GET, POST | 입고 목록(`from`, `to`, `supplier_id`, `item_id`, `status`, `limit`, `offset`) / 입고 등록 |
+| `receipts/` | GET, POST | 입고 목록(`from`, `to`, `supplier_id`, `item_id`, `status`, `limit`, `offset`) / 입고 등록 (`judgment`: PASS / FAIL, 생략 시 검사대기) |
 | `receipts/<id>/`, `receipts/<id>/cancel/` | GET / POST | 입고 상세 / 입고 취소 |
 | `lots/<id>/` | GET | LOT 상세 + 수불 이력 |
 | `lots/<id>/judgment/` | POST | 입고 육안검사 판정 반영 (`result`: PASS / FAIL, 변경 시 `reason`) |

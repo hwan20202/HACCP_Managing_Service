@@ -1,10 +1,12 @@
 /* =========================================================
    HACCP 생산·수불 코어 — 마이그레이션 001 (SQLite 3.37+)
-   범위: 이번 주 개발 (원료 입고 · 입고 판정 반영 · 원료수불대장)
+   범위: 기준정보 · LOT · 재고/수불 · 원료 입고 · 입고 판정 반영 · 원료수불대장
+   상태: 10/11 ERD 협의 반영 확정본 (main merge 전까지만 이 파일 수정, 이후는 새 마이그레이션)
    설계 원본: haccp_production_v4.sql (MySQL 문법 설계본). 운영 기준은 이 파일
 
-   [이 파일에 없는 것 — 다음 마이그레이션]
-   BOM, 생산지시, 자재 투입, 설비·CCP, 수율·추적 뷰
+   [이 파일에 없는 것]
+   BOM·제조배치·투입·산출·추적 뷰 → 0002_production.sql
+   설비·CCP, 배치 HOLD → 이후 마이그레이션
 
    [SQLite 운영 규칙]
    S1. 연결할 때마다  PRAGMA foreign_keys = ON;  (연결 단위 설정. 안 하면 FK 무시됨)
@@ -27,29 +29,27 @@
    I4. LOT 이 있는 품목의 item_type 변경 금지   → 트리거
    I5. 미해제 HOLD 가 있는 LOT 은 사용 불가     → v_lot_availability (앱이 확인)
 
-   [문서 도메인 접점 — 문서 기준으로 합의]
-   C1. 이벤트 저장: 문서 도메인의 domain_event 테이블 (문서 마이그레이션이 생성)
-         생산 이벤트는 document_id = NULL, 상세는 payload_json
-         payload_json 공통: {"event_version":1,"subject_type":"LOT","subject_id":"<lots.id>", ...}
-         생산 쪽은 domain_event.processed_at 을 건드리지 않는다 (문서 처리기 전용)
-         생산 쪽 수신 처리 기록은 domain_event_inbox
-   C2. subject_type = 문서 기준 값 (LOT / CCP_POINT / DATE)
-         입고 육안검사·증빙  LOT  subject_id = 입고 LOT id
-         → 입고 건 1 = LOT 1 (incoming_receipts.lot_id UNIQUE). P1 은 "입고일 기준"으로 진행
-   C3. 이번 주 이벤트
-         INCOMING_RECEIVED (생산 → 문서)  입고 등록 트랜잭션 안에서 domain_event INSERT
-           payload: event_version, subject_type, subject_id, lot_id, lot_number, item_code, item_name,
-                    item_type, supplier_name, supplier_lot_number, received_date,
-                    quantity_e6, unit, manufactured_date, expiration_date
-         INCOMING_RECEIPT_CANCELLED (생산 → 문서)  입고 취소 시
-           payload: event_version, subject_type, subject_id, lot_id, reason
-         INCOMING_JUDGED (문서 → 생산)  육안검사 제출 시 [합의 필요: 제출 시점]
-           payload: event_version, subject_type, subject_id, document_id, result(PASS/FAIL/CONDITIONAL),
-                    judged_by, judged_at, action_id(nullable), reason
-           생산 처리: PASS → AVAILABLE / FAIL → REJECTED / CONDITIONAL → AVAILABLE + lot_holds
-   C4. 문서 쪽 읽기 창구: v_doc_incoming_lot (입고 문서 자동 채움)
-       원료수불대장은 생산 쪽 조회·출력 화면 (v_stock_ledger). 결재가 필요해지면 문서가 이 뷰를 스냅샷
-   C5. staff 는 생산 쪽이 소유. 문서 쪽 assignee_id / recorded_by / approver_id 가 참조
+   [LOT 상태 — 품질 판정만 나타낸다]
+   QUARANTINE 판정 대기 / AVAILABLE 적합 / REJECTED 부적합
+   재고가 남았는지는 inventory.quantity_e6, 어떻게 비었는지(투입·반품·폐기)는 stock_movements 가 나타낸다.
+   (소진·폐기 상태를 따로 두지 않는다 — 정정으로 재고가 되살아날 때 상태를 되돌릴 필요가 없도록)
+
+   [문서 도메인 접점 — 10/11 ERD 협의]
+   C1. 연동은 앱 간 직접 함수 호출. 식별자만 넘기고 상대가 조회한다. 이벤트 테이블을 주고받지 않는다
+       (문서 쪽 domain_event 는 외부 알림용 Outbox, 생산 쪽은 쓰지 않음)
+   C2. 문서 ↔ 업무 대상 연결은 문서 쪽 document_ref 테이블이 종류별 FK 로 가진다
+         lot_id → lots.id   production_batch_id → production_batches.id (0002)   item_id → items.id
+       LOT 은 lots.id 로 식별. lot_number 도 전체에서 UNIQUE
+   C3. 입고 육안검사 판정: PASS / FAIL 두 가지
+         입고 등록 시 판정이 있으면 같은 트랜잭션에서 PASS → AVAILABLE / FAIL → REJECTED
+         판정 미확정이면 QUARANTINE 으로 저장, 확정(육안검사일지 작성완료) 시 문서 앱이 judgment.apply_incoming_judgment() 호출
+         결재 승인·반려는 LOT 상태와 무관. 판정 변경은 사유 필수, 입고 외 수불이 생긴 LOT 은 변경 불가
+         FAIL 은 입고 등록 → REJECTED → 공급처 반품(RETURN_TO_SUPPLIER) 으로 수불에 남긴다
+   C4. 문서 쪽 읽기 창구: v_doc_incoming_lot (lot_id 로 조회. 입고·생산 LOT 모두)
+       원료수불대장(D04) 은 ledger.stock_ledger() 함수 호출
+   C5. staff 는 생산 쪽 소유. 문서 쪽은 staff.id 만 참조
+   C6. lot_holds.source_document_id = 문서 document.document_id. 마이그레이션 순환을 피해 FK 는 걸지 않는다
+       개선조치는 문서 영역 안에서만 관리 (수불은 문서 참조까지만)
 
    [Django 적용 메모]
    - 이 파일은 apps/inventory/migrations/0001_initial.py 가 문장 단위로 실행한다.
@@ -110,17 +110,17 @@ INSERT INTO hold_source_types (code, name, requires_evidence) VALUES
  ('PROPAGATED',          '상위 LOT 전파', 0),
  ('MANUAL',              '수동',         0);
 
+/* HOLD 해제 처분. 반품·폐기는 처분 기록일 뿐, 실제 재고 차감은 수불 이동(RETURN_TO_SUPPLIER / DISPOSAL)으로 한다 */
 CREATE TABLE hold_dispositions (
-    code              TEXT NOT NULL PRIMARY KEY,
-    name              TEXT NOT NULL,
-    lot_status_after  TEXT
+    code  TEXT NOT NULL PRIMARY KEY,
+    name  TEXT NOT NULL
 ) STRICT;
 
-INSERT INTO hold_dispositions (code, name, lot_status_after) VALUES
- ('RELEASE', '해제(정상 사용)', NULL),
- ('REWORK',  '재작업',         NULL),
- ('RETURN',  '반품',           'DISPOSED'),
- ('DISPOSE', '폐기',           'DISPOSED');
+INSERT INTO hold_dispositions (code, name) VALUES
+ ('RELEASE', '해제(정상 사용)'),
+ ('REWORK',  '재작업'),
+ ('RETURN',  '반품'),
+ ('DISPOSE', '폐기');
 
 
 /* =========================================================
@@ -168,18 +168,16 @@ CREATE INDEX ix_items_type ON items (item_type);
 
 CREATE TABLE lots (
     id                 INTEGER PRIMARY KEY,
-    lot_number         TEXT    NOT NULL,
+    lot_number         TEXT    NOT NULL UNIQUE,         -- 전체에서 유일 (채번 규칙에 품목코드 포함)
     item_id            INTEGER NOT NULL REFERENCES items(id),
     lot_kind           TEXT    NOT NULL CHECK (lot_kind IN ('INCOMING', 'PRODUCED')),
-    status             TEXT    NOT NULL CHECK (status IN ('QUARANTINE', 'AVAILABLE', 'CONSUMED', 'REJECTED', 'DISPOSED')),
+    status             TEXT    NOT NULL CHECK (status IN ('QUARANTINE', 'AVAILABLE', 'REJECTED')),   -- 품질 판정만 (머리말 [LOT 상태])
     manufactured_date  TEXT    CHECK (manufactured_date IS NULL OR manufactured_date IS date(manufactured_date)),
     expiration_date    TEXT    CHECK (expiration_date   IS NULL OR expiration_date   IS date(expiration_date)),
     created_at         TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
-    updated_at         TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
-    UNIQUE (item_id, lot_number)                        -- LOT 번호는 품목 안에서 유일
+    updated_at         TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
 ) STRICT;
 
-CREATE INDEX ix_lots_number      ON lots (lot_number);
 CREATE INDEX ix_lots_item_status ON lots (item_id, status);
 CREATE INDEX ix_lots_fefo        ON lots (item_id, expiration_date);
 
@@ -231,14 +229,14 @@ CREATE TABLE inventory (
 
 
 /* =========================================================
-   5. 입고 건 (C2: 입고 건 1 = LOT 1)
-   - 입고 등록 트랜잭션: lots → stock_movements(RECEIPT) → incoming_receipts → domain_event(INCOMING_RECEIVED)
-   - 취소: CORRECTION_OUT(전량) + receipt_status = CANCELLED + INCOMING_RECEIPT_CANCELLED
+   5. 입고 건 (입고 건 1 = LOT 1, 입고일 기준 LOT)
+   - 입고 등록 트랜잭션: lots(QUARANTINE) → stock_movements(RECEIPT) → incoming_receipts → 판정 반영(C3) → 문서 앱 호출
+   - 취소: CORRECTION_OUT(전량) + receipt_status = CANCELLED + 문서 앱 호출
    ========================================================= */
 
 CREATE TABLE incoming_receipts (
     id                   INTEGER PRIMARY KEY,
-    lot_id               INTEGER NOT NULL UNIQUE REFERENCES lots(id),   -- 1:1. 소비기한 기준 LOT 으로 바뀌면 UNIQUE 해제
+    lot_id               INTEGER NOT NULL UNIQUE REFERENCES lots(id),   -- 1:1 (입고 건별 LOT, 10/7 현업)
     supplier_id          INTEGER NOT NULL REFERENCES suppliers(id),
     supplier_lot_number  TEXT,
     received_date        TEXT    NOT NULL CHECK (received_date IS date(received_date)),
@@ -258,15 +256,16 @@ CREATE INDEX ix_ir_date         ON incoming_receipts (received_date);
 
 
 /* =========================================================
-   6. LOT HOLD (I5) — 이번 주는 CONDITIONAL 판정에만 사용
-   - deviation_action_id / source_document_id : 문서 도메인 ID (같은 DB 지만 마이그레이션 순서 의존을 피해 FK 미설정)
+   6. LOT HOLD (I5) — CCP 이탈·완제품 실험·수동 보류용 (입고 판정은 HOLD 를 쓰지 않음, C3)
+   - source_document_id : 근거 문서 document.document_id (C6, FK 미설정)
+   - 배치 HOLD 와 산출 LOT 전파 방식은 미정 → 정해지면 새 마이그레이션에서 이 테이블을 재정의
+     (아직 사용처가 없어 데이터 이관 부담 없음)
    ========================================================= */
 
 CREATE TABLE lot_holds (
     id                   INTEGER PRIMARY KEY,
     lot_id               INTEGER NOT NULL REFERENCES lots(id),
     source_type          TEXT    NOT NULL REFERENCES hold_source_types(code),
-    deviation_action_id  INTEGER,
     source_document_id   INTEGER,
     parent_hold_id       INTEGER REFERENCES lot_holds(id),
     reason               TEXT    NOT NULL,
@@ -282,22 +281,12 @@ CREATE TABLE lot_holds (
 ) STRICT;
 
 CREATE INDEX ix_holds_lot_open  ON lot_holds (lot_id, released_at);
-CREATE INDEX ix_holds_deviation ON lot_holds (deviation_action_id);
 CREATE INDEX ix_holds_document  ON lot_holds (source_document_id);
 
 
 /* =========================================================
-   7. 이벤트 수신 기록 (C1) / 변경 이력
+   7. 변경 이력
    ========================================================= */
-
-/* 문서 domain_event 중 생산이 처리한 것. event_id = domain_event.event_id */
-CREATE TABLE domain_event_inbox (
-    event_id       INTEGER PRIMARY KEY,
-    event_code     TEXT    NOT NULL,
-    processed_at   TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
-    result         TEXT    NOT NULL CHECK (result IN ('APPLIED', 'SKIPPED', 'FAILED')),
-    error_message  TEXT
-) STRICT;
 
 CREATE TABLE audit_logs (
     id               INTEGER PRIMARY KEY,
@@ -307,10 +296,8 @@ CREATE TABLE audit_logs (
     before_json      TEXT    CHECK (before_json IS NULL OR json_valid(before_json)),
     after_json       TEXT    CHECK (after_json  IS NULL OR json_valid(after_json)),
     reason           TEXT,
-    staff_id         INTEGER REFERENCES staff(id),
-    source_event_id  INTEGER,
-    occurred_at      TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
-    CHECK (staff_id IS NOT NULL OR source_event_id IS NOT NULL)
+    staff_id         INTEGER NOT NULL REFERENCES staff(id),
+    occurred_at      TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
 ) STRICT;
 
 CREATE INDEX ix_audit_record ON audit_logs (table_name, record_id);
@@ -390,15 +377,23 @@ SELECT l.id AS lot_id,
 FROM lots l
 JOIN items i ON i.id = l.item_id;
 
-/* C4. 문서 쪽 읽기 창구: 입고 문서 자동 채움 (subject_type = LOT, subject_id = lot_id)
+/* C4. 문서 쪽 읽기 창구: LOT 대상 문서 자동 채움. 문서 쪽은 lot_id 로 조회 (document_ref.lot_id)
+   - 모든 LOT (입고·생산·기초재고). 입고 정보 컬럼은 입고 건이 있는 LOT 만 값이 있고 나머지는 NULL
+     (기초재고 이관 LOT 은 lot_kind = INCOMING 이어도 입고 건이 없음)
+   - 수량은 *_e6 정수 (S3), 단위는 품목 기준단위 base_unit, 원료/포장재 구분은 item_type 코드
+   - 입고가 취소되면 receipt_status = CANCELLED (행은 남음)
    계약: 컬럼 삭제·의미 변경 금지, 추가만 허용 */
 CREATE VIEW v_doc_incoming_lot AS
 SELECT l.id                     AS lot_id,
        l.lot_number,
+       l.lot_kind,
+       i.id                     AS item_id,
        i.item_code,
        i.name                   AS item_name,
        i.item_type,
+       it.name                  AS item_type_name,
        i.base_unit,
+       i.origin_country,
        s.name                   AS supplier_name,
        r.supplier_lot_number,
        r.received_date,
@@ -407,11 +402,13 @@ SELECT l.id                     AS lot_id,
        l.expiration_date,
        l.status                 AS lot_status,
        r.receipt_status,
-       i.item_code || ' ' || i.name || ' / ' || l.lot_number || ' / ' || r.received_date AS subject_label
-FROM incoming_receipts r
-JOIN lots l      ON l.id = r.lot_id
-JOIN items i     ON i.id = l.item_id
-JOIN suppliers s ON s.id = r.supplier_id;
+       i.item_code || ' ' || i.name || ' / ' || l.lot_number
+           || ' / ' || COALESCE(r.received_date, l.manufactured_date, '') AS subject_label
+FROM lots l
+JOIN items i                     ON i.id = l.item_id
+JOIN item_types it               ON it.code = i.item_type
+LEFT JOIN incoming_receipts r    ON r.lot_id = l.id
+LEFT JOIN suppliers s            ON s.id = r.supplier_id;
 
 /* 원료수불대장 (생산 쪽 조회·출력 화면). 기간·품목유형 필터는 조회 시 WHERE
    예) WHERE occurred_at >= '2026-10-01' AND occurred_at < '2026-11-01' AND item_type = 'RAW' */

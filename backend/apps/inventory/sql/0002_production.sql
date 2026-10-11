@@ -1,6 +1,7 @@
 /* =========================================================
-   HACCP 생산·수불 — 마이그레이션 002 (초안, SQLite 3.37+)
-   상태: DRAFT — 10/11 ERD 미팅 검토용. 마이그레이션에 연결하지 않음 (실행되지 않음)
+   HACCP 생산·수불 — 마이그레이션 002 (SQLite 3.37+)
+   상태: 10/11 ERD 협의 반영 확정본. apps/inventory/migrations/0002_production.py 가 실행
+         (main merge 전까지만 이 파일 수정, 이후는 새 마이그레이션)
    전제: 0001_core.sql 적용 후. 0001 의 운영 규칙 S1~S6, 불변식 I1~I5 를 그대로 따른다.
 
    [범위]
@@ -21,21 +22,17 @@
        → 실제 수량 = 원 수량 − 정정 합계 (뷰에서 계산)
    P8. 생산 LOT 번호: 품목코드 + 제조일 + A/B (기본 규칙 {item_code}-{date:yyMMdd}{seq:A}, 코드에 있음)
 
-   [미정 — 10/11 결정 후 이 파일을 확정본으로 수정]
-   Q1. 배치 HOLD 관리 위치 (CCP 이탈은 배치 단위, 10/7)
-       (가) production_batches.hold_status 같은 상태 + 산출 LOT 에 lot_holds(PROPAGATED) 전파
-       (나) batch_holds 테이블을 따로 두고 lot_holds.parent_hold_id 대신 batch_hold_id 로 연결
-       (다) lot_holds 에 batch_id 를 추가해 한 테이블로 관리
-       어느 쪽이든 0001 lot_holds 의 CHECK ((source_type='PROPAGATED') = (parent_hold_id IS NOT NULL))
-       수정이 필요할 수 있음 → 0001 을 main merge 전에 함께 수정
-       개선조치(문서 쪽) 테이블명·PK 와 HOLD 해제 승인 기준도 함께 결정
-   Q2. 포장 시 완제품 LOT 번호: 반제품 LOT 번호를 이어받나 / 새로 발급하나
-       → 스키마 영향 없음 (채번 규칙만). 이어받는 경우 {source_lot} 토큰을 코드에 추가
-   Q3. 문서 대상 subject_type 에 BATCH 추가 (생산일지·CCP 일지는 제조 단위, 10/7)
-       배치 없는 독립 CCP 점검의 대상 (설비? 날짜?) → v_doc_batch 는 BATCH 대상 문서용
-   Q4. 완제품 소비기한: 제조일 + items.shelf_life_days / 포장 시 반제품 제조일 기준
-       → 스키마 영향 없음 (산출 LOT 생성 서비스 로직)
-   Q5. batch_number 형식: 산출 LOT 번호와 같게 / 별도 규칙. 지금은 앱이 채우는 UNIQUE 텍스트
+   [10/11 ERD 협의로 정해진 것]
+   D1. 문서 ↔ 배치 연결은 문서 쪽 document_ref.production_batch_id (+ process_code) 가 이 테이블을 FK 로 참조
+       → 문서 앱 마이그레이션은 inventory 0002 에 의존. 배치 없는 독립 CCP 점검은 문서 쪽이 process_code 만으로 기록
+   D2. 문서 쪽 읽기 창구 v_doc_batch: 컬럼 이름은 문서 쪽 요청에 맞춤 (production_batch_id, status)
+       수량은 *_e6 + base_unit (S3). 완제품은 단위가 '개' 일 수 있어 kg 로 주지 않는다
+   D3. 문서 쪽은 status = 'CANCELLED' 배치에 문서를 만들지 않는다
+
+   [이 파일에 없는 것 — 스키마 영향이 없거나 이후 마이그레이션]
+   - 배치 HOLD 와 산출 LOT 전파: 방식 결정 후 새 마이그레이션 (0001 lot_holds 재정의 포함).
+     production_batches 에 컬럼이 필요하면 ADD COLUMN 으로 추가 가능
+   - 포장 시 완제품 LOT 번호·소비기한 기준일, batch_number 형식: 채번 규칙·서비스 로직 (스키마 변경 없음)
    ========================================================= */
 
 
@@ -110,7 +107,7 @@ END;
 
 CREATE TABLE production_batches (
     id                   INTEGER PRIMARY KEY,
-    batch_number         TEXT    NOT NULL UNIQUE,                      -- Q5
+    batch_number         TEXT    NOT NULL UNIQUE,                      -- 형식은 서비스가 채번 (미정)
     process_type         TEXT    NOT NULL CHECK (process_type IN ('MANUFACTURE', 'PACKAGING')),
     item_id              INTEGER NOT NULL REFERENCES items(id),        -- 산출 품목
     bom_id               INTEGER REFERENCES boms(id),                   -- 기준 BOM 버전 (없이도 기록 가능)
@@ -129,7 +126,6 @@ CREATE TABLE production_batches (
     CHECK (status <> 'COMPLETED' OR (manufactured_date IS NOT NULL AND completed_at IS NOT NULL)),
     CHECK ((status = 'CANCELLED') = (cancelled_at IS NOT NULL)),
     CHECK (cancelled_at IS NULL OR cancel_reason IS NOT NULL)
-    /* Q1 (가) 를 택하면 여기 hold 상태 컬럼 추가 */
 ) STRICT;
 
 CREATE INDEX ix_batches_item_date ON production_batches (item_id, manufactured_date);
@@ -319,13 +315,13 @@ SELECT source_lot_id, derived_lot_id, MIN(depth) AS depth
 FROM trace
 GROUP BY source_lot_id, derived_lot_id;
 
-/* 문서 쪽 읽기 창구: 생산일지 자동 채움 (Q3: subject_type = BATCH, subject_id = batch id)
+/* 문서 쪽 읽기 창구: 생산일지·CCP 일지 자동 채움 (D2). 문서 쪽은 production_batch_id 로 조회
    계약: 컬럼 삭제·의미 변경 금지, 추가만 허용 */
 CREATE VIEW v_doc_batch AS
-SELECT b.id                        AS batch_id,
+SELECT b.id                        AS production_batch_id,
        b.batch_number,
        b.process_type,
-       b.status                    AS batch_status,
+       b.status,
        i.id                        AS item_id,
        i.item_code,
        i.name                      AS item_name,
@@ -350,6 +346,7 @@ JOIN staff st ON st.id = b.staff_id
 LEFT JOIN boms bm ON bm.id = b.bom_id;
 
 /* 원료수불대장 뷰 재정의: 0001 컬럼은 그대로 두고 끝에 추가만 (계약)
+   되돌리기(0002 역마이그레이션)는 0001 정의로 다시 만든다 (migrations/0002_production.py)
    추가: lot_id, item_id, 원천(입고 건 / 배치) */
 DROP VIEW v_stock_ledger;
 

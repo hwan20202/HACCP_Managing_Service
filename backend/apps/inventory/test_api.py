@@ -160,6 +160,24 @@ class ReceiptApiTests(ApiTestCase):
         self.assertEqual(response.status_code, 201)
 
 
+class ReceiptWithJudgmentApiTests(ApiTestCase):
+    def test_judgment_sent_with_receipt(self):
+        data = {
+            "item_id": self.raw.pk,
+            "supplier_id": self.supplier.pk,
+            "staff_id": self.staff.pk,
+            "received_date": self.today,
+            "quantity": "10",
+            "idempotency_key": "j1",
+            "judgment": "fail",
+        }
+        response = self.post("/receipts/", data)
+        self.assertEqual(response.status_code, 201, response.content.decode())
+        self.assertEqual(response.json()["lot_status"], "REJECTED")
+        bad = self.post("/receipts/", {**data, "idempotency_key": "j2", "judgment": "maybe"})
+        self.assertEqual(bad.status_code, 400)
+
+
 class StockAndLedgerApiTests(ApiTestCase):
     def setUp(self):
         self.receipt = self.receive()
@@ -196,7 +214,7 @@ class StockAndLedgerApiTests(ApiTestCase):
             },
         )
         self.assertEqual(
-            (disposed.json()["lot_quantity"], disposed.json()["lot_status"]), ("0", "DISPOSED")
+            (disposed.json()["lot_quantity"], disposed.json()["lot_status"]), ("0", "QUARANTINE")
         )
         too_much = self.post(
             "/movements/return/",

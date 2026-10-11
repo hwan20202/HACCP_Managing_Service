@@ -21,7 +21,6 @@ from .errors import InventoryError, NotFound
 from .fields import KST, kst_now, to_kst_text
 from .lot_numbers import next_lot_number
 from .models import (
-    AuditLog,
     Inventory,
     Item,
     Lot,
@@ -148,35 +147,6 @@ def _check_outflow(lot, quantity_e6, occurred_at):
         )
 
 
-def _set_lot_status(lot, status, staff, reason):
-    if lot.status == status:
-        return
-    before = {"status": lot.status}
-    lot.status = status
-    lot.save(update_fields=["status"])
-    AuditLog.objects.create(
-        table_name="lots",
-        record_id=str(lot.pk),
-        action="UPDATE",
-        before_json=before,
-        after_json={"status": status},
-        reason=reason,
-        staff=staff,
-    )
-
-
-def _status_before_disposed(lot):
-    """Status the LOT had before it was marked DISPOSED (from the audit log)."""
-    log = (
-        AuditLog.objects.filter(
-            table_name="lots", record_id=str(lot.pk), after_json__status=LotStatus.DISPOSED
-        )
-        .order_by("-pk")
-        .first()
-    )
-    return (log and log.before_json.get("status")) or LotStatus.AVAILABLE
-
-
 def _create(lot, type_code, quantity_e6, staff, occurred_at, key, reason=None, corrects=None):
     return StockMovement.objects.create(
         lot=lot,
@@ -237,8 +207,8 @@ def record_opening_balance(
             if kind != LotKind.INCOMING:
                 raise InventoryError("반제품·완제품의 기초재고는 기존 LOT 번호를 입력하세요.")
             lot_number = next_lot_number(lot_kind=kind, item=item, base_date=when.date())
-        if Lot.objects.filter(item=item, lot_number=lot_number).exists():
-            raise InventoryError(f"이미 있는 LOT 번호입니다: {item.item_code} / {lot_number}")
+        if Lot.objects.filter(lot_number=lot_number).exists():
+            raise InventoryError(f"이미 있는 LOT 번호입니다: {lot_number}")
         lot = Lot.objects.create(
             lot_number=lot_number,
             item=item,
@@ -267,10 +237,7 @@ def _outflow_or_adjust(type_code, prefix, *, lot_id, quantity, reason, staff_id,
         when = _occurred_at(at)
         if DIRECTION[type_code] < 0:
             _check_outflow(lot, quantity_e6, when)
-        movement = _create(lot, type_code, quantity_e6, staff, when, key, reason)
-        if type_code in {"RETURN_TO_SUPPLIER", "DISPOSAL"} and current_stock_e6(lot.pk) == 0:
-            _set_lot_status(lot, LotStatus.DISPOSED, staff, reason)
-        return movement
+        return _create(lot, type_code, quantity_e6, staff, when, key, reason)
 
 
 def adjust_stock(
@@ -297,7 +264,7 @@ def adjust_stock(
 def return_to_supplier(
     *, lot_id, reason, staff_id, idempotency_key, quantity=None, occurred_at=None
 ):
-    """quantity None -> the whole remaining stock. Empty LOT afterwards -> status DISPOSED."""
+    """quantity None -> the whole remaining stock. The LOT status (quality) does not change."""
     return _outflow_or_adjust(
         "RETURN_TO_SUPPLIER",
         "RETURN",
@@ -311,7 +278,7 @@ def return_to_supplier(
 
 
 def dispose(*, lot_id, reason, staff_id, idempotency_key, quantity=None, occurred_at=None):
-    """quantity None -> the whole remaining stock. Empty LOT afterwards -> status DISPOSED."""
+    """quantity None -> the whole remaining stock. The LOT status (quality) does not change."""
     return _outflow_or_adjust(
         "DISPOSAL",
         "DISPOSAL",
@@ -364,9 +331,6 @@ def correct_movement(*, movement_id, reason, staff_id, idempotency_key, quantity
         lot = original.lot
         if type_code == "CORRECTION_OUT":
             _check_outflow(lot, quantity_e6, original.occurred_at)
-        movement = _create(
+        return _create(
             lot, type_code, quantity_e6, staff, original.occurred_at, key, reason, original
         )
-        if lot.status == LotStatus.DISPOSED and current_stock_e6(lot.pk) > 0:
-            _set_lot_status(lot, _status_before_disposed(lot), staff, f"정정: {reason}")
-        return movement

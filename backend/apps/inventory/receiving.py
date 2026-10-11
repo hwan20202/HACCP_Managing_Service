@@ -1,7 +1,8 @@
 """Incoming receipt registration and cancellation (C2: one receipt = one LOT).
 
 register_receipt():  lots(QUARANTINE) -> stock_movements(RECEIPT) -> incoming_receipts
-                     -> audit_logs -> document_bridge hook          (one transaction)
+                     -> audit_logs -> judgment (if given) -> document_bridge hook
+                                                                    (one transaction)
 cancel_receipt():    stock_movements(CORRECTION_OUT, full quantity) -> receipt CANCELLED
                      -> audit_logs -> document_bridge hook          (one transaction)
 
@@ -17,6 +18,7 @@ from django.db import transaction
 from . import document_bridge
 from .errors import InventoryError, NotFound
 from .fields import KST, kst_now
+from .judgment import Judgment, apply_incoming_judgment
 from .lot_numbers import next_lot_number
 from .models import (
     AuditLog,
@@ -55,6 +57,9 @@ class ReceiptInput:
     supplier_lot_number: str | None = None
     manufactured_date: datetime.date | None = None
     expiration_date: datetime.date | None = None
+    # Visual inspection done with the receipt: PASS / FAIL. None = not decided yet (the LOT
+    # stays QUARANTINE until the inspection record is completed).
+    judgment: str | None = None
 
 
 def _active(model, pk, label):
@@ -115,6 +120,8 @@ def _existing_receipt(idempotency_key, data, quantity_e6):
 def register_receipt(data: ReceiptInput) -> IncomingReceipt:
     if not data.idempotency_key:
         raise ReceivingError("요청 키(idempotency_key)가 필요합니다.")
+    if data.judgment is not None and data.judgment not in Judgment.values:
+        raise ReceivingError(f"육안검사 판정은 {Judgment.values} 중 하나여야 합니다.")
     quantity_e6 = _quantity_e6(data.quantity)
     if (
         data.manufactured_date
@@ -169,6 +176,9 @@ def register_receipt(data: ReceiptInput) -> IncomingReceipt:
             after_json=_receipt_snapshot(receipt),
             staff=staff,
         )
+        if data.judgment:
+            apply_incoming_judgment(lot_id=lot.pk, result=data.judgment, staff_id=staff.pk)
+            lot.refresh_from_db(fields=["status", "updated_at"])
         document_bridge.incoming_received(lot_id=lot.pk)
     return receipt
 

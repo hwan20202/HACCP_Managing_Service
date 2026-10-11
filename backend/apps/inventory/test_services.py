@@ -12,7 +12,18 @@ from .errors import InventoryError, NotFound
 from .fields import KST, kst_now
 from .judgment import apply_incoming_judgment
 from .ledger import stock_ledger, stock_ledger_changes_since
-from .models import AuditLog, Inventory, Item, Lot, LotStatus, Staff, StockMovement, Supplier
+from .models import (
+    AuditLog,
+    IncomingReceipt,
+    Inventory,
+    Item,
+    Lot,
+    LotStatus,
+    ReceiptStatus,
+    Staff,
+    StockMovement,
+    Supplier,
+)
 from .movements import (
     adjust_stock,
     correct_movement,
@@ -97,6 +108,11 @@ class OpeningBalanceTests(ServiceTestCase):
         lot = self.opening(self.finished, "10", "o2", lot_number="F-001").lot
         self.assertEqual(lot.lot_kind, "PRODUCED")
 
+    def test_lot_number_taken_by_another_item_is_rejected(self):
+        self.opening(self.raw_a, "5", "o1", lot_number="OLD-001")
+        with self.assertRaises(InventoryError):
+            self.opening(self.raw_b, "5", "o2", lot_number="OLD-001")
+
     def test_duplicate_lot_and_replay(self):
         first = self.opening(self.raw_a, "5", "o1", lot_number="OLD-001")
         self.assertEqual(self.opening(self.raw_a, "5", "o1", lot_number="OLD-001").pk, first.pk)
@@ -107,7 +123,7 @@ class OpeningBalanceTests(ServiceTestCase):
 
     def test_status_and_date_rules(self):
         with self.assertRaises(InventoryError):
-            self.opening(self.raw_a, "5", "o1", status=LotStatus.CONSUMED)
+            self.opening(self.raw_a, "5", "o1", status="DISPOSED")
         with self.assertRaises(InventoryError):
             record_opening_balance(
                 item_id=self.raw_a.pk,
@@ -198,15 +214,15 @@ class MovementTests(ServiceTestCase):
         )
         self.assertEqual(self.stock(self.lot), 0)
 
-    def test_full_return_marks_lot_disposed(self):
+    def test_full_return_empties_lot_and_keeps_status(self):
         movement = return_to_supplier(
             lot_id=self.lot.pk, reason="부적합 반품", staff_id=self.staff.pk, idempotency_key="ret1"
         )
         self.assertEqual(movement.quantity_e6, to_e6(50))
         self.lot.refresh_from_db()
-        self.assertEqual(self.lot.status, LotStatus.DISPOSED)
-        log = AuditLog.objects.get(table_name="lots", record_id=str(self.lot.pk))
-        self.assertEqual(log.before_json, {"status": "QUARANTINE"})
+        self.assertEqual(self.lot.status, LotStatus.QUARANTINE)  # status = quality only
+        self.assertEqual(self.stock(self.lot), 0)
+        self.assertFalse(AuditLog.objects.filter(table_name="lots").exists())
         # Replaying the same request returns the same movement even though stock is now 0.
         again = return_to_supplier(
             lot_id=self.lot.pk, reason="부적합 반품", staff_id=self.staff.pk, idempotency_key="ret1"
@@ -227,7 +243,7 @@ class MovementTests(ServiceTestCase):
         self.assertEqual(self.lot.status, LotStatus.QUARANTINE)
         self.assertEqual(self.stock(self.lot), to_e6(45))
 
-    def test_correct_disposal_restores_stock_and_status(self):
+    def test_correct_disposal_restores_stock(self):
         disposal = dispose(
             lot_id=self.lot.pk, reason="오입력", staff_id=self.staff.pk, idempotency_key="d1"
         )
@@ -412,8 +428,10 @@ class StockQueryTests(ServiceTestCase):
         self.assertFalse(c.below_minimum)
         self.assertEqual(a.nearest_expiration, self.today + datetime.timedelta(days=100))
 
-    def test_lot_model_untouched(self):
-        self.assertEqual(Lot.objects.get(pk=self.empty.pk).status, LotStatus.DISPOSED)
+    def test_empty_lot_keeps_status_and_is_hidden_by_default(self):
+        self.assertEqual(Lot.objects.get(pk=self.empty.pk).status, LotStatus.AVAILABLE)
+        self.assertNotIn(self.empty.pk, [lot.lot_id for lot in lot_stock()])
+        self.assertIn(self.empty.pk, [lot.lot_id for lot in lot_stock(include_empty=True)])
 
 
 class CheckInventoryCommandTests(ServiceTestCase):
@@ -423,9 +441,11 @@ class CheckInventoryCommandTests(ServiceTestCase):
         call_command("check_inventory", stdout=out)
         self.assertIn("이상 없음", out.getvalue())
 
-    def test_closed_lot_with_stock_fails(self):
-        lot = self.receive(self.raw_a, "5", self.day2, "r1").lot
-        Lot.objects.filter(pk=lot.pk).update(status=LotStatus.CONSUMED)
+    def test_cancelled_receipt_with_stock_fails(self):
+        receipt = self.receive(self.raw_a, "5", self.day2, "r1")
+        IncomingReceipt.objects.filter(pk=receipt.pk).update(
+            receipt_status=ReceiptStatus.CANCELLED, cancelled_at=kst_now(), cancel_reason="x"
+        )
         with self.assertRaises(CommandError):
             call_command("check_inventory", stdout=StringIO())
 
@@ -517,7 +537,7 @@ class JudgmentTests(ServiceTestCase):
         with self.assertRaises(InventoryError):
             self.judge("FAIL", reason="늦게 발견")
 
-    def test_fail_then_return_closes_the_lot(self):
+    def test_fail_then_return_empties_the_lot(self):
         self.judge("FAIL")
         return_to_supplier(
             lot_id=self.lot.pk,
@@ -526,7 +546,8 @@ class JudgmentTests(ServiceTestCase):
             idempotency_key="ret1",
         )
         self.lot.refresh_from_db()
-        self.assertEqual(self.lot.status, LotStatus.DISPOSED)
+        self.assertEqual(self.lot.status, LotStatus.REJECTED)
+        self.assertEqual(Inventory.objects.get(lot=self.lot).quantity_e6, 0)
         with self.assertRaises(InventoryError):
             self.judge("PASS", reason="정정")
 

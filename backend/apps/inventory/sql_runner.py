@@ -75,3 +75,31 @@ def drop_sql_file_objects(filename):
                     cursor.execute(f'DROP {kind} IF EXISTS "{name}"')
 
     return reverse
+
+
+def recreate_from_sql_file(filename, names):
+    """Return a RunPython function that runs the CREATE statements for `names` from a file.
+
+    Used when a later migration redefines a view from an earlier file (0002 redefines
+    v_stock_ledger): its reverse drops the new definition, then restores the earlier one.
+    """
+
+    def run(_apps, schema_editor):
+        wanted = {name.lower() for name in names}
+        with schema_editor.connection.cursor() as cursor:
+            for statement in split_statements(read_sql(filename)):
+                match = _CREATE.match(_strip_comments(statement))
+                if match and match.group(2).lower() in wanted:
+                    cursor.execute(statement)
+
+    return run
+
+
+def chain(*functions):
+    """Combine RunPython functions into one, run in order."""
+
+    def run(apps, schema_editor):
+        for function in functions:
+            function(apps, schema_editor)
+
+    return run

@@ -310,6 +310,7 @@ def receipt_collection(request):
                 supplier_lot_number=data.get("supplier_lot_number"),
                 manufactured_date=_date(data.get("manufactured_date"), "manufactured_date"),
                 expiration_date=_date(data.get("expiration_date"), "expiration_date"),
+                judgment=str(data["judgment"]).upper() if data.get("judgment") else None,
             )
         )
         receipt = IncomingReceipt.objects.select_related(*RECEIPT_RELATED).get(pk=receipt.pk)

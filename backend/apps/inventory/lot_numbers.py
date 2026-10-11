@@ -12,6 +12,9 @@ Pattern tokens
 The sequence key is the rendered pattern without the {seq} token, so the counter restarts
 for every item and date: 1000019-261009A, 1000019-261009B, 1000019-261010A, ...
 
+lots.lot_number is UNIQUE across all items. A pattern without {item_code} still works (items
+then share one counter per date), and a number already taken is skipped.
+
 Call next_lot_number() inside the caller's transaction.atomic() block (BEGIN IMMEDIATE,
 rule S5): the counter increment and the LOT insert then commit or roll back together, and
 concurrent writers wait instead of drawing the same number.
@@ -126,6 +129,6 @@ def next_lot_number(*, lot_kind, item, base_date):
     # A number can already exist if it was entered by hand or migrated. Skip it.
     for _ in range(_MAX_SKIPS):
         lot_number = render(rule.pattern, item=item, base_date=base_date, seq=_next_seq(seq_key))
-        if not Lot.objects.filter(item=item, lot_number=lot_number).exists():
+        if not Lot.objects.filter(lot_number=lot_number).exists():  # unique across items
             return lot_number
     raise LotNumberError(f"Could not find a free LOT number for key {seq_key}.")

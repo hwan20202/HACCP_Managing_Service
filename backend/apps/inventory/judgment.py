@@ -1,16 +1,18 @@
-"""Incoming visual inspection judgment -> LOT status.
+"""Incoming visual inspection judgment -> LOT status (0001 header C3).
 
-Called directly by the document app when an inspection record is completed (agreed: direct
-service calls; status changes only on 작성완료, not on approval or rejection of approval).
+Two callers, same rules:
+- receiving.register_receipt(), when the receipt screen sends a judgment with the receipt
+  (same transaction, so the LOT is committed as AVAILABLE / REJECTED, never seen as QUARANTINE)
+- the document app, when an inspection record is completed (작성완료) later or corrected.
+  Approval and rejection of approval do not change the LOT.
 
     PASS -> AVAILABLE
-    FAIL -> REJECTED   (a FAIL LOT is returned in full; record that with
-                        movements.return_to_supplier, which also marks the LOT DISPOSED)
+    FAIL -> REJECTED   (a FAIL LOT is returned in full; record that separately with
+                        movements.return_to_supplier. The status stays REJECTED.)
 
-Re-judgment (the record was corrected and completed again):
-    PASS -> FAIL  only while the LOT is untouched (no movement other than its RECEIPT)
-    FAIL -> PASS  only while it has not been returned or disposed
-Sending the same result again changes nothing.
+Re-judgment (the record was corrected and completed again): a reason is required, and only
+while the LOT is untouched (no movement other than its RECEIPT: not used, adjusted, returned
+or disposed). Sending the same result again changes nothing.
 """
 
 import datetime

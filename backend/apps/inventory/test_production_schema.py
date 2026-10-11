@@ -1,24 +1,24 @@
-"""Keeps the 0002 production draft valid SQL on top of 0001.
+"""Production schema (sql/0002_production.sql) on top of 0001: triggers, views, trace.
 
-The draft is not a migration yet, so it is applied to a separate in-memory SQLite connection
-here (not Django's test database).
+The two SQL files are applied to a plain in-memory SQLite connection, so these tests exercise
+the schema itself without Django. Django's test database also runs both files through the
+migrations (see tests.SchemaTests).
 """
 
 import sqlite3
 
 from django.test import SimpleTestCase
 
-from .sql_runner import SQL_DIR, read_sql, split_statements
+from .sql_runner import read_sql, split_statements
 
-DRAFT = SQL_DIR / "drafts" / "0002_production_draft.sql"
 E6 = 1_000_000
 
 
-class ProductionDraftTests(SimpleTestCase):
+class ProductionSchemaTests(SimpleTestCase):
     def setUp(self):
         self.db = sqlite3.connect(":memory:", isolation_level=None)
         self.db.execute("PRAGMA foreign_keys = ON")
-        for sql in [read_sql("0001_core.sql"), DRAFT.read_text(encoding="utf-8")]:
+        for sql in [read_sql("0001_core.sql"), read_sql("0002_production.sql")]:
             for statement in split_statements(sql):
                 self.db.execute(statement)
         self.seed()
@@ -238,7 +238,7 @@ class ProductionDraftTests(SimpleTestCase):
         self.make_chain()
         row = self.one(
             "SELECT batch_number, process_type, output_quantity_e6, output_lot_count,"
-            " input_line_count, subject_label FROM v_doc_batch WHERE batch_id = ?",
+            " input_line_count, subject_label FROM v_doc_batch WHERE production_batch_id = ?",
             self.pack,
         )
         self.assertEqual(
@@ -251,6 +251,13 @@ class ProductionDraftTests(SimpleTestCase):
                 2,
                 "4000001 가상완제품 / B-4000001-261009A / 2026-10-09",
             ),
+        )
+        self.assertEqual(
+            self.one(
+                "SELECT status, base_unit FROM v_doc_batch WHERE production_batch_id = ?",
+                self.pack,
+            ),
+            ("COMPLETED", "개"),
         )
         ledger = self.db.execute(
             "SELECT movement_code, lot_id, item_id, batch_id FROM v_stock_ledger"

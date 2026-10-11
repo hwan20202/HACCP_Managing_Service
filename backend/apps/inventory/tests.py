@@ -16,6 +16,7 @@ from .master_import import MasterImportError, ensure_default_lot_rules, import_i
 from .models import (
     AppendOnlyError,
     AuditLog,
+    BatchStatus,
     IncomingReceipt,
     Inventory,
     Item,
@@ -24,6 +25,8 @@ from .models import (
     LotKind,
     LotNumberRule,
     LotStatus,
+    ProcessType,
+    ProductionBatch,
     ReceiptStatus,
     Staff,
     StockMovement,
@@ -49,8 +52,13 @@ CORE_TABLES = {
     "inventory",
     "incoming_receipts",
     "lot_holds",
-    "domain_event_inbox",
     "audit_logs",
+    # 0002_production.sql
+    "boms",
+    "bom_lines",
+    "production_batches",
+    "production_material_usages",
+    "production_outputs",
 }
 
 
@@ -127,8 +135,38 @@ class SchemaTests(TestCase):
             "v_doc_incoming_lot",
             "v_stock_ledger",
             "v_inventory_mismatch",
+            "v_batch_usages",
+            "v_batch_outputs",
+            "v_lot_trace",
+            "v_doc_batch",
         ]:
             self.assertIn(name, names)
+
+    def test_ledger_view_has_0002_columns(self):
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT * FROM v_stock_ledger LIMIT 0")
+            columns = [column[0] for column in cursor.description]
+        self.assertEqual(columns[-4:], ["lot_id", "item_id", "receipt_id", "batch_id"])
+
+    def test_production_models_map_to_tables(self):
+        staff = Staff.objects.create(staff_code="S900", name="x")
+        item = Item.objects.create(
+            item_type_id="SEMI", item_code="3000900", name="시험반제품", base_unit="개"
+        )
+        batch = ProductionBatch.objects.create(
+            batch_number="B-3000900-261009A",
+            process_type=ProcessType.MANUFACTURE,
+            item=item,
+            status=BatchStatus.PLANNED,
+            staff=staff,
+        )
+        row = fetch_one(
+            "SELECT production_batch_id, status FROM v_doc_batch WHERE batch_number = %s",
+            [batch.batch_number],
+        )
+        self.assertEqual(row, (batch.pk, "PLANNED"))
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            batch.delete()  # cancel instead (trigger)
 
     def test_reference_codes_are_seeded(self):
         self.assertEqual(ItemType.objects.count(), 4)
@@ -181,6 +219,26 @@ class StockFixtureMixin:
 
     def assert_no_mismatch(self):
         self.assertEqual(fetch_all("SELECT * FROM v_inventory_mismatch"), [])
+
+
+class LotNumberUniqueTests(StockFixtureMixin, TestCase):
+    def test_lot_number_is_unique_across_items(self):
+        other = Item.objects.create(
+            item_type_id="RAW", item_code="1000020", name="다른 원료", base_unit="kg"
+        )
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Lot.objects.create(
+                lot_number=self.lot.lot_number,
+                item=other,
+                lot_kind=LotKind.INCOMING,
+                status=LotStatus.QUARANTINE,
+            )
+
+    def test_status_is_quality_only(self):
+        for status in ["CONSUMED", "DISPOSED"]:
+            with self.subTest(status=status), self.assertRaises(IntegrityError):
+                with transaction.atomic():
+                    Lot.objects.filter(pk=self.lot.pk).update(status=status)
 
 
 class ModelMappingTests(StockFixtureMixin, TestCase):
@@ -510,6 +568,48 @@ class ReceivingTests(TestCase):
             row, (lot.lot_number, "가상원료상사", to_e6(50), "QUARANTINE", "COMPLETED")
         )
         self.assertEqual(fetch_all("SELECT * FROM v_inventory_mismatch"), [])
+
+    def test_judgment_with_receipt_is_applied_in_the_same_transaction(self):
+        passed = self.receive("k1", judgment="PASS").lot
+        failed = self.receive("k2", judgment="FAIL").lot
+        self.assertEqual((passed.status, failed.status), (LotStatus.AVAILABLE, LotStatus.REJECTED))
+        log = AuditLog.objects.get(table_name="lots", record_id=str(failed.pk))
+        self.assertEqual(log.before_json, {"status": "QUARANTINE"})
+        self.assertEqual(log.after_json["judgment"], "FAIL")
+        with self.assertRaises(ReceivingError):
+            self.receive("k3", judgment="CONDITIONAL")
+        self.assertEqual(Lot.objects.count(), 2)
+
+    def test_doc_view_covers_every_lot(self):
+        receipt = self.receive()
+        produced = Lot.objects.create(
+            lot_number="4000099-261009A",
+            item=Item.objects.create(
+                item_type_id="FINISHED", item_code="4000099", name="시험완제품", base_unit="개"
+            ),
+            lot_kind=LotKind.PRODUCED,
+            status=LotStatus.AVAILABLE,
+            manufactured_date=datetime.date(2026, 10, 9),
+        )
+        rows = {
+            row[0]: row[1:]
+            for row in fetch_all(
+                "SELECT lot_id, lot_kind, item_type_name, supplier_name, received_date,"
+                " receipt_status, subject_label FROM v_doc_incoming_lot"
+            )
+        }
+        self.assertEqual(rows[receipt.lot_id][:2], ("INCOMING", "원료"))
+        self.assertEqual(
+            rows[produced.pk],
+            (
+                "PRODUCED",
+                "완제품",
+                None,
+                None,
+                None,
+                "4000099 시험완제품 / 4000099-261009A / 2026-10-09",
+            ),
+        )
 
     def test_second_receipt_same_day_gets_next_letter(self):
         self.receive("k1")

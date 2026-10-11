@@ -3,8 +3,7 @@
     python backend/manage.py check_inventory
 
 1. inventory equals the sum of stock_movements per LOT (v_inventory_mismatch, I3)
-2. a closed LOT (DISPOSED / CONSUMED) holds no stock
-3. a cancelled receipt's LOT holds no stock
+2. a cancelled receipt's LOT holds no stock
 """
 
 from django.core.management.base import BaseCommand, CommandError
@@ -14,12 +13,6 @@ CHECKS = [
     (
         "재고 ≠ 수불 합계 (I3)",
         "SELECT lot_id, quantity_e6, movement_sum_e6 FROM v_inventory_mismatch",
-    ),
-    (
-        "종료 상태 LOT에 재고 있음",
-        """SELECT l.id, l.lot_number, l.status, inv.quantity_e6
-           FROM lots l JOIN inventory inv ON inv.lot_id = l.id
-           WHERE l.status IN ('DISPOSED', 'CONSUMED') AND inv.quantity_e6 > 0""",
     ),
     (
         "취소된 입고의 LOT에 재고 있음",

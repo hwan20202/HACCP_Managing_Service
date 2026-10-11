@@ -1,6 +1,6 @@
 """Production / inventory core models.
 
-The tables are created by sql/0001_core.sql (see migrations/0001_initial.py), not by
+The tables are created by sql/0001_core.sql and sql/0002_production.sql (see migrations/), not by
 Django. Every model here is managed=False: Django reads and writes the rows but never
 creates or alters the tables. Changing a table means a new SQL migration (rule S6).
 
@@ -64,7 +64,6 @@ class HoldSourceType(models.Model):
 class HoldDisposition(models.Model):
     code = models.TextField(primary_key=True)
     name = models.TextField()
-    lot_status_after = models.TextField(null=True, blank=True)
 
     class Meta:
         managed = False
@@ -142,15 +141,16 @@ class LotKind(models.TextChoices):
 
 
 class LotStatus(models.TextChoices):
+    """Quality judgment only. Whether stock is left is inventory.quantity_e6; how it ran out
+    (production use, return, disposal) is in stock_movements."""
+
     QUARANTINE = "QUARANTINE", "검사대기"
     AVAILABLE = "AVAILABLE", "사용가능"
-    CONSUMED = "CONSUMED", "소진"
     REJECTED = "REJECTED", "부적합"
-    DISPOSED = "DISPOSED", "폐기"
 
 
 class Lot(models.Model):
-    lot_number = models.TextField()
+    lot_number = models.TextField(unique=True)
     item = models.ForeignKey(Item, models.PROTECT, related_name="lots")
     lot_kind = models.TextField(choices=LotKind.choices)
     status = models.TextField(choices=LotStatus.choices)
@@ -279,7 +279,7 @@ class Inventory(models.Model):
 
 
 # ---------------------------------------------------------------------------
-# 5. Incoming receipts (C2: one receipt = one LOT)
+# 5. Incoming receipts (one receipt = one LOT)
 # ---------------------------------------------------------------------------
 
 
@@ -324,8 +324,8 @@ class LotHold(models.Model):
         db_column="source_type",
         related_name="holds",
     )
-    # Document-domain ids. No FK yet: decided with the document ERD (record PK, not version).
-    deviation_action_id = models.BigIntegerField(null=True, blank=True)
+    # document.document_id of the evidence document (record, not version). No FK: avoids a
+    # migration cycle with the document app (0001 header C6).
     source_document_id = models.BigIntegerField(null=True, blank=True)
     parent_hold = models.ForeignKey(
         "self", models.PROTECT, null=True, blank=True, related_name="propagated_holds"
@@ -361,22 +361,8 @@ class LotHold(models.Model):
 
 
 # ---------------------------------------------------------------------------
-# 7. Event inbox / audit log
+# 7. Audit log
 # ---------------------------------------------------------------------------
-
-
-class DomainEventInbox(models.Model):
-    event_id = models.BigIntegerField(primary_key=True)
-    event_code = models.TextField()
-    processed_at = KSTDateTimeField(db_default=LocalNow())
-    result = models.TextField(
-        choices=[("APPLIED", "APPLIED"), ("SKIPPED", "SKIPPED"), ("FAILED", "FAILED")]
-    )
-    error_message = models.TextField(null=True, blank=True)
-
-    class Meta:
-        managed = False
-        db_table = "domain_event_inbox"
 
 
 class AuditLog(models.Model):
@@ -388,12 +374,122 @@ class AuditLog(models.Model):
     before_json = models.JSONField(null=True, blank=True)
     after_json = models.JSONField(null=True, blank=True)
     reason = models.TextField(null=True, blank=True)
-    staff = models.ForeignKey(
-        Staff, models.PROTECT, null=True, blank=True, related_name="audit_logs"
-    )
-    source_event_id = models.BigIntegerField(null=True, blank=True)
+    staff = models.ForeignKey(Staff, models.PROTECT, related_name="audit_logs")
     occurred_at = KSTDateTimeField(db_default=LocalNow())
 
     class Meta:
         managed = False
         db_table = "audit_logs"
+
+
+# ---------------------------------------------------------------------------
+# 8. Production (sql/0002_production.sql)
+#    Usages and outputs are append-only (DB triggers); fix them by correcting the linked
+#    stock movement. Batches are never deleted: cancel instead.
+# ---------------------------------------------------------------------------
+
+
+class Bom(models.Model):
+    item = models.ForeignKey(Item, models.PROTECT, related_name="boms")
+    version = models.IntegerField()
+    base_quantity_e6 = models.BigIntegerField()
+    effective_from = models.DateField()
+    is_active = models.BooleanField(default=True)
+    notes = models.TextField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        Staff,
+        models.PROTECT,
+        db_column="created_by",
+        null=True,
+        blank=True,
+        related_name="boms_created",
+    )
+    created_at = KSTDateTimeField(db_default=LocalNow(), editable=False)
+
+    class Meta:
+        managed = False
+        db_table = "boms"
+
+
+class BomLine(models.Model):
+    bom = models.ForeignKey(Bom, models.PROTECT, related_name="lines")
+    line_no = models.IntegerField()
+    component_item = models.ForeignKey(Item, models.PROTECT, related_name="bom_usages")
+    quantity_e6 = models.BigIntegerField()
+    notes = models.TextField(null=True, blank=True)
+
+    class Meta:
+        managed = False
+        db_table = "bom_lines"
+
+
+class ProcessType(models.TextChoices):
+    MANUFACTURE = "MANUFACTURE", "제조"
+    PACKAGING = "PACKAGING", "포장"
+
+
+class BatchStatus(models.TextChoices):
+    PLANNED = "PLANNED", "계획"
+    IN_PROGRESS = "IN_PROGRESS", "진행"
+    COMPLETED = "COMPLETED", "완료"
+    CANCELLED = "CANCELLED", "취소"
+
+
+class ProductionBatch(models.Model):
+    batch_number = models.TextField(unique=True)
+    process_type = models.TextField(choices=ProcessType.choices)
+    item = models.ForeignKey(Item, models.PROTECT, related_name="production_batches")
+    bom = models.ForeignKey(
+        Bom, models.PROTECT, null=True, blank=True, related_name="production_batches"
+    )
+    status = models.TextField(choices=BatchStatus.choices)
+    planned_date = models.DateField(null=True, blank=True)
+    planned_quantity_e6 = models.BigIntegerField(null=True, blank=True)
+    manufactured_date = models.DateField(null=True, blank=True)
+    started_at = KSTDateTimeField(null=True, blank=True)
+    completed_at = KSTDateTimeField(null=True, blank=True)
+    staff = models.ForeignKey(Staff, models.PROTECT, related_name="production_batches")
+    notes = models.TextField(null=True, blank=True)
+    cancelled_at = KSTDateTimeField(null=True, blank=True)
+    cancel_reason = models.TextField(null=True, blank=True)
+    created_at = KSTDateTimeField(db_default=LocalNow(), editable=False)
+    # Refreshed by trigger trg_batches_updated_at on every UPDATE.
+    updated_at = KSTDateTimeField(db_default=LocalNow(), editable=False)
+
+    class Meta:
+        managed = False
+        db_table = "production_batches"
+
+    def __str__(self):
+        return self.batch_number
+
+
+class ProductionMaterialUsage(models.Model):
+    batch = models.ForeignKey(ProductionBatch, models.PROTECT, related_name="usages")
+    lot = models.ForeignKey(Lot, models.PROTECT, related_name="production_usages")
+    quantity_e6 = models.BigIntegerField()
+    stock_movement = models.OneToOneField(
+        StockMovement, models.PROTECT, related_name="production_usage"
+    )
+    bom_line = models.ForeignKey(
+        BomLine, models.PROTECT, null=True, blank=True, related_name="usages"
+    )
+    created_at = KSTDateTimeField(db_default=LocalNow(), editable=False)
+
+    class Meta:
+        managed = False
+        db_table = "production_material_usages"
+
+
+class ProductionOutput(models.Model):
+    batch = models.ForeignKey(ProductionBatch, models.PROTECT, related_name="outputs")
+    lot = models.ForeignKey(Lot, models.PROTECT, related_name="production_outputs")
+    quantity_e6 = models.BigIntegerField()
+    stock_movement = models.OneToOneField(
+        StockMovement, models.PROTECT, related_name="production_output"
+    )
+    created_at = KSTDateTimeField(db_default=LocalNow(), editable=False)
+
+    class Meta:
+        managed = False
+        db_table = "production_outputs"
