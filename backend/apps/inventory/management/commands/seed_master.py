@@ -76,9 +76,8 @@ class Command(BaseCommand):
                     if key in sources:
                         self.stdout.write(str(importer(sources[key])))
                 for rule in ensure_default_lot_rules():
-                    self.stdout.write(
-                        f"lot rule: created default {rule.lot_kind} rule '{rule.pattern}'"
-                    )
+                    target = f"{rule.lot_kind} {rule.item_type_id or ''}".strip()
+                    self.stdout.write(f"lot rule: created default {target} rule '{rule.pattern}'")
                 if options["dry_run"]:
                     transaction.set_rollback(True)
         except MasterImportError as error:

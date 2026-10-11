@@ -10,13 +10,13 @@
     {"supplier_code": "V002", "name": "가상포장산업"}
   ],
   "items": [
-    {"item_code": "1000001", "item_type": "RAW", "name": "가상원료A", "base_unit": "kg",
+    {"item_code": "1000001", "short_code": "AGA", "item_type": "RAW", "name": "가상원료A", "base_unit": "kg",
      "shelf_life_days": "365", "origin_country": "국산", "minimum_stock": "50"},
-    {"item_code": "1000002", "item_type": "RAW", "name": "가상원료B", "base_unit": "kg",
+    {"item_code": "1000002", "short_code": "AGB", "item_type": "RAW", "name": "가상원료B", "base_unit": "kg",
      "shelf_life_days": "180", "origin_country": "수입", "minimum_stock": "20.5"},
-    {"item_code": "1000003", "item_type": "RAW", "name": "가상부원료C", "base_unit": "g",
+    {"item_code": "1000003", "short_code": "AGC", "item_type": "RAW", "name": "가상부원료C", "base_unit": "g",
      "shelf_life_days": "730", "minimum_stock": "0"},
-    {"item_code": "2000001", "item_type": "PACKAGING", "name": "가상파우치", "base_unit": "장",
+    {"item_code": "2000001", "short_code": "CGP", "item_type": "PACKAGING", "name": "가상파우치", "base_unit": "장",
      "minimum_stock": "1000"},
     {"item_code": "4000001", "item_type": "FINISHED", "name": "가상완제품환", "base_unit": "개",
      "unit_weight_mg": "4000", "shelf_life_days": "730", "food_type": "기타가공품"}

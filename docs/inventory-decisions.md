@@ -1,6 +1,6 @@
 # 생산·수불(inventory) 결정 사항
 
-`backend/apps/inventory` 의 동작 기준을 모았습니다. **확정**은 합의된 것, **가정**은 합의 전이지만 기본값으로 구현해 둔 것, **대기**는 결정이 나야 진행할 수 있는 것입니다. 가정이 바뀌면 "바꿀 곳"만 고치면 되도록 만들어 두었습니다. 진행 현황은 [inventory-roadmap.md](inventory-roadmap.md).
+`backend/apps/inventory` 의 동작 기준을 모았습니다. **확정**은 합의된 것, **가정**은 합의 전이지만 기본값으로 구현해 둔 것, **대기**는 결정이 나야 진행할 수 있는 것입니다. 가정이 바뀌면 "바꿀 곳"만 고치면 되도록 만들어 두었습니다. 진행 현황은 [inventory-roadmap.md](inventory-roadmap.md), 문서 앱 연동 명세는 [inventory-document-interface.md](inventory-document-interface.md).
 
 ## 확정
 
@@ -11,19 +11,18 @@
 | HOLD 근거 문서 | `lot_holds.source_document_id` = 문서 `document.document_id` (버전·스냅샷 아님). 마이그레이션 순환을 피해 FK 미설정. 최신 내용·승인본은 문서 쪽 메소드로 조회 | 질의 2, 10/11 ERD |
 | 개선조치 | 문서 영역 내부(`deviation_action`)에서만 관리. 수불은 문서 참조까지만 → `lot_holds.deviation_action_id` 삭제 | 10/11 ERD |
 | 문서 ↔ 업무 대상 | 문서 쪽 `document_ref` 테이블이 `lot_id`·`production_batch_id`·`item_id` 를 종류별 FK 로 가짐 (`subject_type`/`subject_id` 방식 폐기) | 10/11 ERD |
-| LOT 번호 유일성 | `lots.lot_number` 전체 UNIQUE (이전: 품목 안에서만). 채번 규칙에 품목코드가 들어가 실제 데이터와 같고, LOT 번호만으로 찾을 수 있어야 함 (라벨·회수). 기초재고 이관 시 품목 간 중복 번호는 품목코드를 붙여 구분 | 10/12 |
+| LOT 번호 형식 | BOM v4 멘토안 채택. 원료·포장재 = LOT 약어 + 입고일 (`AHN261005`), 반제품 = LOT 약어 + 제조일 (`BNY261007`), 완제품 = 제조일 + 근무조 (`261011A`, A 주간 / B 야간 / C 오후, 완제품코드와 함께 읽음). LOT 약어는 `items.short_code` (A** 원료 / B** 반제품 / C** 포장재), 근무조는 `production_batches.shift` | 10/12, BOM v4 (10/5 멘토 피드백) |
+| LOT 번호 유일성 | 품목 안에서만 UNIQUE (`UNIQUE(item_id, lot_number)`). 완제품 LOT 은 제품이 달라도 같은 날·근무조면 번호가 같음 → LOT 식별은 `lots.id`, 사람이 읽을 때는 품목코드 + LOT 번호. (10/12 오전 전체 UNIQUE 로 바꿨다가 멘토안 채택으로 되돌림) | 10/12 |
 | LOT 상태 | 품질 판정만: QUARANTINE / AVAILABLE / REJECTED. 소진·폐기(CONSUMED / DISPOSED) 삭제 — 재고 유무는 `inventory`, 비운 경위는 수불 이동이 나타냄 | 10/12 |
 | 문서용 뷰 형식 | 이름·행 범위는 문서 쪽 요청에 맞추고 수량·단위·코드는 수불 규칙 유지. `v_doc_incoming_lot` 은 모든 LOT (입고 정보는 LEFT JOIN, `lot_kind`·`item_id`·`item_type_name`·`origin_country` 추가). `v_doc_batch` 는 `production_batch_id`·`status` 로 이름 변경, 수량은 `output_quantity_e6` + `base_unit` (kg 아님) | 10/12 |
 | `domain_event_inbox` | 삭제 (문서 이벤트를 받지 않음). `audit_logs.source_event_id` 도 삭제, `staff_id` 필수 | 10/11 ERD |
 | 육안검사 판정 | PASS / FAIL 두 가지. CONDITIONAL 은 이번 범위 제외 | 질의 3 |
 | 로그인 | MVP 범위 아님. 처리자는 요청 본문의 `staff_id` 로 받음 | 팀 결정 |
-| 입고 LOT 번호 | `{item_code}-{received:yyMMdd}{seq:A}`, 같은 품목·날짜 안에서 A→Z→AA→AB… | 팀 결정 |
 | 기준정보 | 저장소에는 가상 샘플만. 실제 자료는 `data/` 아래 CSV 로 `seed_master` | CONTRIBUTING |
 | 생산 테이블 이름 | 생산지시가 아닌 제조배치 중심 `production_batches` (다음 마이그레이션) | 팀 결정 |
 | 입고 LOT 분리 | 같은 날 같은 원료라도 입고 건별 별도 LOT 허용 (성적서가 다를 수 있음) | 10/7 현업 |
 | 원산지 | 원산지가 다르면 별도 품목코드 | 10/7 현업 |
 | 부적합 원료 | 육안검사 FAIL 은 전량 반품 (수불 기록 방식은 대기) | 10/7 현업 |
-| 생산 LOT 번호 | 품목코드 + 제조일, 같은 날 여러 건이면 A/B | 9/30 현업 |
 | 생산 기록 시점 | 작업 종료 후 사후 입력 중심 (실시간 MES 아님) | 9/30 현업 |
 | BOM vs 실제 투입 | 표준 소요량과 실제 투입량은 별도 기록 | 9/30 현업 |
 | 다단계 BOM | 원료 → 반제품 → 완제품. 반제품도 판매·재투입 가능, 품목 유형으로 기능 제한 안 함 | 10/7 멘토링 |
@@ -53,6 +52,7 @@
 | 정정 일시 | 원 기록과 같은 일시 (수불대장에서 그 시점부터 바로잡힘) | `movements.correct_movement` |
 | 소급 출고 | 그 시점 이후 잔량이 한 번이라도 음수가 되면 거부 | `movements._check_outflow` |
 | 기초재고 | 반제품·완제품은 기존 LOT 번호 필수. 원료·포장재는 비우면 입고 규칙으로 채번 | `movements.record_opening_balance` |
+| LOT 약어 없는 품목 | 원료·포장재·반제품은 `short_code` 가 없으면 입고·채번 거부 (기준정보에 약어 필수) | `lot_numbers.render` |
 | 수불대장 조회 기간 | 최대 1년 | `api.ledger_params` |
 | 사용 가능 재고 | 상태 AVAILABLE 이고 미해제 HOLD 없음 (I5) | `stock.py` |
 
@@ -67,8 +67,8 @@
 | 수불대장 결재·스냅샷 | 문서 쪽 담당 | 조회·CSV 만 제공 |
 | BOM·제조배치·투입 서비스, CCP | 생산 서비스 개발 | 스키마 0002 확정·마이그레이션 연결 완료, 서비스 미착수 |
 | 화면 | 기존 시제품 활용 여부 | API 까지 완료 |
-| LOT 번호 형식 | 세 안 중 결정. ① 현재 기본값 `{item_code}-yyMMdd{A}` ② BOM v4(멘토안): 원료 `약어+입고일`, 완제품 `제조일+근무조(A 주간/B 야간/C 오후)` ③ 실제 생산일지: `yyyyMMdd-NNN` | 규칙은 `lot_number_rules` 데이터. ②는 `{short_code}`·`{shift}` 토큰 추가 필요, ③은 현재 토큰으로 가능 |
-| 같은 날 같은 품목 두 번 | 입고·생산 모두 구분 방법(순번 `-1`/`-2`, 근무조 등). `lot_number` 전체 UNIQUE 라 구분자가 없으면 두 번째 등록이 거부됨 (품목코드 없는 형식 ③ 이면 품목 간에도 순번 공유) | 현재는 `{seq}` 로 항상 구분 |
+| 같은 날 같은 품목 두 번 (BOM v4 확인필요 7·22·23) | PM 확인: 순번을 붙일지, 근무조로 나눌지 | 가정으로 구현: 첫 번째는 그대로, 두 번째부터 `-2`, `-3` (`{seq:-N}`). 이미 라벨이 붙은 첫 LOT 을 바꿀 수 없어서 뒤에만 붙임 |
+| 완제품 근무조 운영 (BOM v4 확인필요 17) | 바이오닷 근무조(주간·야간·오후) 운영 방식 확인 | 규칙 `{date:yyMMdd}{shift}{seq:-N}` 로 구현, 배치에 `shift` 컬럼 |
 | 품목코드 재정리 | 7자리, 맨 앞 1 원료·2 포장재·3 반제품·4 완제품. 기존 4코드 중 반제품은 3코드로, 완제품 4코드 새로 받음 | 코드는 TEXT 로 저장만 함. 유형은 `item_type` 열이 결정(코드 앞자리와 무관) |
 | 반제품·완제품 겸용 | 같은 배치를 3코드(투입용)·4코드(판매용)로 나눌 때 LOT 연결 방법 | 0002 `production_outputs` 1:N 으로 한 배치에서 두 품목 산출 가능 — 확정 필요 |
 | 원료수불대장 출력 | 기존 양식(`data/reference/slack-2026-10/원료수불대장.xlsx`): 원료별 시트, 입고일·입고처·입고(kg)·출고일자·출고(kg)·재고(kg)·투입 제품명·비고·육안 | `stock_ledger()` 로 계산 가능. 투입 제품명은 0002 생산 투입 연결 후, 양식 맞춘 출력은 화면 작업 때 |
@@ -103,3 +103,4 @@
 | `manage.py seed_master --sample` | 가상 기준정보 + 기본 입고·생산 LOT 규칙 |
 | `manage.py seed_master --items data/import/items.csv --encoding cp949 [--dry-run]` | 실제 기준정보 CSV 가져오기 |
 | `manage.py check_inventory` | 재고·수불 정합성 점검 (문제 있으면 오류 종료) |
+| `manage.py show_view [뷰이름] [--limit N] [--sql]` | 조회 뷰(`v_*`) 목록·컬럼·데이터·정의 보기 (문서 연동 확인용) |

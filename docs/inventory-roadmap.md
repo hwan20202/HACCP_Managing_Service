@@ -16,7 +16,9 @@
 | 10/10 | `38ef7ab` | 판정 반영, 수불 변경 감지, 생산 LOT 채번, 문서 연동 훅 정리, 개발 계획·결정 사항 문서 재정리 |
 | 10/10 | `fd114a1` | 개발 계획 문서에 커밋 번호 기록 |
 | 10/10 | `807207e` | 0002 생산 스키마 초안 + 검증 테스트 |
-| 10/12 | (미커밋) | 10/11 ERD 반영: 0001 수정(LOT 번호 전체 UNIQUE, LOT 상태 3개, `deviation_action_id`·`domain_event_inbox` 삭제, 문서 뷰), 0002 확정·마이그레이션 연결, 입고 시 판정 동시 반영 |
+| 10/12 | `b6a1fa2` | 10/11 ERD 반영: 0001 수정(LOT 번호 전체 UNIQUE, LOT 상태 3개, `deviation_action_id`·`domain_event_inbox` 삭제, 문서 뷰), 0002 확정·마이그레이션 연결, 입고 시 판정 동시 반영 |
+| 10/12 | (다음 커밋) | 문서 연동 인터페이스 문서 [inventory-document-interface.md](inventory-document-interface.md), 뷰 확인 명령 `show_view` |
+| 10/12 | (다음 커밋) | LOT 번호 BOM v4 멘토안 채택: `{short_code}`·`{shift}`·`{seq:-N}` 토큰, 기본 규칙 3개, `UNIQUE(item_id, lot_number)` 로 되돌림, `production_batches.shift` |
 
 ## 한눈에 보기
 
@@ -53,8 +55,8 @@
 |---|---|---|
 | 담당자·공급처·품목 API (목록·등록·수정) | ✅ `cfbdd19` | |
 | `seed_master` (가상 샘플, CSV, dry-run) | ✅ `396face` | |
-| 입고 LOT 채번 (품목코드 + 입고일 + A/B…) | ✅ `396face` | 9/30 현업 기준과 일치 |
-| 생산 LOT 채번 (품목코드 + 제조일 + A/B…) | ✅ `38ef7ab` | `{date:…}` 토큰, 기본 PRODUCED 규칙 |
+| 입고 LOT 채번 (LOT 약어 + 입고일, 두 번째부터 -2) | ✅ 10/12 | BOM v4 멘토안. 품목에 `short_code` 필요 |
+| 생산 LOT 채번 (반제품 LOT 약어 + 제조일, 완제품 제조일 + 근무조) | ✅ 10/12 | `next_lot_number(..., shift=)`. 생산 서비스에서 배치 `shift` 로 호출 |
 | BOM 테이블·서비스 (다단계, 버전, 표준 소요량) | 🟢 0002 | 구조는 확정. 데이터는 데이터팀 정리 후 |
 | 실제 기준정보 가져오기 | ⛔ | 기타가공품 포장재 코드·판매 규격 데이터 (데이터팀) |
 
@@ -118,6 +120,7 @@
 | 승인 이후 수불 변경 감지 + API | ✅ `38ef7ab` | `stock_ledger_changes_since()` |
 | 배치 대상 문서 연결 (생산일지·CCP 일지) | ✅ 10/11 | 문서 쪽 `document_ref.production_batch_id` + `process_code` |
 | 배치 정보 읽기 창구 `v_doc_batch` | ✅ 10/12 | `production_batch_id`·`status`, 수량 `_e6` + `base_unit` |
+| 연동 명세 문서, 뷰 확인 명령 `show_view` | ✅ 10/12 | [inventory-document-interface.md](inventory-document-interface.md) |
 
 ## 9. 화면
 
@@ -159,7 +162,7 @@
 | 9 | `lot_number_rules` 토큰 | `{received:…}` | ✅ `{date:…}` (이전 반영) |
 | 10 | `items` | 포장 규격 | 스키마 변경 없음 |
 | 11 | `stock_movements` 원천 연결 | 투입·산출 배치 | ✅ 0002 투입·산출 테이블 |
-| 12 | `lots.lot_number` | 품목 안에서만 UNIQUE | ✅ 전체 UNIQUE (10/12) |
+| 12 | `lots.lot_number` | UNIQUE 범위 | ✅ 품목 안에서 UNIQUE 유지 (멘토안 완제품 LOT 은 제품 간 중복). 오전에 전체 UNIQUE 로 바꿨다가 되돌림 |
 | 13 | `lots.status` | CONSUMED / DISPOSED | ✅ 삭제, 품질 판정 3개만 (10/12). `hold_dispositions.lot_status_after` 도 삭제 |
 | 14 | `lot_holds.deviation_action_id` | 개선조치 참조 | ✅ 삭제 (개선조치는 문서 내부, 10/11) |
 | 15 | `v_doc_incoming_lot` | 문서 쪽 요청 컬럼 | ✅ 모든 LOT, `lot_kind`·`item_id`·`item_type_name`·`origin_country` 추가 |
@@ -184,7 +187,7 @@
 | 1 | 배치 HOLD 를 어디서 관리하고, 산출 LOT 로 어떻게 전파하나 | ⛔ 미결. 0002 생성을 막지 않음 → 정해지면 새 마이그레이션 |
 | 2 | 개선조치 테이블 이름·PK, HOLD 해제와 개선조치 완료의 관계 | ✅ 개선조치는 문서 내부(`deviation_action`), 수불은 문서 참조까지만 → `deviation_action_id` 삭제. HOLD 해제 조건은 HOLD 서비스 때 |
 | 3 | 문서 대상에 `BATCH` 추가, 배치 없는 독립 CCP 점검의 대상 | ✅ 문서 쪽 `document_ref` (`production_batch_id` + `process_code`) |
-| 4 | 포장 시 완제품 LOT 번호를 반제품에서 이어받나, 새로 발급하나 | 미결 (스키마 영향 없음) |
+| 4 | 포장 시 완제품 LOT 번호를 반제품에서 이어받나, 새로 발급하나 | ✅ 멘토안: 완제품은 제조일 + 근무조로 새로 발급. 제조일을 포장일로 볼지 반제품 제조일로 볼지는 미결 |
 | 5 | 원료 LOT 은 입고일 기준으로 최종 확정 (소비기한 기준 안 배제) | ✅ 입고일 기준 유지 (현재 구조) |
 | 6 | 결재 후 과거 수불 정정 (6개월 전 수정 → 이후 대장 전부 재상신 문제) | ⛔ 검토 중. 제안: 승인된 달은 소급 이동 금지, 정정 이동으로만 (문서 쪽 월별 승인 여부 함수 필요) |
 

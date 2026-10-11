@@ -150,7 +150,9 @@ class LotStatus(models.TextChoices):
 
 
 class Lot(models.Model):
-    lot_number = models.TextField(unique=True)
+    # Unique per item (UNIQUE(item_id, lot_number)): finished LOTs (제조일 + 근무조) can repeat
+    # across products. Identify a LOT by id, or by item + lot_number.
+    lot_number = models.TextField()
     item = models.ForeignKey(Item, models.PROTECT, related_name="lots")
     lot_kind = models.TextField(choices=LotKind.choices)
     status = models.TextField(choices=LotStatus.choices)
@@ -163,6 +165,7 @@ class Lot(models.Model):
     class Meta:
         managed = False
         db_table = "lots"
+        unique_together = [("item", "lot_number")]
 
     def __str__(self):
         return self.lot_number
@@ -435,6 +438,12 @@ class BatchStatus(models.TextChoices):
     CANCELLED = "CANCELLED", "취소"
 
 
+class Shift(models.TextChoices):
+    DAY = "A", "주간"
+    NIGHT = "B", "야간"
+    AFTERNOON = "C", "오후"
+
+
 class ProductionBatch(models.Model):
     batch_number = models.TextField(unique=True)
     process_type = models.TextField(choices=ProcessType.choices)
@@ -446,6 +455,7 @@ class ProductionBatch(models.Model):
     planned_date = models.DateField(null=True, blank=True)
     planned_quantity_e6 = models.BigIntegerField(null=True, blank=True)
     manufactured_date = models.DateField(null=True, blank=True)
+    shift = models.TextField(choices=Shift.choices, null=True, blank=True)
     started_at = KSTDateTimeField(null=True, blank=True)
     completed_at = KSTDateTimeField(null=True, blank=True)
     staff = models.ForeignKey(Staff, models.PROTECT, related_name="production_batches")

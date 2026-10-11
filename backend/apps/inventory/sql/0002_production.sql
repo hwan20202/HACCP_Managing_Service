@@ -20,7 +20,9 @@
    P7. 투입·산출은 기존 수불 이동(PRODUCTION_USE / PRODUCTION_OUTPUT) 을 가리킨다 (입고와 같은 방식)
        stock_movements 는 손대지 않는다. 투입·산출 행도 append-only, 잘못된 기록은 수불 정정(CORRECTION)
        → 실제 수량 = 원 수량 − 정정 합계 (뷰에서 계산)
-   P8. 생산 LOT 번호: 품목코드 + 제조일 + A/B (기본 규칙 {item_code}-{date:yyMMdd}{seq:A}, 코드에 있음)
+   P8. 생산 LOT 번호 (BOM v4 멘토안, 10/12): 반제품 = LOT 약어 + 제조일 (BNY261007),
+       완제품 = 제조일 + 근무조 (261011A, 완제품코드와 함께 읽음). 같은 날 같은 품목이 또 생기면 -2, -3
+       → 완제품 LOT 은 배치의 shift 로 채번
 
    [10/11 ERD 협의로 정해진 것]
    D1. 문서 ↔ 배치 연결은 문서 쪽 document_ref.production_batch_id (+ process_code) 가 이 테이블을 FK 로 참조
@@ -115,6 +117,7 @@ CREATE TABLE production_batches (
     planned_date         TEXT    CHECK (planned_date IS NULL OR planned_date IS date(planned_date)),
     planned_quantity_e6  INTEGER CHECK (planned_quantity_e6 IS NULL OR planned_quantity_e6 > 0),
     manufactured_date    TEXT    CHECK (manufactured_date IS NULL OR manufactured_date IS date(manufactured_date)),   -- 생산 LOT 채번 기준일
+    shift                TEXT    CHECK (shift IS NULL OR shift IN ('A', 'B', 'C')),   -- 근무조 A 주간 / B 야간 / C 오후. 완제품 LOT 채번에 사용
     started_at           TEXT    CHECK (started_at   IS NULL OR started_at   IS datetime(started_at)),
     completed_at         TEXT    CHECK (completed_at IS NULL OR completed_at IS datetime(completed_at)),
     staff_id             INTEGER NOT NULL REFERENCES staff(id),        -- 작업 책임자 / 기록자
@@ -322,6 +325,7 @@ SELECT b.id                        AS production_batch_id,
        b.batch_number,
        b.process_type,
        b.status,
+       b.shift,
        i.id                        AS item_id,
        i.item_code,
        i.name                      AS item_name,

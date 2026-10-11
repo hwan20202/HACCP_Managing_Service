@@ -207,8 +207,8 @@ def record_opening_balance(
             if kind != LotKind.INCOMING:
                 raise InventoryError("반제품·완제품의 기초재고는 기존 LOT 번호를 입력하세요.")
             lot_number = next_lot_number(lot_kind=kind, item=item, base_date=when.date())
-        if Lot.objects.filter(lot_number=lot_number).exists():
-            raise InventoryError(f"이미 있는 LOT 번호입니다: {lot_number}")
+        if Lot.objects.filter(item=item, lot_number=lot_number).exists():
+            raise InventoryError(f"이미 있는 LOT 번호입니다: {item.item_code} / {lot_number}")
         lot = Lot.objects.create(
             lot_number=lot_number,
             item=item,

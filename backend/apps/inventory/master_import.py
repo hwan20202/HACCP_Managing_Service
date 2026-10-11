@@ -22,8 +22,10 @@ from django.db import IntegrityError, transaction
 from .models import Item, ItemType, LotKind, LotNumberRule, Staff, Supplier
 from .quantity import to_e6
 
-DEFAULT_INCOMING_PATTERN = "{item_code}-{received:yyMMdd}{seq:A}"  # 품목코드 + 입고일 (9/30)
-DEFAULT_PRODUCED_PATTERN = "{item_code}-{date:yyMMdd}{seq:A}"  # 품목코드 + 제조일 (9/30)
+# BOM v4 멘토안 (10/12 채택). 같은 날 같은 품목이 또 생기면 -2, -3 (가정)
+DEFAULT_INCOMING_PATTERN = "{short_code}{date:yyMMdd}{seq:-N}"  # LOT 약어 + 입고일
+DEFAULT_PRODUCED_PATTERN = "{short_code}{date:yyMMdd}{seq:-N}"  # LOT 약어 + 제조일 (반제품)
+DEFAULT_FINISHED_PATTERN = "{date:yyMMdd}{shift}{seq:-N}"  # 제조일 + 근무조 (완제품)
 DEFAULT_RULE_EFFECTIVE_FROM = datetime.date(2026, 1, 1)
 
 _TRUE = {"1", "y", "yes", "true", "t", "사용"}
@@ -179,19 +181,27 @@ def import_items(rows):
 
 
 def ensure_default_lot_rules():
-    """Create a default rule for each LOT kind that has no active rule. Returns the new rules."""
+    """Create each default rule whose (kind, item type) has no active rule. Returns new rules."""
     defaults = [
-        (LotKind.INCOMING, DEFAULT_INCOMING_PATTERN, "기본 입고 LOT 규칙 (seed_master 생성)"),
-        (LotKind.PRODUCED, DEFAULT_PRODUCED_PATTERN, "기본 생산 LOT 규칙 (seed_master 생성)"),
+        (LotKind.INCOMING, None, DEFAULT_INCOMING_PATTERN, "기본 입고 LOT 규칙 (seed_master 생성)"),
+        (LotKind.PRODUCED, None, DEFAULT_PRODUCED_PATTERN, "기본 생산 LOT 규칙 (seed_master 생성)"),
+        (
+            LotKind.PRODUCED,
+            "FINISHED",
+            DEFAULT_FINISHED_PATTERN,
+            "완제품 LOT 규칙: 제조일 + 근무조 (seed_master 생성)",
+        ),
     ]
     created = []
-    for kind, pattern, notes in defaults:
-        if LotNumberRule.objects.filter(lot_kind=kind, is_active=True).exists():
+    for kind, item_type, pattern, notes in defaults:
+        if LotNumberRule.objects.filter(
+            lot_kind=kind, item_type_id=item_type, is_active=True
+        ).exists():
             continue
         created.append(
             LotNumberRule.objects.create(
                 lot_kind=kind,
-                item_type=None,
+                item_type_id=item_type,
                 pattern=pattern,
                 effective_from=DEFAULT_RULE_EFFECTIVE_FROM,
                 notes=notes,

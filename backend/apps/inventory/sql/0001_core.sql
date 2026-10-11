@@ -39,7 +39,7 @@
        (문서 쪽 domain_event 는 외부 알림용 Outbox, 생산 쪽은 쓰지 않음)
    C2. 문서 ↔ 업무 대상 연결은 문서 쪽 document_ref 테이블이 종류별 FK 로 가진다
          lot_id → lots.id   production_batch_id → production_batches.id (0002)   item_id → items.id
-       LOT 은 lots.id 로 식별. lot_number 도 전체에서 UNIQUE
+       LOT 은 lots.id 로 식별. lot_number 는 품목 안에서만 UNIQUE (완제품 LOT 은 완제품코드와 함께 읽음)
    C3. 입고 육안검사 판정: PASS / FAIL 두 가지
          입고 등록 시 판정이 있으면 같은 트랜잭션에서 PASS → AVAILABLE / FAIL → REJECTED
          판정 미확정이면 QUARANTINE 으로 저장, 확정(육안검사일지 작성완료) 시 문서 앱이 judgment.apply_incoming_judgment() 호출
@@ -147,7 +147,7 @@ CREATE TABLE items (
     id                INTEGER PRIMARY KEY,
     item_type         TEXT    NOT NULL REFERENCES item_types(code),
     item_code         TEXT    NOT NULL UNIQUE,          -- 1·2·3·4코드
-    short_code        TEXT    UNIQUE,                   -- 약어(ABY 등). 용도 미결
+    short_code        TEXT    UNIQUE,                   -- LOT 약어 (A** 원료, B** 반제품, C** 포장재). 원료·반제품·포장재 LOT 앞자리
     name              TEXT    NOT NULL,
     base_unit         TEXT    NOT NULL,                 -- kg / g / 개 / 장 …
     unit_weight_mg    INTEGER CHECK (unit_weight_mg IS NULL OR unit_weight_mg > 0),   -- 1 base_unit 표준 중량. 환 4g = 4000
@@ -168,24 +168,31 @@ CREATE INDEX ix_items_type ON items (item_type);
 
 CREATE TABLE lots (
     id                 INTEGER PRIMARY KEY,
-    lot_number         TEXT    NOT NULL UNIQUE,         -- 전체에서 유일 (채번 규칙에 품목코드 포함)
+    lot_number         TEXT    NOT NULL,
     item_id            INTEGER NOT NULL REFERENCES items(id),
     lot_kind           TEXT    NOT NULL CHECK (lot_kind IN ('INCOMING', 'PRODUCED')),
     status             TEXT    NOT NULL CHECK (status IN ('QUARANTINE', 'AVAILABLE', 'REJECTED')),   -- 품질 판정만 (머리말 [LOT 상태])
     manufactured_date  TEXT    CHECK (manufactured_date IS NULL OR manufactured_date IS date(manufactured_date)),
     expiration_date    TEXT    CHECK (expiration_date   IS NULL OR expiration_date   IS date(expiration_date)),
     created_at         TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
-    updated_at         TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+    updated_at         TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    UNIQUE (item_id, lot_number)    -- 품목 안에서 유일. 완제품 LOT(제조일+근무조)은 제품끼리 같을 수 있음
 ) STRICT;
 
+CREATE INDEX ix_lots_number      ON lots (lot_number);
 CREATE INDEX ix_lots_item_status ON lots (item_id, status);
 CREATE INDEX ix_lots_fefo        ON lots (item_id, expiration_date);
 
+/* LOT 번호 규칙 (BOM v4 멘토안, 10/12 채택. 기본 규칙은 seed_master 가 넣음 — apps/inventory/lot_numbers.py)
+     원료·포장재  {short_code}{date:yyMMdd}{seq:-N}   AHN261005    LOT 약어 + 입고일
+     반제품       {short_code}{date:yyMMdd}{seq:-N}   BNY261007    LOT 약어 + 제조일
+     완제품       {date:yyMMdd}{shift}{seq:-N}        261011A      제조일 + 근무조 (A 주간 / B 야간 / C 오후)
+   같은 날 같은 품목이 또 생기면 끝에 -2, -3 (가정). LOT 약어는 items.short_code */
 CREATE TABLE lot_number_rules (
     id              INTEGER PRIMARY KEY,
     lot_kind        TEXT    NOT NULL CHECK (lot_kind IN ('INCOMING', 'PRODUCED')),
     item_type       TEXT    REFERENCES item_types(code),
-    pattern         TEXT    NOT NULL,                   -- 예) {item_code}-{received:yyMMdd}{seq:A}
+    pattern         TEXT    NOT NULL,                   -- 예) {short_code}{date:yyMMdd}{seq:-N}
     effective_from  TEXT    NOT NULL CHECK (effective_from IS date(effective_from)),
     is_active       INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
     notes           TEXT

@@ -118,6 +118,14 @@ class Migration(migrations.Migration):
                 ("planned_quantity_e6", models.BigIntegerField(blank=True, null=True)),
                 ("manufactured_date", models.DateField(blank=True, null=True)),
                 (
+                    "shift",
+                    models.TextField(
+                        blank=True,
+                        choices=[("A", "주간"), ("B", "야간"), ("C", "오후")],
+                        null=True,
+                    ),
+                ),
+                (
                     "started_at",
                     apps.inventory.fields.KSTDateTimeField(blank=True, null=True),
                 ),

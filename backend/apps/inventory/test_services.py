@@ -100,7 +100,7 @@ class OpeningBalanceTests(ServiceTestCase):
 
     def test_blank_lot_number_uses_incoming_rule(self):
         lot = self.opening(self.raw_a, "1", "o1").lot
-        self.assertEqual(lot.lot_number, f"1000001-{self.day1:%y%m%d}A")
+        self.assertEqual(lot.lot_number, f"AGA{self.day1:%y%m%d}")
 
     def test_finished_goods_need_lot_number(self):
         with self.assertRaises(InventoryError):
@@ -108,10 +108,11 @@ class OpeningBalanceTests(ServiceTestCase):
         lot = self.opening(self.finished, "10", "o2", lot_number="F-001").lot
         self.assertEqual(lot.lot_kind, "PRODUCED")
 
-    def test_lot_number_taken_by_another_item_is_rejected(self):
+    def test_lot_number_is_per_item(self):
         self.opening(self.raw_a, "5", "o1", lot_number="OLD-001")
-        with self.assertRaises(InventoryError):
-            self.opening(self.raw_b, "5", "o2", lot_number="OLD-001")
+        self.assertEqual(
+            self.opening(self.raw_b, "5", "o2", lot_number="OLD-001").lot.item, self.raw_b
+        )
 
     def test_duplicate_lot_and_replay(self):
         first = self.opening(self.raw_a, "5", "o1", lot_number="OLD-001")
@@ -448,6 +449,25 @@ class CheckInventoryCommandTests(ServiceTestCase):
         )
         with self.assertRaises(CommandError):
             call_command("check_inventory", stdout=StringIO())
+
+
+class ShowViewCommandTests(ServiceTestCase):
+    def test_lists_views_and_shows_rows(self):
+        self.receive(self.raw_a, "5", self.day2, "r1")
+        out = StringIO()
+        call_command("show_view", stdout=out)
+        self.assertIn("v_doc_batch", out.getvalue().split())
+        out = StringIO()
+        call_command("show_view", "v_doc_incoming_lot", "--limit", "1", stdout=out)
+        self.assertIn("receipt_status", out.getvalue())
+        self.assertIn("[1]", out.getvalue())
+        out = StringIO()
+        call_command("show_view", "v_doc_batch", "--sql", stdout=out)
+        self.assertIn("CREATE VIEW v_doc_batch", out.getvalue())
+
+    def test_rejects_tables(self):
+        with self.assertRaises(CommandError):
+            call_command("show_view", "lots", stdout=StringIO())
 
 
 class LedgerChangeTests(ServiceTestCase):

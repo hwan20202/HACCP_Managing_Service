@@ -136,7 +136,7 @@ class Migration(migrations.Migration):
                         verbose_name="ID",
                     ),
                 ),
-                ("lot_number", models.TextField(unique=True)),
+                ("lot_number", models.TextField()),
                 (
                     "lot_kind",
                     models.TextField(

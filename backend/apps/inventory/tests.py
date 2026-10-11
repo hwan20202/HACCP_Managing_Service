@@ -222,17 +222,14 @@ class StockFixtureMixin:
 
 
 class LotNumberUniqueTests(StockFixtureMixin, TestCase):
-    def test_lot_number_is_unique_across_items(self):
+    def test_lot_number_is_unique_per_item(self):
         other = Item.objects.create(
             item_type_id="RAW", item_code="1000020", name="다른 원료", base_unit="kg"
         )
+        values = {"lot_kind": LotKind.INCOMING, "status": LotStatus.QUARANTINE}
+        Lot.objects.create(lot_number=self.lot.lot_number, item=other, **values)
         with self.assertRaises(IntegrityError), transaction.atomic():
-            Lot.objects.create(
-                lot_number=self.lot.lot_number,
-                item=other,
-                lot_kind=LotKind.INCOMING,
-                status=LotStatus.QUARANTINE,
-            )
+            Lot.objects.create(lot_number=self.lot.lot_number, item=self.item, **values)
 
     def test_status_is_quality_only(self):
         for status in ["CONSUMED", "DISPOSED"]:
@@ -393,36 +390,47 @@ class LotNumberTests(TestCase):
     def setUpTestData(cls):
         ensure_default_lot_rules()
         cls.item = Item.objects.create(
-            item_type_id="RAW", item_code="1000019", name="테스트 원료", base_unit="kg"
+            item_type_id="RAW",
+            item_code="1000019",
+            short_code="ATS",
+            name="테스트 원료",
+            base_unit="kg",
         )
         cls.day = datetime.date(2026, 10, 9)
 
-    def draw(self, item=None, day=None):
+    def draw(self, item=None, day=None, kind=LotKind.INCOMING, shift=None):
         return next_lot_number(
-            lot_kind=LotKind.INCOMING, item=item or self.item, base_date=day or self.day
+            lot_kind=kind, item=item or self.item, base_date=day or self.day, shift=shift
         )
 
-    def test_sequence_per_item_and_date(self):
-        self.assertEqual(self.draw(), "1000019-261009A")
-        self.assertEqual(self.draw(), "1000019-261009B")
-        self.assertEqual(self.draw(day=datetime.date(2026, 10, 10)), "1000019-261010A")
+    def item_of(self, item_type, code, short_code=None):
+        return Item.objects.create(
+            item_type_id=item_type,
+            item_code=code,
+            short_code=short_code,
+            name=f"테스트 {code}",
+            base_unit="개",
+        )
+
+    def test_incoming_is_short_code_and_date_with_suffix_from_the_second(self):
+        self.assertEqual(self.draw(), "ATS261009")
+        self.assertEqual(self.draw(), "ATS261009-2")
+        self.assertEqual(self.draw(), "ATS261009-3")
+        self.assertEqual(self.draw(day=datetime.date(2026, 10, 10)), "ATS261010")
         key = fetch_one(
-            "SELECT current_seq FROM lot_number_sequences WHERE seq_key = %s", ["1000019-261009"]
+            "SELECT current_seq FROM lot_number_sequences WHERE seq_key = %s",
+            ["1000019:ATS261009"],
         )
-        self.assertEqual(key[0], 2)
-
-    def test_goes_past_z(self):
-        numbers = [self.draw() for _ in range(28)]
-        self.assertEqual(numbers[25:], ["1000019-261009Z", "1000019-261009AA", "1000019-261009AB"])
+        self.assertEqual(key[0], 3)
 
     def test_skips_numbers_that_already_exist(self):
         Lot.objects.create(
-            lot_number="1000019-261009A",
+            lot_number="ATS261009",
             item=self.item,
             lot_kind=LotKind.INCOMING,
             status=LotStatus.QUARANTINE,
         )
-        self.assertEqual(self.draw(), "1000019-261009B")
+        self.assertEqual(self.draw(), "ATS261009-2")
 
     def test_item_type_rule_wins_over_generic_rule(self):
         LotNumberRule.objects.create(
@@ -433,16 +441,28 @@ class LotNumberTests(TestCase):
         )
         self.assertEqual(self.draw(), "R100001920261009-001")
         # Before the specific rule takes effect the generic rule applies.
-        self.assertEqual(self.draw(day=datetime.date(2026, 9, 30)), "1000019-260930A")
+        self.assertEqual(self.draw(day=datetime.date(2026, 9, 30)), "ATS260930")
 
-    def test_produced_lot_uses_manufacturing_date(self):
-        finished = Item.objects.create(
-            item_type_id="FINISHED", item_code="4000019", name="테스트 완제품", base_unit="개"
-        )
-        number = next_lot_number(lot_kind=LotKind.PRODUCED, item=finished, base_date=self.day)
-        self.assertEqual(number, "4000019-261009A")
-        again = next_lot_number(lot_kind=LotKind.PRODUCED, item=finished, base_date=self.day)
-        self.assertEqual(again, "4000019-261009B")
+    def test_semi_finished_lot_is_short_code_and_manufacturing_date(self):
+        semi = self.item_of("SEMI", "3000019", "BTS")
+        self.assertEqual(self.draw(semi, kind=LotKind.PRODUCED), "BTS261009")
+
+    def test_finished_lot_is_date_and_shift_per_product(self):
+        first = self.item_of("FINISHED", "4000019")
+        second = self.item_of("FINISHED", "4000020")
+        produced = LotKind.PRODUCED
+        self.assertEqual(self.draw(first, kind=produced, shift="A"), "261009A")
+        # Another product on the same day and shift gets the same number (read with its code).
+        self.assertEqual(self.draw(second, kind=produced, shift="A"), "261009A")
+        self.assertEqual(self.draw(first, kind=produced, shift="A"), "261009A-2")
+        self.assertEqual(self.draw(first, kind=produced, shift="B"), "261009B")
+        for shift in [None, "D"]:
+            with self.subTest(shift=shift), self.assertRaises(LotNumberError):
+                self.draw(first, kind=produced, shift=shift)
+
+    def test_missing_short_code_is_an_error(self):
+        with self.assertRaises(LotNumberError):
+            self.draw(self.item_of("RAW", "1000020"))
 
     def test_date_and_received_tokens_are_the_same(self):
         new = render("{item_code}-{date:yyMMdd}{seq:A}", item=self.item, base_date=self.day, seq=1)
@@ -474,9 +494,10 @@ class MasterImportTests(TestCase):
         self.assertIn("staff: created 3, updated 0", out.getvalue())
         self.assertIn("created default INCOMING rule", out.getvalue())
         self.assertIn("created default PRODUCED rule", out.getvalue())
+        self.assertIn("created default PRODUCED FINISHED rule", out.getvalue())
         call_command("seed_master", "--sample", stdout=(out := StringIO()))
         self.assertIn("items: created 0, updated 5", out.getvalue())
-        self.assertEqual(LotNumberRule.objects.count(), 2)
+        self.assertEqual(LotNumberRule.objects.count(), 3)
         self.assertEqual(Item.objects.get(item_code="1000002").minimum_stock_e6, to_e6("20.5"))
 
     def test_dry_run_saves_nothing(self):
@@ -555,7 +576,7 @@ class ReceivingTests(TestCase):
         receipt = self.receive()
         lot = receipt.lot
         self.assertEqual(lot.status, LotStatus.QUARANTINE)
-        self.assertEqual(lot.lot_number, f"1000001-{self.today:%y%m%d}A")
+        self.assertEqual(lot.lot_number, f"AGA{self.today:%y%m%d}")
         self.assertEqual(receipt.stock_movement.movement_type_id, "RECEIPT")
         self.assertEqual(Inventory.objects.get(lot=lot).quantity_e6, to_e6(50))
         self.assertEqual(AuditLog.objects.get(record_id=str(receipt.pk)).action, "INSERT")
@@ -611,9 +632,9 @@ class ReceivingTests(TestCase):
             ),
         )
 
-    def test_second_receipt_same_day_gets_next_letter(self):
+    def test_second_receipt_same_day_gets_suffix(self):
         self.receive("k1")
-        self.assertTrue(self.receive("k2").lot.lot_number.endswith("B"))
+        self.assertEqual(self.receive("k2").lot.lot_number, f"AGA{self.today:%y%m%d}-2")
 
     def test_late_entry_is_dated_at_start_of_received_day(self):
         day = self.today - datetime.timedelta(days=3)

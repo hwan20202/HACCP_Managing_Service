@@ -113,7 +113,7 @@ class ReceiptApiTests(ApiTestCase):
         receipt = self.receive()
         self.assertEqual(receipt["quantity"], "50")
         self.assertEqual(receipt["lot_status"], "QUARANTINE")
-        self.assertTrue(receipt["lot_number"].startswith("1000001-"))
+        self.assertTrue(receipt["lot_number"].startswith("AGA"))
         listed = self.get("/receipts/", **{"from": self.today}).json()
         self.assertEqual(listed["count"], 1)
         detail = self.get(f"/receipts/{receipt['id']}/").json()
