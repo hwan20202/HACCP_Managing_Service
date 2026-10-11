@@ -514,6 +514,7 @@
             <div class="te-section te-snapshot">
               <div class="te-section-title">상신 당시 문서 내용 (스냅샷)</div>
               ${sections || '<p class="te-hint">표시할 내용이 없습니다.</p>'}
+              ${window.TempEntryDocument && snap.sections ? window.TempEntryDocument.deviationsHtml(template.schema || { sections: [] }, snap, '상신 당시 이탈·개선조치') : ''}
             </div>
           </div>
         </div>`;

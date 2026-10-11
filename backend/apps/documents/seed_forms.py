@@ -380,6 +380,7 @@ CCP_3P = {
                     "options": CIRCLE_X,
                     "required": True,
                 },
+                _note(),  # 종이 양식 순서: 비고 → (판정)
                 _verdict(
                     {
                         "all": [
@@ -390,7 +391,6 @@ CCP_3P = {
                         ]
                     }
                 ),
-                _note(),
             ],
         },
         {
@@ -404,7 +404,7 @@ CCP_3P = {
                 {"key": "item_name", "label": "품명", "type": "text", "max_length": 50},
                 {"key": "passed_qty", "label": "통과량", "type": "number", "required": True},
                 {"key": "detected_qty", "label": "검출량", "type": "number", "required": True},
-                _note(),
+                {"key": "note", "label": "특이사항", "type": "text", "max_length": 200},
             ],
         },
     ],

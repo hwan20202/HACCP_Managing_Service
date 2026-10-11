@@ -74,6 +74,17 @@
     else if (!docLevel.length) parts.push('LOT 0건');
     return parts.join(' / ');
   }
+  // 측정일시(datetime) 행이 있는 양식의 기간: 작업일 ~ 마지막 측정일(D-051 F11, 저장 컬럼 없음)
+  function periodText(schema, d) {
+    const dates = [];
+    schema.sections.filter((s) => s.repeat).forEach((s) => s.fields.filter((fd) => fd.type === 'datetime').forEach((fd) => {
+      d.sections.filter((x) => x.section_def === s.key && x.values[fd.key]).forEach((x) => dates.push(String(x.values[fd.key]).slice(0, 10)));
+    }));
+    if (!schema.sections.some((s) => s.repeat && s.fields.some((fd) => fd.type === 'datetime'))) return '';
+    const last = dates.length ? dates.sort()[dates.length - 1] : null;
+    const label = d.template && d.template.type_code === 'CCP-2B' ? '건조 기간' : '측정 기간';
+    return `<span id="tePeriod">${label} <b>${esc(d.work_date)} ~ ${esc(last && last > d.work_date ? last : d.work_date)}</b> <span class="te-hint">(마지막 측정일 기준)</span></span>`;
+  }
   const requirementChip = (d) => (d.requirement ? `<span class="badge te-chip-req">${REQUIREMENT[d.requirement]} 작성 요구</span>` : '');
 
   const Doc = {
@@ -442,18 +453,20 @@
         const legacy = this.legacyJudge(s);
         const limits = s.fields.filter((fd) => fd.limit).map((fd) => `${fd.label} ${fd.limit.min !== undefined ? `${fd.limit.min}${fd.unit || ''} 이상` : ''}${fd.limit.max !== undefined ? ` ${fd.limit.max}${fd.unit || ''} 이하` : ''}`).join(', ');
         const canAdd = !s.system_rows;
-        const recorder = hasComputed(s) ? '<th>측정자</th>' : '';
+        // 측정자 = 행 기록자(recorded_by). 설계 순서(판정 → 측정자 → 비고)대로 판정 열 바로 뒤에 둔다
+        const recorder = hasComputed(s);
+        const recorderCell = (row) => `<td class="te-hint">${row.sectionId ? `staff ${(d.sections.find((x) => x.section_id === row.sectionId) || {}).recorded_by ?? '-'}` : (api.staffId ? `staff ${api.staffId}` : '-')}</td>`;
+        const afterField = (fd, html) => (recorder && fd.computed ? html : '');
         return `<div class="te-section">
           <div class="te-section-head"><span class="te-section-title">${esc(s.label)} <span class="te-hint">반복${s.max_rows ? ` · 최대 ${s.max_rows}행` : ''}${s.min_rows ? ` · 최소 ${s.min_rows}행(작성완료 때)` : ''}${limits ? ` · 한계기준: ${esc(limits)}` : ''}${s.system_rows ? ' · 행은 입고 때 자동으로 추가됩니다' : ''}</span></span>
             ${canAdd ? `<button class="btn btn-secondary btn-sm" data-add="${s.key}">+ 행 추가</button>` : ''}</div>${sectionErr}
           <div class="te-table-wrap"><table class="data-table te-rows">
-            <thead><tr><th>#</th>${s.fields.map((fd) => `<th class="${fd.readonly ? 'te-ro-head' : ''}">${esc(fd.label)}${fd.required ? ' *' : ''}${fd.unit ? ` (${esc(fd.unit)})` : ''}</th>`).join('')}${legacy ? '<th>판정</th>' : ''}${recorder}${canAdd ? '<th></th>' : ''}</tr></thead>
+            <thead><tr><th>#</th>${s.fields.map((fd) => `<th class="${fd.readonly ? 'te-ro-head' : ''}">${esc(fd.label)}${fd.required ? ' *' : ''}${fd.unit ? ` (${esc(fd.unit)})` : ''}</th>${afterField(fd, '<th>측정자</th>')}`).join('')}${legacy ? '<th>판정</th>' : ''}${canAdd ? '<th></th>' : ''}</tr></thead>
             <tbody>${rows.length ? rows.map((row, i) => `
               <tr class="te-row-${this.rowState(row) || 'same'}${isNonconforming(s, row.values) ? ' te-row-ng' : ''}" data-tr="${row.uid}">
                 <td>${i + 1}</td>
-                ${s.fields.map((fd) => `<td class="${fd.readonly ? 'te-ro-cell' : ''}">${this.fieldInput(fd, row.values[fd.key], row)}${this.errorFor(row.uid, fd.key)}</td>`).join('')}
+                ${s.fields.map((fd) => `<td class="${fd.readonly ? 'te-ro-cell' : ''}">${this.fieldInput(fd, row.values[fd.key], row)}${this.errorFor(row.uid, fd.key)}</td>${afterField(fd, recorderCell(row))}`).join('')}
                 ${legacy ? `<td data-judge="${row.uid}">${this.judgeCell(s, row.values)}</td>` : ''}
-                ${recorder ? `<td class="te-hint">${row.sectionId ? `staff ${(d.sections.find((x) => x.section_id === row.sectionId) || {}).recorded_by ?? '-'}` : (api.staffId ? `staff ${api.staffId}` : '-')}</td>` : ''}
                 ${canAdd ? `<td><button class="btn btn-secondary btn-sm" data-del="${row.uid}" title="${row.deleted ? '삭제 취소' : '행 삭제'}">${row.deleted ? '↺' : '✕'}</button></td>` : ''}
               </tr>`).join('') : `<tr><td colspan="${s.fields.length + 3}" class="te-empty">${s.system_rows ? '아직 입고된 LOT가 없습니다' : '행이 없습니다.'}</td></tr>`}</tbody>
           </table></div></div>`;
@@ -477,6 +490,7 @@
               <div class="form-group"><label class="form-label">담당자</label><select class="form-control ${cls('assignee_id')}" data-basic="assignee_id">${staffOptions(f.basic.assignee_id)}</select>${basicErr('assignee_id')}</div>
               <div class="form-group"><label class="form-label">마감</label><input type="datetime-local" class="form-control ${cls('due_at')}" data-basic="due_at" value="${esc(f.basic.due_at)}">${basicErr('due_at')}</div>
             </div>
+            ${d ? `<div class="te-meta">${periodText(f.schema, d)}</div>` : ''}
             ${this.guideHtml(f.schema)}
             ${sectionsHtml}
             ${f.mode === 'edit' ? '<div class="te-hint" style="margin-top:1rem">이탈·개선조치는 문서 상세 화면에서 따로 저장합니다(문서 상태와 상관없이 언제든).</div>' : ''}
@@ -655,7 +669,7 @@
           if (target) f.errors[`${target.uid}.${numbered[3]}`] = e.message;
         } else if (row && pathMap[row[1]] !== undefined) f.errors[`${pathMap[row[1]]}.${row[2] || 'round'}`] = e.message;
         else if (section && f.sectionByKey[section[1]]) f.errors[`section.${section[1]}`] = e.message;
-        f.errorList.push(this.problemText(e));
+        f.errorList.push(e.path === 'deviations' ? `${e.message} — 이탈·개선조치는 저장 후 문서 상세 화면에서 입력합니다.` : this.problemText(e));
       });
       if (!f.errorList.length) f.errorList.push(data.message || '저장에 실패했습니다.');
       if (!completion) T.toast(`[${data.code}] ${data.message}`, 'error');
@@ -723,7 +737,7 @@
             <div class="te-meta">
               <span>대상 <b id="teTarget">${esc(targetText(d))}</b></span><span>작업일 <b>${d.work_date}</b></span>
               <span>작성자 <b>staff ${d.created_by}</b></span><span>담당자 <b>${d.assignee_id ? `staff ${d.assignee_id}` : '-'}</b></span>${inspector}
-              <span>마감 <b>${T.fmtDateTime(d.due_at)}</b></span>
+              <span>마감 <b>${T.fmtDateTime(d.due_at)}</b></span>${periodText(schema, d)}
             </div>
             <div class="te-meta" style="margin-top:.25rem">
               <span>작성 ${T.fmtDateTime(d.created_at)}</span><span>최종 수정 ${T.fmtDateTime(d.updated_at)}</span>
@@ -780,6 +794,24 @@
           <div class="te-table-wrap"><table class="data-table"><thead><tr><th>#</th>${s.fields.map((fd) => `<th>${esc(fd.label)}${fd.unit ? ` (${esc(fd.unit)})` : ''}</th>`).join('')}${legacy ? '<th>판정</th>' : ''}<th>기록</th></tr></thead>
           <tbody>${body}</tbody></table></div></div>`;
       }).join('');
+    },
+
+    // 상신 당시 이탈·개선조치(스냅샷, FR-27). 결재 요청 상세(WF-SC-04)에서 쓴다.
+    deviationsHtml(schema, d, title = '이탈·개선조치') {
+      const list = d.deviations || [];
+      const rowName = (sid) => {
+        for (const s of schema.sections.filter((x) => x.repeat)) {
+          const rows = d.sections.filter((x) => x.section_def === s.key);
+          const i = rows.findIndex((x) => x.section_id === sid);
+          if (i >= 0) return `${s.label} ${rows[i].values.lot_number || `${i + 1}행`}`;
+        }
+        return sid ? `행 #${sid}` : '–';
+      };
+      return `<div class="te-section" id="teSnapDeviation"><div class="te-section-title">${esc(title)} <span class="te-hint">${list.length}건</span></div>
+        ${list.length ? `<div class="te-table-wrap"><table class="data-table"><thead><tr><th>관련 행</th><th>한계기준 이탈내용</th><th>조치자</th><th>개선조치 및 결과</th><th>확인자</th></tr></thead>
+        <tbody>${list.map((x) => `<tr><td>${esc(rowName(x.section_id))}</td><td>${esc(x.description)}</td><td>${x.actor_id ? `staff ${x.actor_id}` : '-'}</td>
+          <td>${esc(x.action_result || '-')}</td><td>${(x.checker_ids || []).map((c) => `staff ${c}`).join(', ') || '-'}</td></tr>`).join('')}</tbody></table></div>`
+        : '<p class="te-hint">기록된 개선조치가 없습니다.</p>'}</div>`;
     },
 
     display(field, value, hint) {
@@ -886,13 +918,22 @@
       if (r.ok) { T.toast('작성완료했습니다.', 'success'); this.showDetail(d.document_id); return; }
       const data = r.data || {};
       if (data.code === 'COMPLETION_INCOMPLETE') {
-        const items = (data.details || []).map((e) => `<li>${esc(this.problemText(e, schema, d.sections))}</li>`).join('');
+        const details = data.details || [];
+        const items = details.map((e) => `<li>${esc(this.problemText(e, schema, d.sections))}</li>`).join('');
+        // 이동할 곳: 폼 항목(값·행) → 작성 폼, 개선조치만 → 상세의 개선조치 영역, 파일만 → 이동 없음(스프린트 3)
+        const formProblems = details.filter((e) => e.path !== 'deviations' && e.path !== 'files');
+        const devProblem = details.some((e) => e.path === 'deviations');
+        const buttons = [{ label: '닫기', value: false }];
+        if (formProblems.length && EDITABLE.includes(d.status)) buttons.push({ label: '수정하러 가기', value: 'form', cls: 'btn-primary' });
+        else if (devProblem) buttons.push({ label: '개선조치 입력하러 가기', value: 'deviation', cls: 'btn-primary' });
         const go = await T.modal({
           title: '작성완료할 수 없습니다',
-          body: `<p>아래 항목을 먼저 채워 주세요.</p><ul class="te-pending" id="teCompleteProblems">${items}</ul>`,
-          buttons: [{ label: '닫기', value: false }, ...(EDITABLE.includes(d.status) ? [{ label: '수정하러 가기', value: true, cls: 'btn-primary' }] : [])],
+          body: `<p>아래 항목을 먼저 채워 주세요.</p><ul class="te-pending" id="teCompleteProblems">${items}</ul>
+            ${details.some((e) => e.path === 'files') ? '<p class="te-hint">파일 올리기 화면은 스프린트 3에서 제공됩니다.</p>' : ''}`,
+          buttons,
         });
-        if (go) this.openForm({ document: d, problems: data.details || [] });
+        if (go === 'form') this.openForm({ document: d, problems: details });
+        else if (go === 'deviation') this.goToDeviation(d, schema);
         return;
       }
       if (data.code === 'VERSION_CONFLICT') {
@@ -902,6 +943,21 @@
       }
       T.toast(T.errorText(r), 'error');
       this.showDetail(d.document_id);
+    },
+
+    // 개선조치 입력 위치로 이동: 첫 부적합 행을 관련 행으로 한 새 입력 행을 연다
+    goToDeviation(d, schema) {
+      if (!this.devDrafts.length) {
+        let related = null;
+        schema.sections.filter((s) => s.repeat).forEach((s) => d.sections.filter((x) => x.section_def === s.key).forEach((x) => {
+          if (related === null && isNonconforming(s, x.values)) related = x.section_id;
+        }));
+        this.devDrafts.push(related ? { section_id: related } : {});
+      }
+      this.renderDeviations(d, schema);
+      const area = this.root.querySelector('#teDeviation');
+      area.scrollIntoView({ block: 'center' });
+      area.querySelector("tr[data-dev^='n'] [data-k=description]")?.focus({ preventScroll: true });
     },
 
     async reopen(d) {
