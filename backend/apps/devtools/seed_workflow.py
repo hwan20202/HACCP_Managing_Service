@@ -1,4 +1,4 @@
-"""P3 개발·사용 테스트용 가상 데이터 (document-workflow/s1-screens.md 7장).
+"""P3(+P4: 상신 전 작성완료) 개발·사용 테스트용 가상 데이터 (document-workflow/s1-screens.md 7장).
 
 결재 데이터는 WF 서비스 함수로 만든다(문서 상태와 회차 상태의 짝이 항상 맞도록).
 WF-PS-05용 "어긋난 데이터" 1건만 SQL로 직접 넣는다.
@@ -57,7 +57,10 @@ def seed_workflow(today=None):
         return doc.create_document(author, data)["document_id"]
 
     def submit(document_id, slots=SLOTS, actor=3):
+        # P4: 상신은 작성완료(completed) 문서만 — 시드도 작성완료를 거친다(p4-s2-spec 7.1)
         version = doc.get_document(document_id)["version"]
+        if doc.get_document(document_id)["status"] != "completed":
+            version = doc.complete_document(actor, document_id, version)["version"]
         out = wf.submit(actor, document_id, version, [dict(s) for s in slots])
         return {s["slot_no"]: s["approval_id"] for s in out["request"]["slots"]}
 

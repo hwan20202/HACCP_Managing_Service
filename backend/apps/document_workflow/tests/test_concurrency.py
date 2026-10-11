@@ -11,7 +11,7 @@ import os
 import threading
 import unittest
 
-from django.db import close_old_connections, connection
+from django.db import close_old_connections, connection, transaction
 from django.test import TransactionTestCase
 
 from apps.approvals import errors as apr_errors
@@ -87,7 +87,7 @@ class WfConcurrencyTests(TransactionTestCase):
         return results
 
     def submitted(self):
-        out = services.submit(3, new_document(self.t), 1, slots())
+        out = services.submit(3, new_document(self.t), 2, slots())  # v2 = 작성완료
         return out["document"]["document_id"], slot_ids(out["request"])
 
     def count_mark(self):
@@ -101,29 +101,38 @@ class WfConcurrencyTests(TransactionTestCase):
             setattr(doc, name, counter)
             self.addCleanup(setattr, doc, name, original)
 
-    def test_tc020a_submit_first_then_patch(self):
+    def hold(self, func):
+        """func를 바깥 트랜잭션 안에서 실행하고 잠금을 쥔 채 멈춘다(first 스레드용)."""
+
+        def run():
+            with transaction.atomic():
+                result = func()
+                self.locked.set()
+                self.release.wait(10)
+                return result
+
+        return run
+
+    # P4(p4-s2-spec 7.1): 작성완료 문서는 수정이 항상 DOCUMENT_LOCKED라서
+    # "상신과 수정 동시"는 "상신과 작성 재개 동시"(같은 버전)로 바꾼다.
+    def test_tc020a_submit_first_then_reopen(self):
         document_id = new_document(self.t)
         self.pause_after(doc, "get_document")  # 잠금(첫 쓰기) 직후 멈춤
         r = self.race(
-            lambda: services.submit(3, document_id, 1, slots()),
-            lambda: doc.update_document(
-                3, document_id, {"expected_version": 1, "document": {"subject": "B"}}
-            ),
+            lambda: services.submit(3, document_id, 2, slots()),
+            lambda: doc.reopen_document(3, document_id, 2),
         )
         self.assertEqual(r["first"][0], "ok", r)
-        self.assertIsInstance(r["second"][1], doc_errors.DocumentLocked)
+        self.assertIsInstance(r["second"][1], doc_errors.InvalidTransition)
 
-    def test_tc020b_patch_first_then_submit(self):
+    def test_tc020b_reopen_first_then_submit(self):
         document_id = new_document(self.t)
-        self.pause_after(doc, "_check_staff")  # 수정 잠금(첫 쓰기) 뒤 검증 단계에서 멈춤
         r = self.race(
-            lambda: doc.update_document(
-                3, document_id, {"expected_version": 1, "document": {"assignee_id": 4}}
-            ),
-            lambda: services.submit(3, document_id, 1, slots()),
+            self.hold(lambda: doc.reopen_document(3, document_id, 2)),
+            lambda: services.submit(3, document_id, 2, slots()),
         )
         self.assertEqual(r["first"][0], "ok", r)
-        self.assertIsInstance(r["second"][1], doc_errors.VersionConflict)
+        self.assertIsInstance(r["second"][1], doc_errors.DocumentLocked)  # 404 → 상태 → 버전
         self.assertEqual(doc.get_document(document_id)["status"], "draft")
 
     def test_tc021a_same_middle_slot_twice(self):
@@ -184,8 +193,8 @@ class WfConcurrencyTests(TransactionTestCase):
         document_id = new_document(self.t)
         self.pause_after(doc, "get_document")
         r = self.race(
-            lambda: services.submit(3, document_id, 1, slots()),
-            lambda: services.submit(2, document_id, 1, slots()),
+            lambda: services.submit(3, document_id, 2, slots()),
+            lambda: services.submit(2, document_id, 2, slots()),
         )
         self.assertEqual(r["first"][0], "ok", r)
         self.assertIsInstance(r["second"][1], doc_errors.DocumentLocked)

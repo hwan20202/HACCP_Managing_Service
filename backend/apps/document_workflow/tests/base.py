@@ -19,6 +19,9 @@ SLOTS = [
 # 5.1 결합 상태: (문서 상태, 최신 회차 상태)
 ALLOWED_PAIRS = {
     ("draft", None),
+    ("completed", None),  # P4: 상신은 작성완료에서만
+    ("completed", "rejected"),  # 반려 후 다시 작성완료
+    ("draft", "rejected"),  # 작성완료 후 작성 재개
     ("submitted", "in_progress"),
     ("approved", "approved"),
     ("rejected", "rejected"),
@@ -29,9 +32,17 @@ def slots():
     return copy.deepcopy(SLOTS)
 
 
-def new_document(templates, author=3):
-    """DOC 공개 함수로 draft 문서(v1)를 만든다."""
-    return doc.create_document(author, ccp_payload(templates["ccp"]))["document_id"]
+def new_document(templates, author=3, completed=True):
+    """DOC 공개 함수로 문서를 만든다. 기본은 작성완료(v2) — P4부터 상신은 작성완료에서만."""
+    document_id = doc.create_document(author, ccp_payload(templates["ccp"]))["document_id"]
+    if completed:
+        doc.complete_document(author, document_id, 1)
+    return document_id
+
+
+def complete_again(document_id, author=3):
+    """반려 뒤 다시 작성완료(재상신 전 단계, P4)."""
+    return doc.complete_document(author, document_id, version_of(document_id))
 
 
 def version_of(document_id):

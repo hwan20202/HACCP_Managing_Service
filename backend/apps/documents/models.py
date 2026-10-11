@@ -1,11 +1,31 @@
-"""문서 도메인 테이블. 이름·제약은 ERD v2(dev-notes/erd/v2)와 같게 유지한다."""
+"""문서 도메인 테이블. 이름·제약은 ERD(dev-notes/erd/v5)와 같게 유지한다.
+
+v5(P4): 작성완료 상태·작성 요구 키(document), 업무 대상 참조(document_ref, RunSQL·managed=False),
+파일(file, document_file — 기능은 스프린트 3), 개선조치(deviation_action, deviation_checker).
+Django는 on_delete를 DB의 ON DELETE로 만들지 않는다(ERD v5 메모, ORM이 처리).
+"""
 
 from django.db import models
 from django.db.models import Q
+from django.db.models.functions import Length
 
 from apps.staff.models import Staff
 
-STATUS_CHOICES = ("draft", "submitted", "approved", "rejected")
+STATUS_CHOICES = ("draft", "completed", "submitted", "approved", "rejected")
+FILE_MIME_TYPES = ("application/pdf", "image/jpeg", "image/png")
+FILE_MAX_BYTES = 20 * 1024 * 1024
+
+
+class TrimWhitespace(models.Transform):
+    """trim(x, 공백·탭·줄바꿈) — 개선조치 이탈내용이 공백만인지 검사(ERD v5 A11)."""
+
+    lookup_name = "trim_ws"
+    function = "TRIM"
+    template = "TRIM(%(expressions)s, ' ' || char(9) || char(10) || char(13))"
+
+
+models.TextField.register_lookup(Length)
+models.TextField.register_lookup(TrimWhitespace)
 
 
 class DocumentTemplate(models.Model):
@@ -57,6 +77,19 @@ class Document(models.Model):
     submitted_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField()
     updated_at = models.DateTimeField()
+    # ERD v5 A8: 작성 요구 키 'D01|lot:88'. NULL = 사용자가 직접 만든 문서
+    record_key = models.TextField(null=True, blank=True)
+    # ERD v5 A7: 작성완료 기록 (작성 재개 시 비움)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    completed_by = models.ForeignKey(
+        Staff,
+        models.PROTECT,
+        null=True,
+        blank=True,
+        db_column="completed_by",
+        related_name="+",
+        db_index=False,
+    )
     # ERD v3 A6: 낙관적 잠금 버전. 모든 쓰기마다 +1 (ISS-001)
     version = models.IntegerField(default=1, db_default=1)
     deleted_at = models.DateTimeField(null=True, blank=True)
@@ -80,6 +113,25 @@ class Document(models.Model):
                 condition=Q(deleted_at__isnull=True, deleted_by__isnull=True)
                 | Q(deleted_at__isnull=False, deleted_by__isnull=False),
                 name="ck_document_deleted_pair",
+            ),
+            models.CheckConstraint(
+                condition=Q(completed_at__isnull=True, completed_by__isnull=True)
+                | Q(completed_at__isnull=False, completed_by__isnull=False),
+                name="ck_document_completed_pair",
+            ),
+            models.CheckConstraint(
+                condition=~Q(status="completed") | Q(completed_at__isnull=False),
+                name="ck_document_completed_required",
+            ),
+            models.CheckConstraint(
+                condition=~Q(status="draft") | Q(completed_at__isnull=True),
+                name="ck_document_draft_not_completed",
+            ),
+            # 작성 요구 문서 1건(삭제 문서 포함). get_or_create_document의 ON CONFLICT 대상
+            models.UniqueConstraint(
+                fields=["record_key"],
+                condition=Q(record_key__isnull=False),
+                name="ux_document_record_key",
             ),
         ]
         indexes = [
@@ -120,5 +172,192 @@ class DocSection(models.Model):
             models.UniqueConstraint(
                 fields=["document", "section_def", "row_no"], name="uq_section_row"
             ),
+            # ERD v5 A14: document_ref 복합 FK (section_id, document_id)의 대상
+            models.UniqueConstraint(fields=["section_id", "document"], name="ux_section_document"),
         ]
         # ux_section_round(JSON 식 + 부분 조건)는 마이그레이션의 RunSQL로 만든다(ERD v2 M7).
+
+
+# ---------------------------------------------------------------- v5 (P4)
+
+
+class DocumentRef(models.Model):
+    """업무 대상 참조(ERD v5 A9). 테이블은 마이그레이션 RunSQL로 만든다(managed=False, P4-S3-Q6).
+
+    lot_id·production_batch_id·item_id는 수불 테이블의 DB FK지만 Django에서는 정수로 둔다
+    (수불 앱 교체 때 이 앱 마이그레이션이 영향받지 않게, P4-S3-Q2). 구조 변경은 항상 RunSQL로.
+    """
+
+    ref_id = models.AutoField(primary_key=True)
+    document_id = models.IntegerField()
+    section_id = models.IntegerField(null=True)
+    lot_id = models.IntegerField(null=True)
+    production_batch_id = models.IntegerField(null=True)
+    item_id = models.IntegerField(null=True)
+    process_code = models.TextField(null=True)
+    label = models.TextField(null=True)
+    created_at = models.DateTimeField()
+
+    class Meta:
+        db_table = "document_ref"
+        managed = False
+
+
+class File(models.Model):
+    """파일 1개(ERD v5 M9). 기능(올리기·연결)은 스프린트 3(D-058)."""
+
+    file_id = models.AutoField(primary_key=True)
+    storage_path = models.TextField(unique=True)
+    original_name = models.TextField()
+    mime_type = models.TextField()
+    size_bytes = models.IntegerField()
+    sha256 = models.TextField()
+    uploaded_by = models.ForeignKey(
+        Staff, models.PROTECT, db_column="uploaded_by", related_name="+", db_index=False
+    )
+    uploaded_at = models.DateTimeField()
+    retained_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "file"
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(original_name__length__gte=1, original_name__length__lte=255),
+                name="ck_file_name",
+            ),
+            models.CheckConstraint(condition=Q(mime_type__in=FILE_MIME_TYPES), name="ck_file_mime"),
+            models.CheckConstraint(
+                condition=Q(size_bytes__gte=1, size_bytes__lte=FILE_MAX_BYTES), name="ck_file_size"
+            ),
+            models.CheckConstraint(condition=Q(sha256__length=64), name="ck_file_sha256"),
+        ]
+
+
+class DocumentFile(models.Model):
+    """문서 ↔ 파일 연결(ERD v5 A10). 같은 파일 중복 연결 불가(PK)."""
+
+    pk = models.CompositePrimaryKey("document", "file")
+    document = models.ForeignKey(
+        Document, models.PROTECT, db_column="document_id", related_name="+", db_index=False
+    )
+    file = models.ForeignKey(
+        File, models.PROTECT, db_column="file_id", related_name="links", db_index=False
+    )
+    linked_by = models.ForeignKey(
+        Staff, models.PROTECT, db_column="linked_by", related_name="+", db_index=False
+    )
+    linked_at = models.DateTimeField()
+
+    class Meta:
+        db_table = "document_file"
+        indexes = [models.Index(fields=["file"], name="ix_document_file_file")]
+
+
+class DeviationAction(models.Model):
+    """개선조치(ERD v5 A11). 문서 상태와 무관하게 수정한다(D-054). 확인 기능은 ISS-008."""
+
+    deviation_id = models.AutoField(primary_key=True)
+    document = models.ForeignKey(
+        Document, models.PROTECT, db_column="document_id", related_name="+", db_index=False
+    )
+    section = models.ForeignKey(
+        DocSection,
+        models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column="section_id",
+        related_name="+",
+        db_index=False,
+    )
+    description = models.TextField()
+    action_result = models.TextField(null=True, blank=True)
+    actor = models.ForeignKey(
+        Staff,
+        models.PROTECT,
+        null=True,
+        blank=True,
+        db_column="actor_id",
+        related_name="+",
+        db_index=False,
+    )
+    checked_by = models.ForeignKey(
+        Staff,
+        models.PROTECT,
+        null=True,
+        blank=True,
+        db_column="checked_by",
+        related_name="+",
+        db_index=False,
+    )
+    checked_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        Staff, models.PROTECT, db_column="created_by", related_name="+", db_index=False
+    )
+    created_at = models.DateTimeField()
+    updated_by = models.ForeignKey(
+        Staff, models.PROTECT, db_column="updated_by", related_name="+", db_index=False
+    )
+    updated_at = models.DateTimeField()
+    version = models.IntegerField(default=1, db_default=1)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        Staff,
+        models.PROTECT,
+        null=True,
+        blank=True,
+        db_column="deleted_by",
+        related_name="+",
+        db_index=False,
+    )
+
+    class Meta:
+        db_table = "deviation_action"
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(description__length__gte=1, description__length__lte=500)
+                & ~Q(description__trim_ws=""),
+                name="ck_deviation_description",
+            ),
+            models.CheckConstraint(
+                condition=Q(action_result__isnull=True) | Q(action_result__length__lte=1000),
+                name="ck_deviation_result",
+            ),
+            models.CheckConstraint(
+                condition=Q(checked_by__isnull=True, checked_at__isnull=True)
+                | Q(checked_by__isnull=False, checked_at__isnull=False),
+                name="ck_deviation_checked_pair",
+            ),
+            models.CheckConstraint(
+                condition=Q(deleted_at__isnull=True, deleted_by__isnull=True)
+                | Q(deleted_at__isnull=False, deleted_by__isnull=False),
+                name="ck_deviation_deleted_pair",
+            ),
+            models.CheckConstraint(condition=Q(version__gte=1), name="ck_deviation_version"),
+        ]
+        indexes = [
+            models.Index(
+                fields=["document"],
+                condition=Q(deleted_at__isnull=True),
+                name="ix_deviation_document",
+            ),
+        ]
+
+
+class DeviationChecker(models.Model):
+    """개선조치 확인 슬롯 지정자(ERD v5 A12). 슬롯 1개에 여러 명."""
+
+    pk = models.CompositePrimaryKey("deviation", "staff")
+    deviation = models.ForeignKey(
+        DeviationAction,
+        models.CASCADE,
+        db_column="deviation_id",
+        related_name="checkers",
+        db_index=False,  # PK(deviation_id, staff_id)가 대신한다
+    )
+    staff = models.ForeignKey(
+        Staff, models.PROTECT, db_column="staff_id", related_name="+", db_index=False
+    )  # ix_deviation_checker_staff가 대신한다
+
+    class Meta:
+        db_table = "deviation_checker"
+        indexes = [models.Index(fields=["staff"], name="ix_deviation_checker_staff")]

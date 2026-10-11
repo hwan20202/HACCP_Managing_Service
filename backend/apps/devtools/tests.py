@@ -43,3 +43,19 @@ class SeedWorkflowTests(TestCase):
         self.assertEqual(pairs[("approved", "approved")], 1)
         self.assertEqual(pairs[("rejected", "rejected")], 1)
         self.assertEqual(pairs[("submitted", "in_progress")], 24)
+
+
+class SeedP4Tests(TestCase):
+    """P4 개발 시드: N1·N2로 만들고, 다시 실행해도 늘지 않으며, 결재 결합 상태가 맞아야 한다."""
+
+    def test_seed_is_idempotent_and_consistent(self):
+        from apps.devtools.seed_p4 import seed_p4
+        from apps.document_workflow.tests.base import invariant_violations
+        from apps.documents.models import Document
+
+        self.assertEqual(seed_p4("2026-10-11"), {"documents": 11, "lot_rows": 3})
+        self.assertEqual(seed_p4("2026-10-11"), {"documents": 0, "lot_rows": 0})
+        self.assertEqual(invariant_violations(), [])
+        statuses = set(Document.objects.values_list("status", flat=True))
+        self.assertEqual(statuses, {"draft", "completed", "submitted", "approved", "rejected"})
+        self.assertFalse(Document.objects.filter(record_key__isnull=True).exists())

@@ -1,9 +1,11 @@
 """DOC-TC-061/062: 실제 SQLite 잠금으로 동시 실행을 확인한다.
 
+P4 §7.1: 062는 "작성 재개 vs 상신 잠금"으로 바뀌었다(수정 vs 잠금은 성립하지 않아 삭제).
+
 메모리 DB는 연결 간 잠금 동작이 파일 DB와 다르므로, 테스트 DB가 파일일 때만 실행한다.
-실행 방법(dev-notes/document/s4-impl.md 참고):
+실행 방법(dev-notes/document/p4-s4-impl.md 참고):
   HACCP_TEST_FILE_DB=1 python manage.py test apps.documents.tests.test_concurrency \
-      --settings=config.settings.test
+      --settings=config.settings.test_filedb
 """
 
 import os
@@ -106,41 +108,56 @@ class ConcurrencyTests(TransactionTestCase):
         self.assertEqual(DocSection.objects.get(pk=r1).values_json["temp"], 91)
         self.assertEqual(DocSection.objects.get(pk=r2).values_json["temp"], 87.0)
 
-    def test_tc062_update_first_then_lock(self):
-        first = self.hold_inside(
-            lambda: services.update_document(
-                3,
-                self.doc.document_id,
-                {"expected_version": 1, "document": {"subject": "수정 후 상신"}},
-            )
-        )
+    def hold_after(self, target, step_id):
+        """target이 step_id 단계(잠금 UPDATE)를 마친 직후 멈추게 한다."""
+        from apps.core import trace
 
-        def second(locked, release):
-            with transaction.atomic():
-                return services.lock_for_review(self.doc.document_id)
+        original = trace.step
 
-        results = self.run_threads(first, second)
-        self.assertEqual([results[k][0] for k in ("first", "second")], ["ok", "ok"], results)
-        self.doc.refresh_from_db()
-        self.assertEqual((self.doc.subject, self.doc.status), ("수정 후 상신", "submitted"))
+        def wrapper(locked, release):
+            from contextlib import contextmanager
 
-    def test_tc062_lock_first_then_update(self):
-        def first(locked, release):
-            with transaction.atomic():
-                result = services.lock_for_review(self.doc.document_id)
-                locked.set()
-                release.wait(10)
-                return result
+            @contextmanager
+            def paused(sid, *args, **kwargs):
+                with original(sid, *args, **kwargs) as s:
+                    yield s
+                if sid == step_id:
+                    locked.set()
+                    release.wait(10)
 
-        def second(locked, release):
-            return services.update_document(
-                3,
-                self.doc.document_id,
-                {"expected_version": 1, "document": {"subject": "늦은 수정"}},
-            )
+            services.step = paused
+            try:
+                return target()
+            finally:
+                services.step = original
 
-        results = self.run_threads(first, second)
-        self.assertEqual(results["first"][0], "ok")
-        self.assertIsInstance(results["second"][1], errors.DocumentLocked)
-        self.doc.refresh_from_db()
-        self.assertEqual((self.doc.status, self.doc.subject), ("submitted", "CCP-2B/라인A"))
+        return wrapper
+
+    def test_tc062_reopen_vs_lock(self):
+        """P4 §7.1: completed 문서에서 작성 재개와 상신 잠금 동시 — 먼저 잠근 쪽 기준."""
+        for first_is_reopen in (True, False):
+            with self.subTest(first_is_reopen=first_is_reopen):
+                doc, _ = make_document(self.t["ccp"], status="completed")
+
+                def reopen():
+                    return services.reopen_document(3, doc.document_id, 1)
+
+                def lock():
+                    with transaction.atomic():
+                        return services.lock_for_review(doc.document_id, expected_version=1)
+
+                if first_is_reopen:
+                    first = self.hold_after(reopen, "DOC-ROP-02")
+                    second = lambda _locked, _release: lock()  # noqa: E731
+                else:
+                    first = self.hold_after(lock, "DOC-LCK-01")
+                    second = lambda _locked, _release: reopen()  # noqa: E731
+                results = self.run_threads(first, second)
+                self.assertEqual(results["first"][0], "ok", results)
+                doc.refresh_from_db()
+                if first_is_reopen:
+                    self.assertIsInstance(results["second"][1], errors.DocumentLocked)
+                    self.assertEqual(doc.status, "draft")
+                else:
+                    self.assertIsInstance(results["second"][1], errors.InvalidTransition)
+                    self.assertEqual(doc.status, "submitted")

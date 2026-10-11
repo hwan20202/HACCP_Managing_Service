@@ -57,7 +57,7 @@ class SubmitApiTests(WfApiTestCase):
 
     def test_tc041_staff_header(self):
         document_id = new_document(self.t)
-        body = {"expected_version": 1, "slots": slots()}
+        body = {"expected_version": 2, "slots": slots()}
         path = f"documents/{document_id}/submit"
         self.assertError(self.post(path, body, staff=None), 400, "STAFF_HEADER_MISSING")
         self.assertError(self.post(path, body, staff=99), 403, "INVALID_STAFF")
@@ -82,7 +82,7 @@ class SubmitApiTests(WfApiTestCase):
         for name, kwargs in cases.items():
             with self.subTest(name):
                 self.assertError(self.post(path, **kwargs), 400, "INVALID_REQUEST")
-        self.assertEqual(version_of(document_id), 1)
+        self.assertEqual(version_of(document_id), 2)  # 작성완료 상태 그대로
 
     def test_tc043_domain_errors(self):
         document_id = new_document(self.t)
@@ -90,7 +90,7 @@ class SubmitApiTests(WfApiTestCase):
         self.assertError(self.submit(document_id, slots=bad), 400, "INVALID_SLOTS")
         conflict = self.submit(document_id, expected_version=9)
         self.assertError(conflict, 409, "VERSION_CONFLICT")
-        self.assertEqual(conflict.json()["details"][0]["current"], 1)
+        self.assertEqual(conflict.json()["details"][0]["current"], 2)
         self.assertEqual(self.submit(document_id).status_code, 201)
         self.assertError(self.submit(document_id), 409, "DOCUMENT_LOCKED")
         self.assertError(

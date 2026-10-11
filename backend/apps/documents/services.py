@@ -1,6 +1,8 @@
 """문서 도메인 서비스 (s2-spec 4.1, 흐름은 s2-flows.md).
 
-- 상태 판단은 EDITABLE / DELETABLE 두 집합만 본다(DOC-FR-12).
+- 상태 판단은 상태 집합(EDITABLE, COMPLETABLE, REOPENABLE, LOCKABLE, DELETABLE)만 본다(DOC-FR-12).
+- P4(p4-s2-spec): 작성완료·작성 재개, 업무 대상 참조, 작성 요구 함수(N1~N3), 개선조치.
+  모든 쓰기 기능은 트랜잭션의 첫 SQL을 쓰기로 한다(p4-s2-flows "읽는 법").
 - 쓰기 기능은 트랜잭션의 첫 SQL을 조건부 UPDATE로 해서 검사와 잠금을 한 번에 한다(DOC-NFR-02).
 - step("DOC-…") 단계 ID는 흐름 도식과 같다. 개발 설정에서만 기록된다.
 - 이 모듈은 결재(apps.approvals)·워크플로우(apps.document_workflow)를 import하지 않는다.
@@ -9,7 +11,7 @@
 import json
 
 from django.db import IntegrityError, models, transaction
-from django.db.models import F, Func, OuterRef, Subquery, Value
+from django.db.models import Count, Exists, F, Func, OuterRef, Q, Subquery, Value
 from django.utils import timezone
 
 from apps.core.http import ApiError
@@ -18,10 +20,26 @@ from apps.staff import services as staff_services
 from apps.staff.models import Staff
 
 from . import errors, validation
-from .models import STATUS_CHOICES, DocSection, Document, DocumentTemplate
+from .models import (
+    STATUS_CHOICES,
+    DeviationAction,
+    DeviationChecker,
+    DocSection,
+    Document,
+    DocumentFile,
+    DocumentRef,
+    DocumentTemplate,
+)
 
 EDITABLE = ("draft", "rejected")
-DELETABLE = ("draft",)  # 그리고 submitted_at IS NULL (한 번도 상신하지 않은 문서)
+COMPLETABLE = ("draft", "rejected")
+REOPENABLE = ("completed",)
+LOCKABLE = ("completed",)  # 상신은 작성완료 상태에서만(P4-S2-Q1, D-055)
+DELETABLE = (
+    "draft",
+)  # 그리고 submitted_at IS NULL, record_key IS NULL(작성 요구 문서 삭제 불가 C-3)
+REF_TARGETS = ("lot_id", "production_batch_id", "item_id", "process_code")
+DEVIATION_MAX_CHECKERS = 10
 PAGE_SIZE = 20
 MAX_RANGE_DAYS = 366
 EDITABLE_FIELDS = ("subject", "work_date", "assignee_id", "due_at")
@@ -50,6 +68,7 @@ def _template_summary(template):
 def _template_detail(template, *, with_schema):
     data = _template_summary(template)
     data["is_active"] = template.is_active
+    data["requirement_only"] = bool(template.schema_json.get("requirement_only"))  # F02 변경
     data["sections"] = [
         {"key": s["key"], "label": s.get("label", s["key"]), "repeat": s["repeat"]}
         for s in template.schema_json["sections"]
@@ -73,7 +92,55 @@ def _document_head(document):
         "updated_at": _iso(document.updated_at),
         "submitted_at": _iso(document.submitted_at),
         "version": document.version,
+        "record_key": document.record_key,
+        "completed_at": _iso(document.completed_at),
+        "completed_by": document.completed_by_id,
     }
+
+
+def _ref_row(ref):
+    return {
+        "ref_id": ref.ref_id,
+        "section_id": ref.section_id,
+        "lot_id": ref.lot_id,
+        "production_batch_id": ref.production_batch_id,
+        "item_id": ref.item_id,
+        "process_code": ref.process_code,
+        "label": ref.label,
+    }
+
+
+def _requirement(record_key, refs):
+    """작성 요구 출처: record_key가 없으면 None, 배치 참조가 있으면 batch, 아니면 lot (F05)."""
+    if not record_key:
+        return None
+    if any(r["production_batch_id"] is not None for r in refs):
+        return "batch"
+    return "lot"
+
+
+def _target_summary(document, refs):
+    """목록의 대상 표시(S1 SC-01). 작성 요구 문서는 업무 대상, 아니면 subject."""
+    if not document.record_key or not refs:
+        return document.subject
+    doc_level = [r for r in refs if r["section_id"] is None]
+    if doc_level:
+        ref = doc_level[0]
+        if ref["production_batch_id"] is not None:
+            tail = f" · {ref['process_code']}" if ref["process_code"] else ""
+            return f"배치 {ref['label'] or ref['production_batch_id']}{tail}"
+        if ref["lot_id"] is not None:
+            return f"LOT {ref['label'] or ref['lot_id']}"
+        return ref["label"] or document.subject
+    lots = [r for r in refs if r["lot_id"] is not None]
+    return f"{_iso(document.work_date)} · LOT {len(lots)}건"
+
+
+def _refs_by_document(document_ids):
+    grouped = {doc_id: [] for doc_id in document_ids}
+    for ref in DocumentRef.objects.filter(document_id__in=list(document_ids)).order_by("ref_id"):
+        grouped[ref.document_id].append(_ref_row(ref))
+    return grouped
 
 
 def _section_row(row):
@@ -87,17 +154,132 @@ def _section_row(row):
     }
 
 
-def _assemble(document, rows):
+def _assemble(document, rows, refs=None, files=None, deviations=None, hints=None):
     order = validation.section_order(document.template.schema_json)
     rows = sorted(rows, key=lambda r: (order.get(r.section_def, len(order)), r.row_no))
+    refs = refs or []
     data = _document_head(document)
+    data["requirement"] = _requirement(document.record_key, refs)
+    data["refs"] = refs
     data["sections"] = [_section_row(r) for r in rows]
+    for row in data["sections"]:
+        if hints and row["section_id"] in hints:
+            row["hints"] = hints[row["section_id"]]
+    data["files"] = files or []
+    data["deviations"] = deviations or []
     return data
 
 
+def _files_of(document_id):
+    shared = DocumentFile.objects.filter(file_id=OuterRef("file_id")).values("file_id")
+    links = (
+        DocumentFile.objects.filter(document_id=document_id)
+        .select_related("file")
+        .annotate(shared_count=Subquery(shared.annotate(n=Count("pk")).values("n")[:1]))
+        .order_by("linked_at")
+    )
+    return [
+        {
+            "file_id": link.file.file_id,
+            "original_name": link.file.original_name,
+            "mime_type": link.file.mime_type,
+            "size_bytes": link.file.size_bytes,
+            "uploaded_by": link.file.uploaded_by_id,
+            "uploaded_at": _iso(link.file.uploaded_at),
+            "linked_by": link.linked_by_id,
+            "linked_at": _iso(link.linked_at),
+            "shared_count": link.shared_count,
+        }
+        for link in links
+    ]
+
+
+def _deviation_row(deviation, checker_ids):
+    return {
+        "deviation_id": deviation.deviation_id,
+        "document_id": deviation.document_id,
+        "section_id": deviation.section_id,
+        "description": deviation.description,
+        "action_result": deviation.action_result,
+        "actor_id": deviation.actor_id,
+        "checker_ids": checker_ids,
+        "checked_by": deviation.checked_by_id,
+        "checked_at": _iso(deviation.checked_at),
+        "version": deviation.version,
+        "created_by": deviation.created_by_id,
+        "created_at": _iso(deviation.created_at),
+        "updated_by": deviation.updated_by_id,
+        "updated_at": _iso(deviation.updated_at),
+    }
+
+
+def _deviations_of(document_id):
+    items = list(
+        DeviationAction.objects.filter(document_id=document_id, deleted_at__isnull=True).order_by(
+            "deviation_id"
+        )
+    )
+    checkers = {}
+    for row in DeviationChecker.objects.filter(
+        deviation_id__in=[d.deviation_id for d in items]
+    ).order_by("staff_id"):
+        checkers.setdefault(row.deviation_id, []).append(row.staff_id)
+    return [_deviation_row(d, checkers.get(d.deviation_id, [])) for d in items]
+
+
+def _hints(document, rows, refs):
+    """필드 hint 규칙 계산(FR-28).
+
+    file_exists: 같은 LOT의 지정 양식(D01) 문서에 파일이 있으면 "유". 저장 값은 바꾸지 않는다.
+    """
+    rules = []
+    for section in document.template.schema_json["sections"]:
+        for field in section["fields"]:
+            hint = field.get("hint")
+            if isinstance(hint, dict) and hint.get("kind") == "file_exists":
+                rules.append((section["key"], field["key"], hint))
+    if not rules:
+        return {}
+    lot_by_section = {r["section_id"]: r["lot_id"] for r in refs if r["section_id"] and r["lot_id"]}
+    result = {}
+    for section_key, field_key, hint in rules:
+        lots = [lot_by_section.get(r.section_id) for r in rows if r.section_def == section_key]
+        lots = [lot for lot in lots if lot is not None]
+        with_files = set()
+        if lots:
+            has_file = DocumentFile.objects.filter(document_id=OuterRef("document_id"))
+            matched = Document.objects.filter(
+                pk=OuterRef("document_id"),
+                deleted_at__isnull=True,
+                template__type_code=hint.get("type_code"),
+            )
+            with_files = set(
+                DocumentRef.objects.filter(lot_id__in=lots, section_id__isnull=True)
+                .filter(Exists(matched), Exists(has_file))
+                .values_list("lot_id", flat=True)
+            )
+        for row in rows:
+            if row.section_def == section_key and row.section_id in lot_by_section:
+                value = "유" if lot_by_section[row.section_id] in with_files else "무"
+                result.setdefault(row.section_id, {})[field_key] = value
+    return result
+
+
+def _full(document):
+    rows = list(DocSection.objects.filter(document_id=document.document_id))
+    refs = _refs_by_document([document.document_id])[document.document_id]
+    return _assemble(
+        document,
+        rows,
+        refs=refs,
+        files=_files_of(document.document_id),
+        deviations=_deviations_of(document.document_id),
+        hints=_hints(document, rows, refs),
+    )
+
+
 def _detail(document_id):
-    document = Document.objects.select_related("template").get(pk=document_id)
-    return _assemble(document, list(DocSection.objects.filter(document_id=document_id)))
+    return _full(Document.objects.select_related("template").get(pk=document_id))
 
 
 # ---------------------------------------------------------------- F01~F03 조회
@@ -169,6 +351,9 @@ def list_documents(filters=None, page=1):
         status = filters.get("status") or None
         if status is not None and status not in STATUS_CHOICES:
             problems.append(validation.error("status", "invalid", "알 수 없는 상태입니다."))
+        target = filters.get("target") or None
+        if target is not None and (not isinstance(target, str) or not 1 <= len(target) <= 50):
+            problems.append(validation.error("target", "invalid", "대상은 1~50자여야 합니다."))
         template_id = _int_filter(filters, "template_id", problems)
         author_id = _int_filter(filters, "author_id", problems)
         assignee_id = _int_filter(filters, "assignee_id", problems)
@@ -191,6 +376,14 @@ def list_documents(filters=None, page=1):
         queryset = queryset.filter(created_by_id=author_id)
     if assignee_id is not None:
         queryset = queryset.filter(assignee_id=assignee_id)
+    if target:
+        queryset = queryset.filter(
+            Exists(
+                DocumentRef.objects.filter(
+                    document_id=OuterRef("document_id"), label__icontains=target
+                )
+            )
+        )
 
     with step("DOC-LST-02", "DOC", "건수"):
         total = queryset.count()
@@ -202,8 +395,15 @@ def list_documents(filters=None, page=1):
             ]
         )
     with step("DOC-LST-04", "DOC", "결과 조립"):
+        refs = _refs_by_document([d.document_id for d in documents]) if documents else {}
+        items = []
+        for d in documents:
+            item = _document_head(d)
+            item["requirement"] = _requirement(d.record_key, refs.get(d.document_id, []))
+            item["target_summary"] = _target_summary(d, refs.get(d.document_id, []))
+            items.append(item)
         return {
-            "items": [_document_head(d) for d in documents],
+            "items": items,
             "total": total,
             "page": page_number,
             "page_size": PAGE_SIZE,
@@ -222,10 +422,14 @@ def get_document(document_id):
         )
         if document is None:
             raise errors.DocumentNotFound()
-    with step("DOC-GET-02", "DOC", "섹션 행 조회"):
+    with step("DOC-GET-02", "DOC", "섹션 행·참조·파일·개선조치 조회"):
         rows = list(DocSection.objects.filter(document_id=document_id))
+        refs = _refs_by_document([document_id])[document_id]
+        files = _files_of(document_id)
+        deviations = _deviations_of(document_id)
+        hints = _hints(document, rows, refs)
     with step("DOC-GET-03", "DOC", "조립"):
-        return _assemble(document, rows)
+        return _assemble(document, rows, refs, files, deviations, hints)
 
 
 # ---------------------------------------------------------------- 검증 공통
@@ -261,6 +465,8 @@ def create_document(actor_id, data):
             raise errors.TemplateNotFound()
         if not template.is_active:
             raise errors.TemplateInactive()
+        if template.schema_json.get("requirement_only"):
+            raise errors.TemplateRequirementOnly()
         schema_sections = validation.sections_of(template.schema_json)
 
     with step("DOC-CRT-04", "DOC", "기본 정보 검증") as s:
@@ -305,12 +511,19 @@ def create_document(actor_id, data):
                 continue
             key = row["section_def"]
             values = row.get("values", {})
+            problems += validation.system_key_errors(schema_sections[key], values, f"{path}.values")
             row_errors, _ = validation.check_values(schema_sections[key], values, f"{path}.values")
             problems += row_errors
             counts[key] += 1
             by_section[key].append((f"{path}.values", values))
+            if isinstance(values, dict):
+                values = validation.with_computed(schema_sections[key], values)
             new_rows.append((key, counts[key], values))
         for key, section in schema_sections.items():
+            if not section["repeat"] and counts[key] == 0:
+                # 필수값은 작성완료 때 검사한다(C-2). 빈 행을 만들어 둔다(VR-07 ②).
+                counts[key] = 1
+                new_rows.append((key, 1, validation.with_computed(section, {})))
             if not section["repeat"] and counts[key] != 1:
                 problems.append(
                     validation.error(
@@ -377,19 +590,32 @@ def _patch_parts(patch):
     )
 
 
-def _lock_failure(document_id, step_id, *, deletable=False, expected_version=None):
-    """조건부 UPDATE가 0행일 때 이유를 구분한다: 404 → 409 상태 → 409 버전 순서."""
+def _lock_failure(
+    document_id, step_id, *, deletable=False, expected_version=None, allowed=EDITABLE
+):
+    """조건부 UPDATE가 0행일 때 이유를 구분한다: 404 → 409 상태 → 409 버전 순서.
+
+    allowed: 그 기능이 허용하는 상태 집합(수정·작성완료는 EDITABLE, 상신 잠금은 LOCKABLE).
+    """
     with step(step_id, "DOC", "잠금 실패 사유 확인"):
         row = (
             Document.objects.filter(pk=document_id)
-            .values("status", "deleted_at", "submitted_at", "version", "updated_at")
+            .values("status", "deleted_at", "submitted_at", "version", "updated_at", "record_key")
             .first()
         )
         if row is None or row["deleted_at"] is not None:
             raise errors.DocumentNotFound()
         if deletable:
-            raise errors.DocumentNotDeletable()
-        if row["status"] in EDITABLE and expected_version is not None:
+            if row["record_key"] is not None:
+                reason, message = "requirement", "작성 요구로 만들어진 문서는 삭제할 수 없습니다."
+            elif row["status"] not in DELETABLE:
+                reason, message = "status", f"현재 상태: {row['status']}"
+            else:
+                reason, message = "submitted", "상신 이력이 있는 문서입니다."
+            raise errors.DocumentNotDeletable(
+                details=[{"path": "document", "code": reason, "reason": reason, "message": message}]
+            )
+        if row["status"] in allowed and expected_version is not None:
             if row["version"] != expected_version:
                 raise errors.VersionConflict(
                     details=[
@@ -468,6 +694,14 @@ def update_document(actor_id, document_id, patch):
 
             with step("DOC-UPD-05", "DOC", "변경 결과 검증") as s:
                 basic, problems, _ = validation.check_basic(doc_fields, partial=True)
+                if document.record_key and "work_date" in doc_fields:
+                    problems.append(
+                        validation.error(
+                            "document.work_date",
+                            "fixed",
+                            "작성 요구 문서의 작업일은 바꿀 수 없습니다.",
+                        )
+                    )
                 staff_pairs = []
                 if basic.get("assignee_id") is not None:
                     staff_pairs.append(("document.assignee_id", basic["assignee_id"]))
@@ -477,6 +711,14 @@ def update_document(actor_id, document_id, patch):
                 }
                 for sid in deletes:
                     key = current[sid].section_def
+                    if schema_sections.get(key, {}).get("system_rows"):
+                        problems.append(
+                            validation.error(
+                                f"sections.delete[{sid}]",
+                                "system_rows",
+                                "자동으로 추가된 행은 삭제할 수 없습니다.",
+                            )
+                        )
                     if not schema_sections.get(key, {}).get("repeat", True):
                         problems.append(
                             validation.error(
@@ -499,6 +741,7 @@ def update_document(actor_id, document_id, patch):
                     merged = validation.merge_patch(row.values_json, patch_values)
                     section = schema_sections.get(row.section_def)
                     if section:
+                        problems += validation.system_key_errors(section, patch_values, path)
                         row_errors, _ = validation.check_values(section, merged, path)
                         problems += row_errors
                         staff_pairs += validation.staff_field_paths(section, patch_values, path)
@@ -525,7 +768,17 @@ def update_document(actor_id, document_id, patch):
                             )
                         )
                         continue
+                    if section.get("system_rows"):
+                        problems.append(
+                            validation.error(
+                                f"{path}.section_def",
+                                "system_rows",
+                                "이 영역의 행은 자동으로만 추가됩니다.",
+                            )
+                        )
+                        continue
                     values = item.get("values", {})
+                    problems += validation.system_key_errors(section, values, f"{path}.values")
                     row_errors, _ = validation.check_values(section, values, f"{path}.values")
                     problems += row_errors
                     staff_pairs += validation.staff_field_paths(section, values, f"{path}.values")
@@ -543,6 +796,25 @@ def update_document(actor_id, document_id, patch):
                 if problems or duplicates:
                     s.fail(f"오류 {len(problems)}건, 중복 {len(duplicates)}건")
                 _raise_if_invalid(problems, duplicates)
+
+            with step("DOC-UPD-05b", "DOC", "판정(computed) 다시 계산") as s:
+                recomputed = 0
+                for index, (section_id, patch_values) in enumerate(merged_updates):
+                    section = schema_sections.get(current[section_id].section_def)
+                    if section is None:
+                        continue
+                    merged = validation.merge_patch(current[section_id].values_json, patch_values)
+                    computed = validation.computed_values(section, merged)
+                    if computed:
+                        merged_updates[index] = (section_id, {**patch_values, **computed})
+                        recomputed += 1
+                for index, (key, values) in enumerate(new_rows):
+                    if isinstance(values, dict) and schema_sections.get(key):
+                        new_rows[index] = (
+                            key,
+                            validation.with_computed(schema_sections[key], values),
+                        )
+                s.note(f"계산한 행 {recomputed + len(new_rows)}")
 
             with step("DOC-UPD-06", "DOC", "기본 정보 반영") as s:
                 if basic:
@@ -616,6 +888,7 @@ def delete_document(actor_id, document_id):
                 deleted_at__isnull=True,
                 status__in=DELETABLE,
                 submitted_at__isnull=True,
+                record_key__isnull=True,
             ).update(
                 deleted_at=now, deleted_by_id=actor_id, updated_at=now, version=F("version") + 1
             )
@@ -651,7 +924,7 @@ def _transition_failure(document_id, step_id):
 
 
 def lock_for_review(document_id, expected_version=None):
-    """상신 잠금: draft/rejected → submitted. WF 트랜잭션 안에서만 호출한다.
+    """상신 잠금: completed → submitted (P4-S2-Q1). WF 트랜잭션 안에서만 호출한다.
 
     expected_version을 주면 화면이 본 버전과 같을 때만 잠근다(WF 변경 요청 C-1).
     """
@@ -659,7 +932,7 @@ def lock_for_review(document_id, expected_version=None):
         _require_transaction()
     now = timezone.now()
     with step("DOC-LCK-01", "DOC", "상신 잠금(조건부 UPDATE)") as s:
-        filters = {"pk": document_id, "deleted_at__isnull": True, "status__in": EDITABLE}
+        filters = {"pk": document_id, "deleted_at__isnull": True, "status__in": LOCKABLE}
         if expected_version is not None:
             filters["version"] = expected_version
         changed = Document.objects.filter(**filters).update(
@@ -667,7 +940,9 @@ def lock_for_review(document_id, expected_version=None):
         )
         s.note(f"영향 행 {changed}")
     if changed == 0:
-        _lock_failure(document_id, "DOC-LCK-01a", expected_version=expected_version)
+        _lock_failure(
+            document_id, "DOC-LCK-01a", expected_version=expected_version, allowed=LOCKABLE
+        )
     with step("DOC-LCK-02", "DOC", "결과"):
         return _lifecycle_result(document_id)
 
@@ -698,3 +973,606 @@ def mark_rejected(document_id):
         _transition_failure(document_id, "DOC-RJT-01a")
     with step("DOC-RJT-02", "DOC", "결과"):
         return _lifecycle_result(document_id)
+
+
+# ---------------------------------------------------------------- F12·F13 작성완료·작성 재개
+
+
+def complete_document(actor_id, document_id, expected_version):
+    """작성완료: draft/rejected → completed. 잠근 뒤 검사하고, 실패하면 전체를 되돌린다(DOC-CMP)."""
+    now = timezone.now()
+    with transaction.atomic():
+        with step("DOC-CMP-02", "DOC", "작성완료(조건부 UPDATE)") as s:
+            changed = Document.objects.filter(
+                pk=document_id,
+                deleted_at__isnull=True,
+                status__in=COMPLETABLE,
+                version=expected_version,
+            ).update(
+                status="completed",
+                completed_at=now,
+                completed_by_id=actor_id,
+                updated_at=now,
+                version=F("version") + 1,
+            )
+            s.note(f"영향 행 {changed}")
+        if changed == 0:
+            _lock_failure(
+                document_id, "DOC-CMP-02a", expected_version=expected_version, allowed=COMPLETABLE
+            )
+        with step("DOC-CMP-03", "DOC", "작성완료 검사") as s:
+            document = Document.objects.select_related("template").get(pk=document_id)
+            rows = [
+                (r.section_def, r.row_no, r.values_json)
+                for r in DocSection.objects.filter(document_id=document_id)
+            ]
+            deviation_count = DeviationAction.objects.filter(
+                document_id=document_id, deleted_at__isnull=True
+            ).count()
+            file_count = DocumentFile.objects.filter(document_id=document_id).count()
+            problems = validation.completion_problems(
+                document.template.schema_json,
+                rows,
+                deviation_count=deviation_count,
+                file_count=file_count,
+            )
+            if problems:
+                s.fail(f"빠진 항목 {len(problems)}건")
+                raise errors.CompletionIncomplete(details=problems)
+    with step("DOC-CMP-04", "DOC", "결과 조회"):
+        return _detail(document_id)
+
+
+def reopen_document(actor_id, document_id, expected_version):
+    """작성 재개: completed → draft. 작성완료 기록을 지운다(P4-S2-Q7)."""
+    now = timezone.now()
+    with transaction.atomic():
+        with step("DOC-ROP-02", "DOC", "작성 재개(조건부 UPDATE)") as s:
+            changed = Document.objects.filter(
+                pk=document_id,
+                deleted_at__isnull=True,
+                status__in=REOPENABLE,
+                version=expected_version,
+            ).update(
+                status="draft",
+                completed_at=None,
+                completed_by_id=None,
+                updated_at=now,
+                version=F("version") + 1,
+            )
+            s.note(f"영향 행 {changed}")
+        if changed == 0:
+            with step("DOC-ROP-02a", "DOC", "실패 사유 확인"):
+                row = (
+                    Document.objects.filter(pk=document_id)
+                    .values("status", "deleted_at", "version")
+                    .first()
+                )
+                if row is None or row["deleted_at"] is not None:
+                    raise errors.DocumentNotFound()
+                if row["status"] not in REOPENABLE:
+                    raise errors.InvalidTransition(
+                        details=[
+                            {
+                                "path": "status",
+                                "code": row["status"],
+                                "message": f"현재 상태: {row['status']}",
+                            }
+                        ]
+                    )
+                raise errors.VersionConflict(
+                    details=[
+                        {
+                            "path": "expected_version",
+                            "code": "conflict",
+                            "message": f"내가 연 버전 {expected_version}, 현재 {row['version']}",
+                            "expected": expected_version,
+                            "current": row["version"],
+                        }
+                    ]
+                )
+    with step("DOC-ROP-03", "DOC", "결과 조회"):
+        return _detail(document_id)
+
+
+# ---------------------------------------------------------------- F19~F21 개선조치
+
+
+DEVIATION_FIELDS = ("section_id", "description", "action_result", "actor_id", "checker_ids")
+
+
+def _clean_deviation(data, *, partial):
+    """형식 검사(DB 없이, DVC-01·DVU-01). 반환: (정리된 값, 오류)."""
+    cleaned, problems = {}, []
+    if not isinstance(data, dict):
+        return cleaned, [validation.error("deviation", "invalid", "객체여야 합니다.")]
+    for key in data:
+        if key not in DEVIATION_FIELDS:
+            problems.append(validation.error(key, "unknown_field", "알 수 없는 항목입니다."))
+    if "description" in data or not partial:
+        value = data.get("description")
+        value = value.strip() if isinstance(value, str) else value
+        if not isinstance(value, str) or not value:
+            problems.append(
+                validation.error("description", "required", "한계기준 이탈내용을 입력하세요.")
+            )
+        elif len(value) > 500:
+            problems.append(validation.error("description", "max_length", "500자 이하입니다."))
+        else:
+            cleaned["description"] = value
+    if "action_result" in data:
+        value = data["action_result"]
+        value = value.strip() if isinstance(value, str) else value
+        if value not in (None, "") and not isinstance(value, str):
+            problems.append(validation.error("action_result", "invalid", "문자여야 합니다."))
+        elif isinstance(value, str) and len(value) > 1000:
+            problems.append(validation.error("action_result", "max_length", "1000자 이하입니다."))
+        else:
+            cleaned["action_result"] = value or None
+    for key in ("section_id", "actor_id"):
+        if key in data:
+            value = data[key]
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+                problems.append(validation.error(key, "invalid", "정수여야 합니다."))
+            else:
+                cleaned[key] = value
+    if "checker_ids" in data:
+        value = data["checker_ids"]
+        if not isinstance(value, list) or any(
+            isinstance(v, bool) or not isinstance(v, int) for v in value
+        ):
+            problems.append(
+                validation.error("checker_ids", "invalid", "staff id 목록이어야 합니다.")
+            )
+        elif len(set(value)) != len(value):
+            problems.append(validation.error("checker_ids", "duplicate", "확인자가 중복됩니다."))
+        elif len(value) > DEVIATION_MAX_CHECKERS:
+            problems.append(
+                validation.error(
+                    "checker_ids", "max_items", f"확인자는 {DEVIATION_MAX_CHECKERS}명까지입니다."
+                )
+            )
+        else:
+            cleaned["checker_ids"] = value
+    return cleaned, problems
+
+
+def _check_deviation_refs(document_id, cleaned):
+    """staff·관련 행 확인(DVC-03·DVU-03). 실패하면 ValidationFailed."""
+    problems = []
+    pairs = [("actor_id", cleaned["actor_id"])] if cleaned.get("actor_id") is not None else []
+    pairs += [(f"checker_ids[{i}]", sid) for i, sid in enumerate(cleaned.get("checker_ids", []))]
+    _check_staff(pairs, problems)
+    section_id = cleaned.get("section_id")
+    if (
+        section_id is not None
+        and not DocSection.objects.filter(pk=section_id, document_id=document_id).exists()
+    ):
+        problems.append(validation.error("section_id", "not_found", "이 문서의 행이 아닙니다."))
+    if problems:
+        raise errors.ValidationFailed(details=problems)
+
+
+def _deviation_detail(deviation_id):
+    deviation = DeviationAction.objects.get(pk=deviation_id)
+    checkers = list(
+        DeviationChecker.objects.filter(deviation_id=deviation_id)
+        .order_by("staff_id")
+        .values_list("staff_id", flat=True)
+    )
+    return _deviation_row(deviation, checkers)
+
+
+def create_deviation(actor_id, document_id, data):
+    """개선조치 쓰기(F19). 문서 상태와 무관하다(D-054). 문서 버전은 바뀌지 않는다."""
+    with step("DOC-DVC-01", "DOC", "형식 검사") as s:
+        cleaned, problems = _clean_deviation(data, partial=False)
+        if problems:
+            s.fail(f"오류 {len(problems)}건")
+            raise errors.ValidationFailed(details=problems)
+    now = timezone.now()
+    with transaction.atomic():
+        with step("DOC-DVC-02", "DOC", "개선조치 저장(INSERT … WHERE 문서 있음)") as s:
+            # 첫 SQL을 쓰기로: 문서가 있고 삭제되지 않았을 때만 INSERT한다.
+            with connection_cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO deviation_action (document_id, section_id, description, "
+                    "action_result, actor_id, created_by, created_at, updated_by, updated_at, "
+                    "version) SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, 1 WHERE EXISTS "
+                    "(SELECT 1 FROM document WHERE document_id = %s AND deleted_at IS NULL)",
+                    [
+                        document_id,
+                        cleaned.get("section_id"),
+                        cleaned["description"],
+                        cleaned.get("action_result"),
+                        cleaned.get("actor_id"),
+                        actor_id,
+                        _db_datetime(now),
+                        actor_id,
+                        _db_datetime(now),
+                        document_id,
+                    ],
+                )
+                inserted, deviation_id = cursor.rowcount, cursor.lastrowid
+            s.note(f"영향 행 {inserted}")
+            if inserted == 0:
+                raise errors.DocumentNotFound()
+        with step("DOC-DVC-03", "DOC", "staff·관련 행 확인"):
+            _check_deviation_refs(document_id, cleaned)
+        with step("DOC-DVC-04", "DOC", "확인자 저장"):
+            DeviationChecker.objects.bulk_create(
+                DeviationChecker(deviation_id=deviation_id, staff_id=sid)
+                for sid in cleaned.get("checker_ids", [])
+            )
+    return _deviation_detail(deviation_id)
+
+
+def _deviation_failure(deviation_id, expected_version, step_id):
+    with step(step_id, "DOC", "실패 사유 확인"):
+        row = (
+            DeviationAction.objects.filter(pk=deviation_id)
+            .values("deleted_at", "version", "document__deleted_at")
+            .first()
+        )
+        if row is None or row["deleted_at"] is not None or row["document__deleted_at"] is not None:
+            raise errors.DeviationNotFound()
+        raise errors.VersionConflict(
+            details=[
+                {
+                    "path": "expected_version",
+                    "code": "conflict",
+                    "message": f"내가 연 버전 {expected_version}, 현재 {row['version']}",
+                    "expected": expected_version,
+                    "current": row["version"],
+                }
+            ]
+        )
+
+
+def _live_deviation(deviation_id, expected_version):
+    alive_document = Document.objects.filter(pk=OuterRef("document_id"), deleted_at__isnull=True)
+    return DeviationAction.objects.filter(
+        Q(pk=deviation_id, deleted_at__isnull=True, version=expected_version),
+        Exists(alive_document),
+    )
+
+
+def update_deviation(actor_id, deviation_id, expected_version, patch):
+    """개선조치 수정(F20). 문서를 잠그지 않고 개선조치 자기 version으로 충돌을 감지한다."""
+    with step("DOC-DVU-01", "DOC", "형식 검사") as s:
+        cleaned, problems = _clean_deviation(patch, partial=True)
+        if not cleaned and not problems:
+            problems = [validation.error("deviation", "no_changes", "바꿀 내용이 없습니다.")]
+        if problems:
+            s.fail(f"오류 {len(problems)}건")
+            raise errors.ValidationFailed(details=problems)
+    now = timezone.now()
+    fields = {k: v for k, v in cleaned.items() if k != "checker_ids"}
+    with transaction.atomic():
+        with step("DOC-DVU-02", "DOC", "개선조치 수정(조건부 UPDATE)") as s:
+            changed = _live_deviation(deviation_id, expected_version).update(
+                **fields, updated_by_id=actor_id, updated_at=now, version=F("version") + 1
+            )
+            s.note(f"영향 행 {changed}")
+        if changed == 0:
+            _deviation_failure(deviation_id, expected_version, "DOC-DVU-02a")
+        with step("DOC-DVU-03", "DOC", "staff·관련 행 확인"):
+            document_id = DeviationAction.objects.values_list("document_id", flat=True).get(
+                pk=deviation_id
+            )
+            _check_deviation_refs(document_id, cleaned)
+        with step("DOC-DVU-04", "DOC", "확인자 교체") as s:
+            if "checker_ids" in cleaned:
+                DeviationChecker.objects.filter(deviation_id=deviation_id).delete()
+                DeviationChecker.objects.bulk_create(
+                    DeviationChecker(deviation_id=deviation_id, staff_id=sid)
+                    for sid in cleaned["checker_ids"]
+                )
+            else:
+                s.skip("확인자 변경 없음")
+    return _deviation_detail(deviation_id)
+
+
+def delete_deviation(actor_id, deviation_id, expected_version):
+    """개선조치 삭제(논리, F21)."""
+    now = timezone.now()
+    with transaction.atomic():
+        with step("DOC-DVD-02", "DOC", "삭제 표시(조건부 UPDATE)") as s:
+            changed = _live_deviation(deviation_id, expected_version).update(
+                deleted_at=now,
+                deleted_by_id=actor_id,
+                updated_by_id=actor_id,
+                updated_at=now,
+                version=F("version") + 1,
+            )
+            s.note(f"영향 행 {changed}")
+        if changed == 0:
+            _deviation_failure(deviation_id, expected_version, "DOC-DVD-02a")
+    return None
+
+
+# ---------------------------------------------------------------- N1~N3 작성 요구용 (REQ 전용)
+
+
+def _clean_refs(refs, path="refs"):
+    """refs 형식 검사(DB 없이). 반환: (정리된 목록, 오류)."""
+    cleaned, problems = [], []
+    if not isinstance(refs, list):
+        return [], [validation.error(path, "invalid", "목록이어야 합니다.")]
+    for i, ref in enumerate(refs):
+        where = f"{path}[{i}]"
+        if not isinstance(ref, dict):
+            problems.append(validation.error(where, "invalid", "객체여야 합니다."))
+            continue
+        item = {}
+        for key in ("lot_id", "production_batch_id", "item_id"):
+            value = ref.get(key)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+                problems.append(validation.error(f"{where}.{key}", "invalid", "정수여야 합니다."))
+            item[key] = value
+        for key, limit in (("process_code", 20), ("label", 100)):
+            value = ref.get(key)
+            if value is not None and (not isinstance(value, str) or len(value) > limit):
+                problems.append(
+                    validation.error(f"{where}.{key}", "invalid", f"{limit}자 이하 문자입니다.")
+                )
+            item[key] = value
+        if all(item[key] is None for key in REF_TARGETS):
+            problems.append(validation.error(where, "no_target", "대상이 하나 이상 필요합니다."))
+        cleaned.append(item)
+    return cleaned, problems
+
+
+def _insert_refs(document_id, section_id, refs, now, path="refs"):
+    """document_ref INSERT. FK 위반(없는 LOT 등)은 ValidationFailed로 바꾼다."""
+    for i, ref in enumerate(refs):
+        try:
+            with transaction.atomic():
+                DocumentRef.objects.create(
+                    document_id=document_id, section_id=section_id, created_at=now, **ref
+                )
+        except IntegrityError as error:
+            raise errors.ValidationFailed(
+                details=[
+                    validation.error(
+                        f"{path}[{i}]", "not_found", f"참조 대상을 확인하세요: {error}"
+                    )
+                ]
+            ) from error
+
+
+def get_or_create_document(
+    actor_id, template_code, record_key, work_date, refs, values=None, assignee_id=None
+):
+    """N1: record_key로 찾고 없으면 빈 작성중 문서를 만든다(DOC-GOC). 호출자 트랜잭션 안에서만."""
+    with step("DOC-GOC-00", "DOC", "트랜잭션·입력 형식 확인") as s:
+        _require_transaction()
+        problems = []
+        if not isinstance(record_key, str) or not record_key or len(record_key) > 200:
+            problems.append(validation.error("record_key", "invalid", "1~200자 문자입니다."))
+        parsed_date = validation.parse_work_date(
+            work_date if isinstance(work_date, str) else _iso(work_date)
+        )
+        if parsed_date is None:
+            problems.append(validation.error("work_date", "invalid", "YYYY-MM-DD 형식입니다."))
+        clean_refs, ref_problems = _clean_refs(refs)
+        problems += ref_problems
+        values = values or {}
+        if not isinstance(values, dict):
+            problems.append(validation.error("values", "invalid", "섹션별 객체여야 합니다."))
+        if problems:
+            s.fail(f"오류 {len(problems)}건")
+            raise errors.ValidationFailed(details=problems)
+    now = timezone.now()
+    with step("DOC-GOC-01", "DOC", "INSERT … ON CONFLICT(record_key) DO NOTHING") as s:
+        with connection_cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO document (template_id, work_date, record_key, created_by, "
+                "assignee_id, status, created_at, updated_at, version) "
+                "SELECT t.template_id, %s, %s, %s, %s, 'draft', %s, %s, 1 "
+                "FROM document_template t WHERE t.type_code = %s AND t.is_active = 1 "
+                "ORDER BY t.version DESC LIMIT 1 "
+                "ON CONFLICT (record_key) WHERE record_key IS NOT NULL DO NOTHING",
+                [
+                    _db_date(parsed_date),
+                    record_key,
+                    actor_id,
+                    assignee_id,
+                    _db_datetime(now),
+                    _db_datetime(now),
+                    template_code,
+                ],
+            )
+            inserted, document_id = cursor.rowcount, cursor.lastrowid
+        s.note(f"영향 행 {inserted}")
+    if inserted == 0:
+        with step("DOC-GOC-01a", "DOC", "기존 문서 또는 양식 확인"):
+            existing = (
+                Document.objects.select_related("template").filter(record_key=record_key).first()
+            )
+            if existing is not None:
+                return {"document": _full(existing), "created": False}
+            if not DocumentTemplate.objects.filter(type_code=template_code).exists():
+                raise errors.TemplateNotFound()
+            raise errors.TemplateInactive()
+    with step("DOC-GOC-02", "DOC", "초기값 검증") as s:
+        document = Document.objects.select_related("template").get(pk=document_id)
+        schema_sections = validation.sections_of(document.template.schema_json)
+        problems, staff_pairs = [], []
+        if assignee_id is not None:
+            staff_pairs.append(("assignee_id", assignee_id))
+        for key in values:
+            section = schema_sections.get(key)
+            if section is None or section["repeat"]:
+                problems.append(
+                    validation.error(f"values.{key}", "unknown_section", "1행 영역이 아닙니다.")
+                )
+                continue
+            row_errors, _ = validation.check_values(section, values[key], f"values.{key}")
+            problems += row_errors
+            staff_pairs += validation.staff_field_paths(section, values[key], f"values.{key}")
+        _check_staff(staff_pairs, problems)
+        if problems:
+            s.fail(f"오류 {len(problems)}건")
+            raise errors.ValidationFailed(details=problems)
+    with step("DOC-GOC-03", "DOC", "1행 영역 행 만들기"):
+        DocSection.objects.bulk_create(
+            DocSection(
+                document_id=document_id,
+                section_def=key,
+                row_no=1,
+                values_json=validation.with_computed(section, values.get(key) or {}),
+                recorded_at=now,
+                recorded_by_id=actor_id,
+            )
+            for key, section in schema_sections.items()
+            if not section["repeat"]
+        )
+    with step("DOC-GOC-04", "DOC", "업무 대상 참조"):
+        _insert_refs(document_id, None, clean_refs, now)
+    with step("DOC-GOC-05", "DOC", "결과"):
+        return {"document": _full(document), "created": True}
+
+
+def add_ref_row(actor_id, document_id, section_def, values, refs, dedupe_on):
+    """N2: 작성 요구 행 추가(DOC-ARR). 같은 대상 행이 있으면 추가하지 않는다.
+
+    호출자 트랜잭션 안에서만 쓴다.
+    """
+    with step("DOC-ARR-00", "DOC", "트랜잭션·입력 형식 확인") as s:
+        _require_transaction()
+        clean_refs, problems = _clean_refs(refs)
+        if dedupe_on not in REF_TARGETS:
+            problems.append(
+                validation.error("dedupe_on", "invalid", "대상 컬럼 이름이어야 합니다.")
+            )
+        elif not any(r.get(dedupe_on) is not None for r in clean_refs):
+            problems.append(validation.error("refs", "invalid", f"{dedupe_on} 참조가 필요합니다."))
+        if not isinstance(values, dict):
+            problems.append(validation.error("values", "invalid", "객체여야 합니다."))
+        if problems:
+            s.fail(f"오류 {len(problems)}건")
+            raise errors.ValidationFailed(details=problems)
+    dedupe_value = next(r[dedupe_on] for r in clean_refs if r.get(dedupe_on) is not None)
+
+    def existing_section():
+        return (
+            DocumentRef.objects.filter(
+                document_id=document_id, section_id__isnull=False, **{dedupe_on: dedupe_value}
+            )
+            .values_list("section_id", flat=True)
+            .first()
+        )
+
+    with step("DOC-ARR-01", "DOC", "잠금용 UPDATE(값·버전 변화 없음)") as s:
+        locked = Document.objects.filter(
+            pk=document_id, deleted_at__isnull=True, status__in=EDITABLE
+        ).update(updated_at=F("updated_at"))
+        s.note(f"영향 행 {locked}")
+    if locked == 0:
+        with step("DOC-ARR-01a", "DOC", "판정: 문서 없음 → 기존 행 → 잠김"):
+            row = Document.objects.filter(pk=document_id).values("deleted_at", "status").first()
+            if row is None or row["deleted_at"] is not None:
+                raise errors.DocumentNotFound()
+            found = existing_section()
+            if found is not None:
+                return {"section_id": found, "created": False}
+            raise errors.DocumentLocked(
+                details=[{"path": "status", "code": row["status"], "message": row["status"]}]
+            )
+    with step("DOC-ARR-02", "DOC", "같은 대상 행 확인"):
+        found = existing_section()
+        if found is not None:
+            return {"section_id": found, "created": False}
+    with step("DOC-ARR-03", "DOC", "양식·행 번호 읽기") as s:
+        document = Document.objects.select_related("template").get(pk=document_id)
+        section = validation.sections_of(document.template.schema_json).get(section_def)
+        if section is None or not section["repeat"]:
+            s.fail("반복 영역 아님")
+            raise errors.ValidationFailed(
+                details=[
+                    validation.error("section_def", "unknown_section", "반복 영역이 아닙니다.")
+                ]
+            )
+        last = (
+            DocSection.objects.filter(document_id=document_id, section_def=section_def)
+            .order_by("-row_no")
+            .values_list("row_no", flat=True)
+            .first()
+            or 0
+        )
+    with step("DOC-ARR-04", "DOC", "값 검증(형식, 시스템 값 허용)") as s:
+        row_errors, _ = validation.check_values(section, values, "values")
+        if row_errors:
+            s.fail(f"오류 {len(row_errors)}건")
+            raise errors.ValidationFailed(details=row_errors)
+    with step("DOC-ARR-05", "DOC", "판정 계산"):
+        values = validation.with_computed(section, values)
+    now = timezone.now()
+    with step("DOC-ARR-06", "DOC", "행·참조 INSERT, version+1"):
+        row = DocSection.objects.create(
+            document_id=document_id,
+            section_def=section_def,
+            row_no=last + 1,
+            values_json=values,
+            recorded_at=now,
+            recorded_by_id=actor_id,
+        )
+        _insert_refs(document_id, row.section_id, clean_refs, now)
+        Document.objects.filter(pk=document_id).update(updated_at=now, version=F("version") + 1)
+    return {"section_id": row.section_id, "created": True}
+
+
+def find_documents_by_ref(lot_id=None, production_batch_id=None, process_code=None, item_id=None):
+    """N3: 업무 대상으로 문서 찾기(삭제 제외). 문서 단위·행 단위 모두."""
+    with step("DOC-FND-01", "DOC", "참조로 문서 찾기"):
+        filters = {}
+        if lot_id is not None:
+            filters["lot_id"] = lot_id
+        if production_batch_id is not None:
+            filters["production_batch_id"] = production_batch_id
+            if process_code is not None:
+                filters["process_code"] = process_code
+        if item_id is not None:
+            filters["item_id"] = item_id
+        if not filters:
+            raise errors.ValidationFailed(
+                details=[validation.error("ref", "required", "찾을 대상이 필요합니다.")]
+            )
+        refs = list(DocumentRef.objects.filter(**filters).order_by("document_id", "ref_id"))
+        documents = {
+            d.document_id: d
+            for d in Document.objects.select_related("template").filter(
+                pk__in={r.document_id for r in refs}, deleted_at__isnull=True
+            )
+        }
+        return [
+            {
+                "document_id": r.document_id,
+                "type_code": documents[r.document_id].template.type_code,
+                "status": documents[r.document_id].status,
+                "version": documents[r.document_id].version,
+                "section_id": r.section_id,
+            }
+            for r in refs
+            if r.document_id in documents
+        ]
+
+
+def connection_cursor():
+    from django.db import connection
+
+    return connection.cursor()
+
+
+def _db_datetime(value):
+    """원시 SQL 파라미터를 ORM과 같은 저장 형식으로(UTC, SQLite 텍스트)."""
+    from django.db import connection
+
+    return connection.ops.adapt_datetimefield_value(value)
+
+
+def _db_date(value):
+    from django.db import connection
+
+    return connection.ops.adapt_datefield_value(value)

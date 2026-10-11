@@ -10,6 +10,7 @@ from apps.core import trace
 from apps.document_workflow import flows, services
 from apps.document_workflow.tests.base import (
     apr,
+    complete_again,
     db_state,
     doc,
     invariant_violations,
@@ -37,6 +38,10 @@ class WfTestCase(TestCase):
         version = expected if expected is not None else version_of(document_id)
         return services.submit(actor, document_id, version, slot_list or slots())
 
+    def _submit_new(self):
+        document_id = new_document(self.t)
+        return services.submit(3, document_id, version_of(document_id), slots())
+
     def traced(self, func):
         record, token = trace.start("TEST", "method")
         try:
@@ -50,13 +55,13 @@ class WfTestCase(TestCase):
 class SubmitTests(WfTestCase):
     def test_tc001_submit(self):
         document_id = new_document(self.t)
-        out = services.submit(3, document_id, 1, slots())
+        out = services.submit(3, document_id, version_of(document_id), slots())
         self.assertEqual(out["document"]["status"], "submitted")
-        self.assertEqual(out["document"]["version"], 2)
+        self.assertEqual(out["document"]["version"], 3)  # 작성 1 → 작성완료 2 → 잠금 3
         self.assertIsNotNone(out["document"]["submitted_at"])
         req = out["request"]
         self.assertEqual(
-            (req["attempt"], req["status"], req["document_version"]), (1, "in_progress", 2)
+            (req["attempt"], req["status"], req["document_version"]), (1, "in_progress", 3)
         )
         self.assertEqual(req["requested_by"], 3)
         self.assertEqual([s["state"] for s in req["slots"]], ["pending"] * 3)
@@ -66,33 +71,38 @@ class SubmitTests(WfTestCase):
         document_id = new_document(self.t)
         before = db_state(document_id)
         bad = [{"slot_no": 1, "approver_id": 2}, {"slot_no": 2, "approver_id": 2}]
-        error, ids = self.traced(lambda: services.submit(3, document_id, 1, bad))
+        error, ids = self.traced(
+            lambda: services.submit(3, document_id, version_of(document_id), bad)
+        )
         self.assertIsInstance(error, apr_errors.InvalidSlots)
         self.assertNotIn("WF-SUB-04", ids)  # 트랜잭션을 시작하지 않음 (NFR-06)
         self.assertEqual(db_state(document_id), before)
 
     def test_tc003_version_conflict(self):
-        document_id = new_document(self.t)
-        update_current(3, document_id, {"document": {"subject": "변경"}})  # v2
+        document_id = new_document(self.t)  # v2 (작성완료)
+        doc.reopen_document(3, document_id, 2)  # v3
+        doc.complete_document(3, document_id, 3)  # v4
         before = db_state(document_id)
         with self.assertRaises(doc_errors.VersionConflict):
-            services.submit(3, document_id, 1, slots())
+            services.submit(3, document_id, 2, slots())
         self.assertEqual(db_state(document_id), before)
 
     def test_tc004_locked_or_missing(self):
         submitted = self.submit()["document"]["document_id"]
         approved = self.approve_all(self.submit())
-        deleted = new_document(self.t)
+        deleted = new_document(self.t, completed=False)
         doc.delete_document(3, deleted)
+        draft = new_document(self.t, completed=False)  # P4: 작성완료 전에는 상신 불가
         cases = [
             (submitted, doc_errors.DocumentLocked),
+            (draft, doc_errors.DocumentLocked),
             (approved, doc_errors.DocumentLocked),
             (deleted, doc_errors.DocumentNotFound),
             (99999, doc_errors.DocumentNotFound),
         ]
         for document_id, error in cases:
             with self.subTest(document_id), self.assertRaises(error):
-                services.submit(3, document_id, 1, slots())
+                services.submit(3, document_id, version_of(document_id), slots())
 
     def approve_all(self, out):
         for no, who in ((1, 3), (2, 2), (3, 1)):
@@ -101,7 +111,7 @@ class SubmitTests(WfTestCase):
 
     def test_tc005_open_request_failure_rolls_back_lock(self):
         document_id = new_document(self.t)
-        # 어긋난 데이터: draft 문서에 진행 중 회차 (불변식 검사 대상이므로 끝에서 지운다)
+        # 어긋난 데이터: 작성완료 문서에 진행 중 회차 (불변식 검사 대상이므로 끝에서 지운다)
         sql(
             "INSERT INTO approval_request (document_id, attempt, status, document_version,"
             " template_id, work_date, snapshot_json, requested_by, requested_at)"
@@ -109,11 +119,13 @@ class SubmitTests(WfTestCase):
             [document_id, self.t["ccp"].template_id],
         )
         before = db_state(document_id)
-        error, ids = self.traced(lambda: services.submit(3, document_id, 1, slots()))
+        error, ids = self.traced(
+            lambda: services.submit(3, document_id, version_of(document_id), slots())
+        )
         self.assertIsInstance(error, apr_errors.OpenRequestExists)
         self.assertIn("DOC-LCK-01", ids)  # 잠금까지는 실행됐다
         self.assertEqual(db_state(document_id), before)  # 잠금도 되돌려짐
-        self.assertEqual(doc.get_document(document_id)["status"], "draft")
+        self.assertEqual(doc.get_document(document_id)["status"], "completed")
         sql("DELETE FROM approval_request WHERE document_id=%s", [document_id])
 
     def test_tc006_snapshot_is_locked_document(self):
@@ -135,7 +147,7 @@ class SubmitTests(WfTestCase):
 
 class DecideTests(WfTestCase):
     def setUp(self):
-        self.out = services.submit(3, new_document(self.t), 1, slots())
+        self.out = self._submit_new()
         self.document_id = self.out["document"]["document_id"]
         self.ids = slot_ids(self.out["request"])
 
@@ -144,7 +156,7 @@ class DecideTests(WfTestCase):
         self.assertEqual((result["request_status"], result["pending_count"]), ("in_progress", 2))
         self.assertIsNone(result["document"])
         current = doc.get_document(self.document_id)
-        self.assertEqual((current["status"], current["version"]), ("submitted", 2))
+        self.assertEqual((current["status"], current["version"]), ("submitted", 3))
 
     def test_tc011_all_approved(self):
         services.decide(3, self.ids[1], "approved")
@@ -152,7 +164,7 @@ class DecideTests(WfTestCase):
         result = services.decide(1, self.ids[3], "approved")
         self.assertEqual(result["request_status"], "approved")
         self.assertEqual(
-            (result["document"]["status"], result["document"]["version"]), ("approved", 3)
+            (result["document"]["status"], result["document"]["version"]), ("approved", 4)
         )
         req = apr.get_request(self.out["request"]["request_id"])
         self.assertEqual(req["status"], "approved")
@@ -163,7 +175,7 @@ class DecideTests(WfTestCase):
         result = services.decide(2, self.ids[2], "rejected", "온도 기록 누락")
         self.assertEqual(result["request_status"], "rejected")
         self.assertEqual(
-            (result["document"]["status"], result["document"]["version"]), ("rejected", 3)
+            (result["document"]["status"], result["document"]["version"]), ("rejected", 4)
         )
         req = apr.get_request(self.out["request"]["request_id"])
         self.assertEqual([s["state"] for s in req["slots"]], ["approved", "rejected", "skipped"])
@@ -194,8 +206,8 @@ class DecideTests(WfTestCase):
     def test_tc015_sync_failure_rolls_back_decision(self):
         services.decide(3, self.ids[1], "approved")
         services.decide(2, self.ids[2], "approved")
-        # 어긋난 데이터: 회차는 진행 중인데 문서를 draft로 (끝에서 되돌린다)
-        sql("UPDATE document SET status='draft' WHERE document_id=%s", [self.document_id])
+        # 어긋난 데이터: 회차는 진행 중인데 문서를 completed로 (끝에서 되돌린다)
+        sql("UPDATE document SET status='completed' WHERE document_id=%s", [self.document_id])
         before = db_state(self.document_id)
         error, ids = self.traced(lambda: services.decide(1, self.ids[3], "approved"))
         self.assertIsInstance(error, doc_errors.InvalidTransition)
@@ -208,7 +220,7 @@ class DecideTests(WfTestCase):
 
 class ResubmitTests(WfTestCase):
     def reject_first(self):
-        out = services.submit(3, new_document(self.t), 1, slots())
+        out = self._submit_new()
         services.decide(2, slot_ids(out["request"])[2], "rejected", "온도 누락")
         return out
 
@@ -217,6 +229,7 @@ class ResubmitTests(WfTestCase):
         document_id = first["document"]["document_id"]
         old = apr.get_request(first["request"]["request_id"])
         update_current(3, document_id, {"document": {"subject": "CCP-2B/라인B"}})
+        complete_again(document_id)  # P4: 반려 → 수정 → 작성완료 → 재상신
         second = services.submit(3, document_id, version_of(document_id), slots())
         self.assertEqual(
             (second["request"]["attempt"], second["document"]["status"]), (2, "submitted")
@@ -232,11 +245,14 @@ class ResubmitTests(WfTestCase):
     def test_tc017_resubmit_without_change(self):
         first = self.reject_first()
         document_id = first["document"]["document_id"]
+        with self.assertRaises(doc_errors.DocumentLocked):  # P4: 반려 상태에서 바로 상신 불가
+            services.submit(3, document_id, version_of(document_id), slots())
+        complete_again(document_id)
         second = services.submit(3, document_id, version_of(document_id), slots())
         a = apr.get_request(first["request"]["request_id"])["snapshot"]
         b = apr.get_request(second["request"]["request_id"])["snapshot"]
         self.assertEqual(a["sections"], b["sections"])
-        self.assertNotEqual(a["version"], b["version"])
+        self.assertEqual(b["version"] - a["version"], 3)  # 반려 +1, 작성완료 +1, 잠금 +1
 
 
 class TraceTests(WfTestCase):
@@ -244,7 +260,8 @@ class TraceTests(WfTestCase):
 
     def test_flows(self):
         document_id = new_document(self.t)
-        out, ids = self.traced(lambda: services.submit(3, document_id, 1, slots()))
+        version = version_of(document_id)
+        out, ids = self.traced(lambda: services.submit(3, document_id, version, slots()))
         # API 단계(01·02)는 API 테스트에서 확인한다.
         self.assertTrue(flows.matches("WF-SUB", ["WF-SUB-01", "WF-SUB-02", *ids]), ids)
         sids = slot_ids(out["request"])
@@ -271,5 +288,5 @@ class InvariantHelperTests(SimpleTestCase):
     def test_tc030_allowed_pairs(self):
         from apps.document_workflow.tests.base import ALLOWED_PAIRS
 
-        self.assertEqual(len(ALLOWED_PAIRS), 4)
+        self.assertEqual(len(ALLOWED_PAIRS), 7)  # P4: completed·작성 재개 조합 추가
         self.assertNotIn(("submitted", "rejected"), ALLOWED_PAIRS)

@@ -94,23 +94,31 @@ class CreateTests(TestCase):
         cases = {
             "unknown section": base["sections"] + [{"section_def": "nope", "values": {}}],
             "info twice": base["sections"] + [info],
-            "info missing": base["sections"][1:],
         }
         for name, sections in cases.items():
             with self.subTest(name), self.assertRaises(errors.ValidationFailed):
                 services.create_document(3, ccp_payload(self.t["ccp"], sections=sections))
         self.assertNoDocuments()
+        # P4 §7.1: info 누락은 저장 성공, 빈 info 행이 만들어진다(C-2)
+        created = services.create_document(
+            3, ccp_payload(self.t["ccp"], sections=base["sections"][1:])
+        )
+        info_rows = DocSection.objects.filter(
+            document_id=created["document_id"], section_def="info"
+        )
+        self.assertEqual([r.values_json for r in info_rows], [{}])
 
     def test_tc017_field_values(self):
         payload = ccp_payload(self.t["ccp"])
-        payload["sections"][0]["values"] = {"product": "유자차"}  # lot 필수 누락
+        payload["sections"][0]["values"] = {
+            "product": "유자차"
+        }  # lot 필수 누락 → 저장 때는 검사 안 함
         payload["sections"][1]["values"].update({"temp": "abc", "color": "red", "measured_by": 999})
         with self.assertRaises(errors.ValidationFailed) as ctx:
             services.create_document(3, payload)
         self.assertEqual(
             self.details(ctx),
             {
-                "sections[0].values.lot": "required",
                 "sections[1].values.temp": "invalid",
                 "sections[1].values.color": "unknown_field",
                 "sections[1].values.measured_by": "unknown_staff",
@@ -191,7 +199,7 @@ class ListAndGetTests(TestCase):
         self.assertEqual(services.list_documents({"assignee_id": "2"}, 1)["total"], 26)
 
     def test_tc033_query_count(self):
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):  # 개수 + 목록 + 대상 요약(NFR-03: 4개 이하)
             services.list_documents({"from": "2026-10-01", "to": "2026-10-09"}, 1)
 
     def test_tc040_get_document_ordered(self):
@@ -304,9 +312,10 @@ class UpdateTests(TestCase):
                 "update": [{"section_id": self.rows["r1"].section_id, "values": {"temp": None}}]
             }
         }
-        with self.assertRaises(errors.ValidationFailed) as ctx:
-            update_current(3, self.doc.document_id, body)
-        self.assertEqual(ctx.exception.details[0]["code"], "required")
+        result = update_current(3, self.doc.document_id, body)  # 저장은 성공(C-2)
+        with self.assertRaises(errors.CompletionIncomplete) as ctx:
+            services.complete_document(3, self.doc.document_id, result["version"])
+        self.assertIn("required", {d["code"] for d in ctx.exception.details})
 
     def test_tc057_duplicate_round_and_delete_then_add(self):
         add_0900 = {
@@ -382,8 +391,8 @@ class LifecycleTests(TestCase):
         doc.refresh_from_db()
         return doc.status
 
-    def test_tc080_lock_draft(self):
-        doc, _ = make_document(self.t["ccp"])
+    def test_tc080_lock_completed(self):
+        doc, _ = make_document(self.t["ccp"], status="completed")
         result = services.lock_for_review(doc.document_id)
         doc.refresh_from_db()
         self.assertEqual((result["status"], doc.status), ("submitted", "submitted"))
@@ -391,6 +400,9 @@ class LifecycleTests(TestCase):
 
     def test_tc081_lock_rejected_resubmit(self):
         doc, _ = make_document(self.t["ccp"], status="rejected")
+        with self.assertRaises(errors.DocumentLocked):  # 반려 상태에서 바로 상신 불가
+            services.lock_for_review(doc.document_id)
+        services.complete_document(3, doc.document_id, 1)
         services.lock_for_review(doc.document_id)
         self.assertEqual(self.status_of(doc), "submitted")
 
@@ -476,11 +488,13 @@ class VersionTests(TestCase):
             lambda: services.update_document(
                 3, doc.document_id, {"expected_version": 1, "document": {"subject": "1"}}
             ),
+            lambda: services.complete_document(3, doc.document_id, 2),
             lambda: services.lock_for_review(doc.document_id),
             lambda: services.mark_rejected(doc.document_id),
             lambda: services.update_document(
-                3, doc.document_id, {"expected_version": 4, "document": {"subject": "2"}}
+                3, doc.document_id, {"expected_version": 5, "document": {"subject": "2"}}
             ),
+            lambda: services.complete_document(3, doc.document_id, 6),
             lambda: services.lock_for_review(doc.document_id),
             lambda: services.mark_approved(doc.document_id),
         ]
@@ -488,7 +502,7 @@ class VersionTests(TestCase):
         for call in steps:
             call()
             versions.append(self.version(doc))
-        self.assertEqual(versions, [2, 3, 4, 5, 6, 7])
+        self.assertEqual(versions, [2, 3, 4, 5, 6, 7, 8, 9])
         other, _ = make_document(self.t["ccp"])
         services.delete_document(3, other.document_id)
         self.assertEqual(self.version(other), 2)
@@ -511,12 +525,13 @@ class LockVersionTests(TestCase):
     def test_tc086_lock_with_expected_version(self):
         doc, _ = make_document(self.t["ccp"])
         update_current(3, doc.document_id, {"document": {"subject": "v2"}})
+        services.complete_document(3, doc.document_id, 2)
         before = snapshot(doc.document_id)
         with self.assertRaises(errors.VersionConflict):
-            services.lock_for_review(doc.document_id, expected_version=1)
+            services.lock_for_review(doc.document_id, expected_version=2)
         self.assertEqual(snapshot(doc.document_id), before)
-        result = services.lock_for_review(doc.document_id, expected_version=2)
-        self.assertEqual((result["status"], result["version"]), ("submitted", 3))
+        result = services.lock_for_review(doc.document_id, expected_version=3)
+        self.assertEqual((result["status"], result["version"]), ("submitted", 4))
 
     def test_tc086_status_before_version(self):
         doc, _ = make_document(self.t["ccp"], status="approved")

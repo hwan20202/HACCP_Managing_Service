@@ -70,7 +70,7 @@ def document_collection(request):
         query = request.GET
         filters = {
             key: query.get(key)
-            for key in ("from", "to", "template_id", "status", "author_id", "assignee_id")
+            for key in ("from", "to", "template_id", "status", "author_id", "assignee_id", "target")
         }
         return json_response(services.list_documents(filters, query.get("page", "1")))
 
@@ -122,4 +122,76 @@ def document_item(request, document_id):
 
     actor = _actor(request, "DOC-DEL-01")
     services.delete_document(actor, document_id)
+    return HttpResponse(status=204)
+
+
+# ---------------------------------------------------------------- P4: 작성완료·재개, 개선조치
+
+DEVIATION_PATCH_KEYS = ("expected_version", *services.DEVIATION_FIELDS)
+
+
+def _version_body(request, step_id):
+    """{expected_version}만 받는 요청. 반환: (actor, expected_version)."""
+    with step(step_id, "API", "요청 형식·사용자 확인"):
+        body = parse_json_body(request)
+        reject_unknown_keys(body, ("expected_version",))
+        expected = services._expected_version(body)
+        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+    return actor, expected
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@_api
+def document_complete(request, document_id):
+    """DOC-A09 작성완료."""
+    actor, expected = _version_body(request, "DOC-CMP-01")
+    return json_response(services.complete_document(actor, document_id, expected))
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@_api
+def document_reopen(request, document_id):
+    """DOC-A10 작성 재개."""
+    actor, expected = _version_body(request, "DOC-ROP-01")
+    return json_response(services.reopen_document(actor, document_id, expected))
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@_api
+def deviation_collection(request, document_id):
+    """DOC-A15 개선조치 쓰기."""
+    with step("DOC-DVC-00", "API", "요청 형식·사용자 확인"):
+        body = parse_json_body(request)
+        reject_unknown_keys(body, services.DEVIATION_FIELDS)
+        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+    return json_response(services.create_deviation(actor, document_id, body), status=201)
+
+
+@csrf_exempt
+@require_http_methods(["PATCH", "DELETE"])
+@_api
+def deviation_item(request, deviation_id):
+    """DOC-A16 개선조치 수정 / DOC-A17 삭제."""
+    if request.method == "PATCH":
+        with step("DOC-DVU-00", "API", "요청 형식·사용자 확인"):
+            body = parse_json_body(request)
+            reject_unknown_keys(body, DEVIATION_PATCH_KEYS)
+            expected = services._expected_version(body)
+            actor = actor_from_header(request.headers.get("X-Staff-Id"))
+        patch = {k: v for k, v in body.items() if k != "expected_version"}
+        return json_response(services.update_deviation(actor, deviation_id, expected, patch))
+
+    with step("DOC-DVD-01", "API", "요청 형식·사용자 확인"):
+        raw = request.GET.get("expected_version") or ""
+        expected = int(raw) if raw.isascii() and raw.isdigit() else 0
+        if expected < 1:
+            raise ApiError(
+                "expected_version(1 이상 정수)이 필요합니다.",
+                [{"path": "expected_version", "code": "required", "message": "필수입니다."}],
+            )
+        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+    services.delete_deviation(actor, deviation_id, expected)
     return HttpResponse(status=204)

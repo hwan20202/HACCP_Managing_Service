@@ -67,3 +67,23 @@ class TransactionRequired(DocumentError):
     """생명주기 전이 함수는 WF가 연 트랜잭션 안에서만 호출한다(S2-Q6)."""
 
     status, code, message = 500, "TRANSACTION_REQUIRED", "트랜잭션 안에서 호출해야 합니다."
+
+
+class TemplateRequirementOnly(DocumentError):
+    status, code, message = (
+        409,
+        "TEMPLATE_REQUIREMENT_ONLY",
+        "이 양식은 입고·생산 시작 때 자동으로 만들어집니다.",
+    )
+
+
+class CompletionIncomplete(DocumentError):
+    status, code, message = (
+        400,
+        "COMPLETION_INCOMPLETE",
+        "작성완료할 수 없습니다. 빠진 항목을 채우세요.",
+    )
+
+
+class DeviationNotFound(DocumentError):
+    status, code, message = 404, "DEVIATION_NOT_FOUND", "개선조치를 찾을 수 없습니다."

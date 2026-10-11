@@ -113,15 +113,27 @@ TEMPLATES = [
 ]
 
 
+def ensure_p4_templates():
+    """스프린트 2 작성 요구 양식(D01~D03, CCP-1P·2B·3P v1). 반환: {type_code: template}."""
+    from .seed_forms import P4_TEMPLATES
+
+    made = _ensure(P4_TEMPLATES)
+    return {code: made[(code, version)] for code, version, *_ in P4_TEMPLATES}
+
+
 def ensure_staff(count=5):
     for staff_id in range(1, count + 1):
         Staff.objects.get_or_create(staff_id=staff_id)
 
 
 def ensure_templates():
+    return _ensure(TEMPLATES)
+
+
+def _ensure(definitions):
     now = timezone.now()
     result = {}
-    for type_code, version, name, schema, active in TEMPLATES:
+    for type_code, version, name, schema, active in definitions:
         problems = check_template_schema(schema)
         if problems:
             raise ValueError(f"{type_code} v{version} schema_json 오류: {problems}")

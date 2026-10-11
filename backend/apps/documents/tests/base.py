@@ -62,7 +62,9 @@ def make_document(
         status=status,
         created_at=now,
         updated_at=now,
-        submitted_at=now if submitted or status != "draft" else None,
+        submitted_at=now if submitted or status not in ("draft", "completed") else None,
+        completed_at=None if status == "draft" else now,
+        completed_by_id=None if status == "draft" else author,
         deleted_at=now if deleted else None,
         deleted_by_id=1 if deleted else None,
     )
