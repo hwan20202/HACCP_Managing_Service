@@ -207,7 +207,8 @@ def seed_p4(today=None):
             actor, "D03", f"D03|date:{yesterday.isoformat()}", yesterday, [], assignee_id=2
         )
         made["documents"] += int(d03_prev["created"])
-        for lot, lot_item, supplier, kind, lot_qty in lots[3:5]:
+        # 전날 문서가 이미 있으면(다른 날짜로 다시 실행) 행을 더하지 않는다 — 이미 승인됐을 수 있음
+        for lot, lot_item, supplier, kind, lot_qty in lots[3:5] if d03_prev["created"] else []:
             ref = [{"lot_id": lot.id, "label": lot.lot_number}]
             row = {
                 **_lot_values(lot, lot_item, supplier, yesterday),
@@ -230,9 +231,22 @@ def seed_p4(today=None):
             assignee_id=2,
         )
         made["documents"] += int(batch3p["created"])
+        # S6-25: 배치 2 × 2B — 측정 행 없는 작성중(건조시간 판정 확인용, ISS-010)
+        batch2b = doc.get_or_create_document(
+            actor,
+            "CCP-2B",
+            f"CCP-2B|batch:{batch.id}",
+            today,
+            [{"production_batch_id": batch.id, "process_code": "2B", "label": batch.batch_number}],
+            values={"info": {"item_name": item, "batch_qty_kg": qty}},
+            assignee_id=2,
+        )
+        made["documents"] += int(batch2b["created"])
 
-    if not d03["created"]:
-        return made  # 이미 시드된 날짜: 상태 만들기는 건너뛴다
+    if not d03["created"] or not ccp["CCP-1P"]["created"]:
+        # 이미 시드된 날짜, 또는 다른 날짜로 다시 실행해 배치 문서가 이미 있는 경우:
+        # 상태 만들기는 건너뛴다
+        return made
 
     # 상태: D03 승인, CCP-1P 작성완료, CCP-2B 결재중, CCP-3P 작성중(부적합+개선조치),
     # 배치 2 CCP-1P 반려

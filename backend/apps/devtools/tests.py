@@ -53,8 +53,11 @@ class SeedP4Tests(TestCase):
         from apps.document_workflow.tests.base import invariant_violations
         from apps.documents.models import Document
 
-        self.assertEqual(seed_p4("2026-10-11"), {"documents": 13, "lot_rows": 5})
+        self.assertEqual(seed_p4("2026-10-11"), {"documents": 14, "lot_rows": 5})
         self.assertEqual(seed_p4("2026-10-11"), {"documents": 0, "lot_rows": 0})
+        # 다른 날짜로 다시 실행: 그날 육안검사만 새로 생기고 배치 문서는 그대로(오류 없이)
+        again = seed_p4("2026-10-12")
+        self.assertEqual(again["lot_rows"], 3)
         self.assertEqual(invariant_violations(), [])
         statuses = set(Document.objects.values_list("status", flat=True))
         self.assertEqual(statuses, {"draft", "completed", "submitted", "approved", "rejected"})
