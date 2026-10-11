@@ -120,8 +120,14 @@
       }
       const items = r.data.items;
       const latest = items[0] || null;
-      const expected = { draft: null, submitted: 'in_progress', approved: 'approved', rejected: 'rejected' }[d.status];
-      const mismatch = (latest ? latest.status : null) !== expected;
+      // P4: 상신은 작성완료(completed)에서만. 반려 뒤 수정·작성완료·작성 재개를 거치면 최신 회차는 rejected로 남는다.
+      const allowed = {
+        draft: [null, 'rejected'], completed: [null, 'rejected'],
+        submitted: ['in_progress'], approved: ['approved'], rejected: ['rejected'],
+      }[d.status] || [];
+      const mismatch = !allowed.includes(latest ? latest.status : null);
+      const canSubmit = d.status === 'completed';
+      const notReady = '<div class="te-hint">작성완료한 뒤 상신할 수 있습니다.</div>';
       let head = '';
       let body = '';
       let action = '';
@@ -130,8 +136,10 @@
         body = `<div class="te-error-box">결재 기록이 문서 상태(${esc(T.STATUS[d.status]?.label || d.status)})와 맞지 않습니다${latest ? ` — 최신 회차 ${esc(REQUEST[latest.status]?.label || latest.status)}` : ' — 회차 없음'}. 관리자에게 확인을 요청하세요.</div>`;
         if (latest) body += slotTable(latest);
       } else if (!latest) {
-        body = '<p class="te-hint">아직 상신하지 않았습니다. 결재선을 지정해 상신하세요.</p>';
-        action = `<button class="btn btn-primary btn-sm" id="apSubmit" ${disabled}>결재 상신</button>`;
+        body = canSubmit
+          ? '<p class="te-hint">아직 상신하지 않았습니다. 결재선을 지정해 상신하세요.</p>'
+          : `<p class="te-hint">아직 상신하지 않았습니다.</p>${notReady}`;
+        if (canSubmit) action = `<button class="btn btn-primary btn-sm" id="apSubmit" ${disabled}>결재 상신</button>`;
       } else {
         head = `<span class="te-hint">${latest.attempt}회차 ·</span> ${badge(REQUEST, latest.status)}`;
         body = `<div class="te-meta">상신 staff ${latest.requested_by} · ${T.fmtDateTime(latest.requested_at)} · 문서 버전 v${latest.document_version}</div>${slotTable(latest)}`;
@@ -142,8 +150,8 @@
         } else {
           const rej = latest.slots.find((s) => s.state === 'rejected');
           body += `<div class="te-reject-reason">반려 사유 — ${rej ? `${slotName(rej)} staff ${rej.approver_id}: ${esc(rej.comment)}` : '-'}</div>
-            <div class="te-hint">수정한 뒤 재상신하세요. 수정 없이 재상신할 수도 있습니다.</div>`;
-          action = `<button class="btn btn-primary btn-sm" id="apSubmit" ${disabled}>재상신</button>`;
+            <div class="te-hint">${canSubmit ? '작성완료된 내용으로 재상신할 수 있습니다.' : '필요하면 수정하고, 작성완료한 뒤 재상신하세요.'}</div>`;
+          if (canSubmit) action = `<button class="btn btn-primary btn-sm" id="apSubmit" ${disabled}>재상신</button>`;
         }
       }
       const older = items.slice(1);
@@ -265,7 +273,7 @@
           });
           state.top = `[INVALID_SLOTS] ${esc(res.data.message)}${top.length ? `<ul>${top.map((t) => `<li>${t}</li>`).join('')}</ul>` : ''}`;
         } else if (code === 'DOCUMENT_LOCKED') {
-          state.top = '문서가 이미 결재 진행 중이거나 승인되어 상신할 수 없습니다. <button class="btn btn-secondary btn-sm" data-reload>상세 새로고침</button>';
+          state.top = '문서가 작성완료 상태가 아니거나(작성 재개됨) 이미 결재 진행 중·승인되어 상신할 수 없습니다. <button class="btn btn-secondary btn-sm" data-reload>상세 새로고침</button>';
         } else if (code === 'OPEN_REQUEST_EXISTS') {
           state.top = '이 문서에 진행 중인 결재가 이미 있습니다. <button class="btn btn-secondary btn-sm" data-reload>상세 새로고침</button>';
         } else if (res.status === 404) {

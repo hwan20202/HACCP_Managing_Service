@@ -153,3 +153,13 @@ class P4TraceApiTests(P4ApiTestCase):
         self.assertEqual(deleted.status_code, 204)
         ids = self.ids_by_header(deleted)
         self.assertTrue(flows.matches("DOC-DVD", ids), ids)
+
+    def test_snapshot_includes_p4_tables(self):
+        document_id = filled_ccp1p()
+        self.post(f"documents/{document_id}/deviations", {"description": "x", "checker_ids": [5]})
+        data = self.client.get(f"/api/dev/snapshot?document_id={document_id}").json()
+        tables = data["tables"]
+        self.assertEqual(tables["document_ref"][0]["production_batch_id"], 12)
+        self.assertEqual(len(tables["deviation_action"]), 1)
+        self.assertEqual(tables["deviation_checker"][0]["staff_id"], 5)
+        self.assertIn({"staff_id": 5}, tables["staff"])

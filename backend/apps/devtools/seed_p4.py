@@ -4,6 +4,7 @@
 - 작성 요구 문서는 REQ가 아직 없으므로(P5) DOC의 N1·N2를 직접 불러 만든다. record_key 형식은
   req-s2-spec.md와 같다. 결재 상태는 WF 함수로 만든다(문서·회차 상태 짝 유지).
 - 파일(D01·D02 첨부)은 스프린트 3(D-058)이라 만들지 않는다. D01·D02는 작성중으로 남는다.
+- 개발 콘솔 P4 프리셋용: 전날 육안검사 draft(LOT 2행), 배치 2 CCP-3P draft(검출량 1, 개선조치 없음).
 """
 
 from datetime import date, timedelta
@@ -200,6 +201,36 @@ def seed_p4(today=None):
         )
         made["documents"] += int(rejected["created"])
 
+        # 개발 콘솔 프리셋용(DOC-PS-16·17·22): 전날 육안검사 draft(LOT 2행, 입력 전)
+        yesterday = today - timedelta(days=1)
+        d03_prev = doc.get_or_create_document(
+            actor, "D03", f"D03|date:{yesterday.isoformat()}", yesterday, [], assignee_id=2
+        )
+        made["documents"] += int(d03_prev["created"])
+        for lot, lot_item, supplier, kind, lot_qty in lots[3:5]:
+            ref = [{"lot_id": lot.id, "label": lot.lot_number}]
+            row = {
+                **_lot_values(lot, lot_item, supplier, yesterday),
+                "material_kind": kind,
+                "quantity": lot_qty,
+                "expiration_date": lot.expiration_date.isoformat(),
+            }
+            out = doc.add_ref_row(actor, d03_prev["document"]["document_id"], "lots", row, ref,
+                                  "lot_id")  # fmt: skip
+            made["lot_rows"] += int(out["created"])
+        # DOC-PS-18: 배치 2 × 3P — 검출량 > 0(부적합), 개선조치·점검자 없음
+        batch, item, qty = batches[1]
+        batch3p = doc.get_or_create_document(
+            actor,
+            "CCP-3P",
+            f"CCP-3P|batch:{batch.id}",
+            today,
+            [{"production_batch_id": batch.id, "process_code": "3P", "label": batch.batch_number}],
+            values={"info": {"item_name": item, "batch_qty_kg": qty}},
+            assignee_id=2,
+        )
+        made["documents"] += int(batch3p["created"])
+
     if not d03["created"]:
         return made  # 이미 시드된 날짜: 상태 만들기는 건너뛴다
 
@@ -253,4 +284,11 @@ def seed_p4(today=None):
     _complete(actor, rejected_id)
     ids = _submit(actor, rejected_id)
     wf.decide(3, ids[1], "rejected", "작업 중 측정 시각 확인 필요")
+
+    b3p = batch3p["document"]["document_id"]
+    section, rows = _ccp_rows("CCP-3P", today)
+    _add_rows(actor, b3p, section, [rows[0], rows[2]])
+    _add_rows(
+        actor, b3p, "summary", [{"item_name": "유자환", "passed_qty": 790, "detected_qty": 1}]
+    )
     return made

@@ -84,3 +84,21 @@
 .te-tabs { display: flex; gap: 0.4rem; margin-bottom: 0.9rem; }
 .te-nowrap { white-space: nowrap; }
 .te-snapshot { border-top: 1px dashed var(--border-strong); padding-top: 1rem; }
+
+/* P4 문서 도메인 확장 (작성 요구 문서·작성완료·개선조치) */
+.te-chip-req { background: #e7f1ff; color: #0b5394; border: 1px solid #b6d4fe; font-weight: 600; margin-left: 0.35rem; }
+.te-req { font-size: 0.78rem; color: #0b5394; font-weight: 600; white-space: nowrap; }
+.te-ro { color: var(--text-secondary); }
+.te-ro-block { padding: 0.45rem 0.6rem; background: #f1f3f5; border-radius: var(--radius-md); font-size: 0.85rem; }
+.te-ro-cell, .te-rows th.te-ro-head { background: #f1f3f5; }
+.te-dt, .te-hm { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.78rem; white-space: nowrap; }
+.te-dt .form-control { min-width: 7.5rem; }
+.te-hm .form-control { min-width: 3.5rem; width: 4rem; }
+.te-guide { margin-top: 1rem; font-size: 0.82rem; }
+.te-guide summary { cursor: pointer; color: var(--text-secondary); font-weight: 600; }
+.te-guide .data-table { margin: 0.4rem 0 0.6rem; }
+.te-deviation { border-top: 2px solid var(--border-default); padding-top: 1rem; margin-top: 1.5rem; }
+.te-checkers { display: inline-flex; flex-wrap: wrap; gap: 0.15rem 0.5rem; min-width: 8rem; }
+.te-checkers .te-check { gap: 0.15rem; }
+.te-dev-add { margin-top: 0.3rem; }
+.te-btn-complete { background: var(--color-success); border-color: var(--color-success); }

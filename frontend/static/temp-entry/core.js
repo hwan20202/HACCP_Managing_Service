@@ -8,6 +8,7 @@
 
   const STATUS = {
     draft: { label: '작성중', badge: 'badge-neutral' },
+    completed: { label: '작성완료', badge: 'badge-warning' },
     submitted: { label: '결재중', badge: 'badge-info' },
     approved: { label: '승인', badge: 'badge-success' },
     rejected: { label: '반려', badge: 'badge-danger' },

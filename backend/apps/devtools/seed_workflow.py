@@ -93,13 +93,22 @@ def seed_workflow(today=None):
         )
     made["paging"] = 21
     # WF-PS-05용 어긋난 데이터: draft 문서에 진행 중 회차(칸 없음). 결재 영역에 경고가 보여야 정상.
+    # P4: 작성완료 문서여야 상신 잠금(DOC-LCK)을 통과해 회차 생성(APR-OPN)에서 막힌다.
     broken = new("어긋난 데이터(PS-05) — 개발 콘솔 전용", 0)
+    version = doc.complete_document(3, broken, 1)["version"]
     with connection.cursor() as cursor:
         cursor.execute(
             "INSERT INTO approval_request (document_id, attempt, status, document_version,"
             " template_id, subject, work_date, snapshot_json, requested_by, requested_at)"
-            " VALUES (%s, 1, 'in_progress', 1, %s, %s, %s, '{}', 3, %s)",
-            [broken, ccp, "어긋난 데이터(PS-05)", today.isoformat(), timezone.now().isoformat()],
+            " VALUES (%s, 1, 'in_progress', %s, %s, %s, %s, '{}', 3, %s)",
+            [
+                broken,
+                version,
+                ccp,
+                "어긋난 데이터(PS-05)",
+                today.isoformat(),
+                timezone.now().isoformat(),
+            ],
         )
     made["mismatch"] = 1
     return made

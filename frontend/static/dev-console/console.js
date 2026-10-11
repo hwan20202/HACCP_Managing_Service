@@ -31,6 +31,12 @@
     inbox: { label: 'APR 결재함 (A01)', method: 'GET', flow: 'APR-INB', uses: ['query'], path: (s) => `approval-inbox${s.query ? `?${s.query}` : ''}` },
     request: { label: 'APR 결재 요청 상세 (A02)', method: 'GET', flow: 'APR-GET', uses: ['id'], path: (s) => `approval-requests/${s.id}` },
     history: { label: 'APR 문서별 회차 이력 (A03)', method: 'GET', flow: 'APR-HIS', uses: ['id'], path: (s) => `documents/${s.id}/approval-requests`, doc: (s) => s.id },
+    // ---- P4 DOC 확장 — document/p4-s2-spec.md 4장
+    complete: { label: '작성완료 (F12·A09)', method: 'POST', flow: 'DOC-CMP', uses: ['id', 'body'], path: (s) => `documents/${s.id}/complete`, doc: (s) => s.id },
+    reopen: { label: '작성 재개 (F13·A10)', method: 'POST', flow: 'DOC-ROP', uses: ['id', 'body'], path: (s) => `documents/${s.id}/reopen`, doc: (s) => s.id },
+    devCreate: { label: '개선조치 쓰기 (F19·A15)', method: 'POST', flow: 'DOC-DVC', uses: ['id', 'body'], path: (s) => `documents/${s.id}/deviations`, doc: (s) => s.id },
+    devUpdate: { label: '개선조치 수정 (F20·A16)', method: 'PATCH', flow: 'DOC-DVU', uses: ['id', 'body', 'docId'], path: (s) => `deviations/${s.id}`, doc: (s) => s.docId },
+    devDelete: { label: '개선조치 삭제 (F21·A17)', method: 'DELETE', flow: 'DOC-DVD', uses: ['id', 'query', 'docId'], path: (s) => `deviations/${s.id}${s.query ? `?${s.query}` : ''}`, doc: (s) => s.docId },
   };
   const flowOf = (fn, record) => (typeof fn.flow === 'function' ? fn.flow(record) : fn.flow);
 
@@ -155,7 +161,10 @@
   const PK = {
     document: 'document_id', doc_section: 'section_id', document_template: 'template_id', staff: 'staff_id',
     approval_request: 'request_id', approval: 'approval_id',
+    document_ref: 'ref_id', deviation_action: 'deviation_id',
   };
+  // 복합 PK 테이블 (ERD v5 A12)
+  const keyOf = (name, row) => (name === 'deviation_checker' ? `${row.deviation_id}-${row.staff_id}` : row[PK[name]]);
 
   function cellDiff(a, b) {
     if (a && b && typeof a === 'object' && typeof b === 'object') {
@@ -173,9 +182,8 @@
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
   function diffTable(name, beforeRows, afterRows, onlyChanged) {
-    const pk = PK[name];
-    const before = Object.fromEntries((beforeRows || []).map((r) => [r[pk], r]));
-    const after = Object.fromEntries((afterRows || []).map((r) => [r[pk], r]));
+    const before = Object.fromEntries((beforeRows || []).map((r) => [keyOf(name, r), r]));
+    const after = Object.fromEntries((afterRows || []).map((r) => [keyOf(name, r), r]));
     const ids = [...new Set([...Object.keys(before), ...Object.keys(after)])];
     const cols = [...new Set([...(beforeRows || []), ...(afterRows || [])].flatMap((r) => Object.keys(r)))];
     let counts = { added: 0, removed: 0, changed: 0 };
@@ -208,7 +216,7 @@
     const b = (before && before.tables) || {};
     const a = (after && after.tables) || {};
     $('#dcDbTitle').innerHTML = `document_id = ${esc(docId)} ${after && after.deleted ? '<span class="dc-deleted-flag">· 논리 삭제됨 (업무 API는 404)</span>' : ''} ${!before || !before.exists ? '<span class="te-hint">· 실행 전 없음</span>' : ''}`;
-    $('#dcDbBody').innerHTML = ['document', 'doc_section', 'approval_request', 'approval', 'document_template', 'staff'].map((t) => diffTable(t, b[t], a[t], onlyChanged)).join('');
+    $('#dcDbBody').innerHTML = ['document', 'doc_section', 'document_ref', 'deviation_action', 'deviation_checker', 'approval_request', 'approval', 'document_template', 'staff'].map((t) => diffTable(t, b[t], a[t], onlyChanged)).join('');
   }
 
   // ---------------------------------------------------------------- 이력
@@ -293,8 +301,8 @@
   const PRESETS = [
     { id: 'DOC-PS-01', label: '문서 작성 정상', expect: '201 · DOC-CRT 9단계 통과 · document +1(draft), doc_section +3',
       prepare: async () => ({ func: 'create', body: J(ccpBody(await ccpTemplateId(), ['09:00', '10:00'])) }) },
-    { id: 'DOC-PS-02', label: '필수값 누락 작성', expect: '400 VALIDATION_ERROR · DOC-CRT-06 실패 · DB 변화 없음',
-      prepare: async () => { const b = ccpBody(await ccpTemplateId(), ['09:00']); delete b.sections[0].values.lot; delete b.sections[1].values.temp; return { func: 'create', body: J(b) }; } },
+    { id: 'DOC-PS-02', label: '형식 오류 작성 (필수값 누락은 저장됨 — P4 C-2)', expect: '400 VALIDATION_ERROR · DOC-CRT-06 실패(온도 형식) · 필수값(lot) 누락은 오류가 아님 · DB 변화 없음',
+      prepare: async () => { const b = ccpBody(await ccpTemplateId(), ['09:00']); delete b.sections[0].values.lot; b.sections[1].values.temp = 'abc'; return { func: 'create', body: J(b) }; } },
     { id: 'DOC-PS-03', label: '없는 staff로 요청', expect: '403 INVALID_STAFF · DOC-CRT-02 실패 · DB 변화 없음',
       prepare: async () => ({ func: 'create', staff: '999', body: J(ccpBody(await ccpTemplateId(), ['09:00'])) }) },
     { id: 'DOC-PS-04', label: '비활성 양식으로 작성', expect: '409 TEMPLATE_INACTIVE · DOC-CRT-03 실패',
@@ -373,10 +381,12 @@
   const SEED_HINT = 'seed_dev_workflow로 시드 데이터를 넣으세요';
   const SLOTS3 = [{ slot_no: 1, label: '담당', approver_id: 3 }, { slot_no: 2, label: '검토', approver_id: 2 }, { slot_no: 3, label: '승인', approver_id: 1 }];
   async function freshDraft(pred = () => true) {
-    const d = await findDoc('draft', (x) => !x.submitted_at && !(x.subject || '').includes('PS-05') && pred(x));
+    const d = await findDoc('draft', (x) => !x.submitted_at && !x.record_key && !(x.subject || '').includes('PS-05') && pred(x));
     if (!d) throw new Error(`상신 이력 없는 draft 문서가 없습니다. ${SEED_HINT}.`);
     return quietGet(`documents/${d.document_id}`);
   }
+  // P4: 상신은 작성완료(completed) 문서만. draft를 먼저 작성완료한 뒤 상신하는 스크립트를 만든다.
+  const completeSpec = (d) => ({ func: 'complete', id: d.document_id, body: J({ expected_version: d.version }), staff: api.staffId });
   async function pendingItem(staff, pred = () => true) {
     for (let page = 1; page <= 10; page += 1) {
       const r = await quietGetAs(`approval-inbox?box=pending&page=${page}`, staff);
@@ -393,17 +403,25 @@
   const decideSpec = (item, staff, body, docId) => ({ func: 'decide', id: String(item.approval_id), staff: String(staff), docId: String(docId), body: J(body) });
 
   PRESETS.push(
-    { id: 'WF-PS-01', label: '상신 정상', expect: '201 · WF-SUB 도식 일치(VAL→[LCK→GET→OPN]) · document draft→submitted·version+1, approval_request +1(1회차), approval +3(pending)',
-      prepare: async () => { const d = await freshDraft(); return { func: 'submit', id: d.document_id, body: J({ expected_version: d.version, slots: SLOTS3 }) }; } },
-    { id: 'WF-PS-02', label: '잘못된 결재선(같은 결재자 2칸)', expect: '400 INVALID_SLOTS · WF-SUB-03(APR-VAL)에서 실패, 트랜잭션 단계(WF-SUB-04) 없음 · DB 변화 없음',
-      prepare: async () => { const d = await freshDraft(); return { func: 'submit', id: d.document_id, body: J({ expected_version: d.version, slots: [{ slot_no: 1, approver_id: 2 }, { slot_no: 2, approver_id: 2 }] }) }; } },
-    { id: 'WF-PS-03', label: '오래된 버전으로 상신', expect: '1번째 PATCH 200(version+1) → 2번째 상신(옛 버전) 409 VERSION_CONFLICT · DOC-LCK-01 영향 0행 → 01a · WF-SUB-04 롤백 · 상신 변화 없음',
+    { id: 'WF-PS-01', label: '상신 정상 (작성완료 → 상신)', expect: '작성완료 200 → 상신 201 · WF-SUB 도식 일치(VAL→[LCK→GET→OPN]) · document completed→submitted·version+1, approval_request +1(1회차), approval +3(pending)',
+      prepare: async () => {
+        const d = await freshDraft();
+        const submit = { func: 'submit', id: d.document_id, body: J({ expected_version: d.version + 1, slots: SLOTS3 }) };
+        return { ...submit, script: async (exec) => { await exec(completeSpec(d)); await exec({ ...submit, staff: api.staffId }); } };
+      } },
+    { id: 'WF-PS-02', label: '잘못된 결재선(같은 결재자 2칸)', expect: '작성완료 200 → 상신 400 INVALID_SLOTS · WF-SUB-03(APR-VAL)에서 실패, 트랜잭션 단계(WF-SUB-04) 없음 · 상신 변화 없음(문서는 작성완료로 남음)',
+      prepare: async () => {
+        const d = await freshDraft();
+        const submit = { func: 'submit', id: d.document_id, body: J({ expected_version: d.version + 1, slots: [{ slot_no: 1, approver_id: 2 }, { slot_no: 2, approver_id: 2 }] }) };
+        return { ...submit, script: async (exec) => { await exec(completeSpec(d)); await exec({ ...submit, staff: api.staffId }); } };
+      } },
+    { id: 'WF-PS-03', label: '오래된 버전으로 상신', expect: '작성완료 200(version+1) → 작성완료 전 버전으로 상신 409 VERSION_CONFLICT · DOC-LCK-01 영향 0행 → 01a · WF-SUB-04 롤백 · 상신 변화 없음',
       prepare: async () => {
         const d = await freshDraft();
         const submit = J({ expected_version: d.version, slots: SLOTS3 });
         return { func: 'submit', id: d.document_id, body: submit,
           script: async (exec) => {
-            await exec({ func: 'update', id: d.document_id, body: J({ expected_version: d.version, document: { subject: `${d.subject || ''} (다른 사용자 수정)` } }), staff: '4' });
+            await exec({ ...completeSpec(d), staff: '4' });
             await exec({ func: 'submit', id: d.document_id, body: submit, staff: api.staffId });
           } };
       } },
@@ -411,7 +429,7 @@
       prepare: async () => { const d = need(await findDoc('submitted'), 'submitted'); return { func: 'submit', id: d.document_id, body: J({ expected_version: d.version, slots: SLOTS3 }) }; } },
     { id: 'WF-PS-05', label: '회차 생성 실패 → 잠금까지 롤백', expect: '409 OPEN_REQUEST_EXISTS · DOC-LCK-01 통과(잠금) → APR-OPN-02 실패 → WF-SUB-04 롤백 · document status·version 그대로(잠금도 되돌려짐)',
       prepare: async () => {
-        const d = need(await findDoc('draft', (x) => (x.subject || '').includes('PS-05')), '시드의 어긋난 데이터(PS-05)');
+        const d = need(await findDoc('completed', (x) => (x.subject || '').includes('PS-05')), '시드의 어긋난 데이터(PS-05)');
         return { func: 'submit', id: d.document_id, body: J({ expected_version: d.version, slots: SLOTS3 }) };
       } },
     { id: 'WF-PS-06', label: '중간 승인', expect: '200 · WF-DEC-PROGRESS(WF-DEC-05 건너뜀) · approval 1행 pending→approved · document 변화 없음, 응답 document null',
@@ -443,20 +461,112 @@
         if (!slot) throw new Error(`반려 회차에 미처리 종료 칸이 없습니다. ${SEED_HINT}.`);
         return decideSpec(slot, slot.approver_id, { result: 'approved' }, d.document_id);
       } },
-    { id: 'WF-PS-12', label: '재상신(수정 후)', expect: 'PATCH 200 → 상신 201 · DOC-LCK가 rejected 통과 · approval_request +1(n+1회차), 이전 회차 행·스냅샷 그대로 · document rejected→submitted',
+    { id: 'WF-PS-12', label: '재상신(수정 → 작성완료 → 상신)', expect: 'PATCH 200 → 작성완료 200 → 상신 201 · DOC-LCK가 completed 통과 · approval_request +1(n+1회차), 이전 회차 행·스냅샷 그대로 · document rejected→completed→submitted',
       prepare: async () => {
         const d = need(await findDoc('rejected'), 'rejected');
         const req = await latestRequest(d.document_id);
         const slots = req ? req.slots.map((s) => ({ slot_no: s.slot_no, label: s.label || undefined, approver_id: s.approver_id })) : SLOTS3;
-        return { func: 'submit', id: d.document_id, body: J({ expected_version: d.version + 1, slots }),
+        return { func: 'submit', id: d.document_id, body: J({ expected_version: d.version + 2, slots }),
           script: async (exec) => {
             const first = await exec({ func: 'update', id: d.document_id, body: J({ expected_version: d.version, document: { subject: `${d.subject || ''} (반려 후 수정)` } }), staff: api.staffId });
             const version = first.record.ok ? first.record.data.version : d.version;
-            await exec({ func: 'submit', id: d.document_id, body: J({ expected_version: version, slots }), staff: api.staffId });
+            const done = await exec({ func: 'complete', id: d.document_id, body: J({ expected_version: version }), staff: api.staffId });
+            const ready = done.record.ok ? done.record.data.version : version;
+            await exec({ func: 'submit', id: d.document_id, body: J({ expected_version: ready, slots }), staff: api.staffId });
           } };
       } },
     { id: 'WF-PS-13', label: '결재함 조회', expect: '200 · APR-INB 도식 일치 · SQL 3개(건수·목록·진행률) · DB 변화 없음(조회)',
       prepare: async () => ({ func: 'inbox', staff: '2', query: 'box=pending&page=1' }) },
+  );
+
+  // ---------------------------------------------------------------- 프리셋 DOC-PS-16~26 (document/p4-s1-screens.md 6장, P4)
+  // 파일 프리셋(PS-23·24)은 스프린트 3(D-058). 시드: seed_dev_p4
+  const P4_HINT = 'seed_dev_p4로 시드 데이터를 넣으세요';
+  async function templateIdOf(code) {
+    const t = await quietGet('templates');
+    const hit = t && t.items.find((x) => x.type_code === code);
+    if (!hit) throw new Error(`양식 ${code}가 없습니다. ${P4_HINT}.`);
+    return hit.template_id;
+  }
+  async function p4Doc(code, status, pred = () => true) {
+    const tid = await templateIdOf(code);
+    for (let page = 1; page <= 10; page += 1) {
+      const r = await quietGet(`documents?template_id=${tid}&status=${status}&page=${page}`);
+      if (!r || !r.items.length) break;
+      for (const item of r.items) {
+        const full = await quietGet(`documents/${item.document_id}`);
+        if (full && pred(full)) return full;
+      }
+    }
+    throw new Error(`${code} ${status} 문서가 없습니다. ${P4_HINT}.`);
+  }
+  const rowsOf = (d, key) => d.sections.filter((x) => x.section_def === key);
+  const infoOf = (d) => rowsOf(d, 'info')[0];
+  const unfilledD03 = (d) => rowsOf(d, 'lots').some((x) => !x.values.verdict);
+  const PASS_ROW = { appearance: '양호', packaging: '양호', labeling: '양호', verdict: 'PASS' };
+
+  PRESETS.push(
+    { id: 'DOC-PS-16', unit: 'P4', label: '작성 요구 문서 저장(필수값 비어도 저장)', expect: '200 · DOC-UPD 통과(05 형식 검사만, 필수값 검사 없음) · doc_section 값 변경, version +1',
+      prepare: async () => {
+        const d = await p4Doc('D03', 'draft', unfilledD03);
+        const row = rowsOf(d, 'lots')[0];
+        return { func: 'update', id: d.document_id, body: J({ expected_version: d.version, sections: { update: [{ section_id: row.section_id, values: { appearance: '양호' } }] } }) };
+      } },
+    { id: 'DOC-PS-17', unit: 'P4', label: '작성완료 정상', expect: '수정 200(필수값 채움) → 작성완료 200 · DOC-CMP 도식 일치(02 잠금 → 03 검사 통과 → 04) · document draft→completed, completed_at/by, version +1',
+      prepare: async () => {
+        const d = await p4Doc('D03', 'draft', unfilledD03);
+        const fill = { expected_version: d.version, sections: { update: [
+          { section_id: infoOf(d).section_id, values: { inspector: 4 } },
+          ...rowsOf(d, 'lots').map((x) => ({ section_id: x.section_id, values: PASS_ROW })),
+        ] } };
+        const done = { func: 'complete', id: d.document_id, body: J({ expected_version: d.version + 1 }) };
+        return { ...done, script: async (exec) => {
+          await exec({ func: 'update', id: d.document_id, body: J(fill), staff: api.staffId });
+          await exec({ ...done, staff: api.staffId });
+        } };
+      } },
+    { id: 'DOC-PS-18', unit: 'P4', label: '작성완료 실패(필수값·개선조치 누락)', expect: '400 COMPLETION_INCOMPLETE · DOC-CMP-02 잠금 통과 → 03 검사 실패(점검자 required, deviation_required) · 롤백으로 DB 변화 없음',
+      prepare: async () => {
+        const d = await p4Doc('CCP-3P', 'draft', (x) => !x.deviations.length);
+        return { func: 'complete', id: d.document_id, body: J({ expected_version: d.version }) };
+      } },
+    { id: 'DOC-PS-19', unit: 'P4', label: '작성 재개', expect: '200 · DOC-ROP 도식 일치(02 조건부 UPDATE completed→draft) · status draft, completed_at/by 비움, version +1',
+      prepare: async () => { const d = await p4Doc('CCP-1P', 'completed'); return { func: 'reopen', id: d.document_id, body: J({ expected_version: d.version }) }; } },
+    { id: 'DOC-PS-20', unit: 'P4', label: '작성완료 상태에서 수정 거부', expect: '409 DOCUMENT_LOCKED · DOC-UPD-03 영향 0행 → 03a 실패 · DB 변화 없음',
+      prepare: async () => {
+        const d = await p4Doc('CCP-1P', 'completed');
+        return { func: 'update', id: d.document_id, body: J({ expected_version: d.version, sections: { update: [{ section_id: infoOf(d).section_id, values: { inspector: 5 } }] } }) };
+      } },
+    { id: 'DOC-PS-21', unit: 'P4', label: '작성 요구 문서 삭제 거부', expect: '409 DOCUMENT_NOT_DELETABLE(reason requirement) · DOC-DEL-02 영향 0행 → 02a 실패 · DB 변화 없음',
+      prepare: async () => { const d = await p4Doc('D01', 'draft'); return { func: 'delete', id: d.document_id }; } },
+    { id: 'DOC-PS-22', unit: 'P4', label: '작성 요구 문서의 LOT 행 추가·삭제·자동 열 수정 거부', expect: '400 VALIDATION_ERROR(readonly·system_rows) · DOC-UPD-05 실패 → 롤백 · DB 변화 없음',
+      prepare: async () => {
+        const d = await p4Doc('D03', 'draft');
+        const [first, second] = rowsOf(d, 'lots');
+        return { func: 'update', id: d.document_id, body: J({ expected_version: d.version, sections: {
+          update: [{ section_id: first.section_id, values: { item_name: '바꾸면 안 됨' } }],
+          add: [{ section_def: 'lots', values: { appearance: '양호' } }],
+          delete: second ? [second.section_id] : [],
+        } }) };
+      } },
+    { id: 'DOC-PS-25', unit: 'P4', label: 'CCP 판정 계산', expect: '200 · DOC-UPD-05b(판정 재계산) 포함 도식 일치 · 새 행 values_json.verdict = 부적합(SUS 우 X), 판정은 서버가 저장',
+      prepare: async () => {
+        const d = await p4Doc('CCP-3P', 'draft', (x) => x.deviations.length > 0);
+        const ok = { fe_l: '○', fe_c: '○', fe_r: '○', sus_l: '○', sus_c: '○', sus_r: 'X', product_only: 'X', product_fe: '○', product_sus: '○' };
+        return { func: 'update', id: d.document_id, body: J({ expected_version: d.version, sections: { add: [{ section_def: 'checks', values: { phase: '중간', passed_at: `${d.work_date}T13:00`, ...ok } }] } }) };
+      } },
+    { id: 'DOC-PS-26', unit: 'P4', label: '승인된 문서의 개선조치 쓰기·수정', expect: '쓰기 201 → 수정 200 · DOC-DVC·DOC-DVU 도식 일치, 문서 잠금 검사 없음 · deviation_action·checker만 변경, document 변화 없음',
+      prepare: async () => {
+        const d = await p4Doc('D03', 'approved');
+        const create = { func: 'devCreate', id: d.document_id, body: J({ description: '입고 검사 후 포장 파손 1건 발견(콘솔)', actor_id: 4, checker_ids: [2, 5] }) };
+        return { ...create, script: async (exec) => {
+          const first = await exec({ ...create, staff: api.staffId });
+          if (!first.record.ok) return;
+          const dev = first.record.data;
+          await exec({ func: 'devUpdate', id: String(dev.deviation_id), docId: String(d.document_id), staff: '2',
+            body: J({ expected_version: dev.version, action_result: '공급사 반품, 재입고 검사 적합', checker_ids: [2] }) });
+        } };
+      } },
   );
 
   async function loadPreset() {
@@ -497,8 +607,8 @@
     $('#dcStaff').value = api.staffId || '';
     $('#dcStaff').addEventListener('change', (e) => api.setStaff(e.target.value));
     $('#dcFunc').innerHTML = Object.entries(FUNCS).map(([k, f]) => `<option value="${k}">${esc(f.label)}</option>`).join('');
-    const group = (unit, label) => `<optgroup label="${label}">${PRESETS.filter((p) => p.id.startsWith(unit)).map((p) => `<option value="${p.id}">${p.id} ${esc(p.label)}</option>`).join('')}</optgroup>`;
-    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)');
+    const group = (unit, label) => `<optgroup label="${label}">${PRESETS.filter((p) => (p.unit || p.id.split('-')[0]) === unit).map((p) => `<option value="${p.id}">${p.id} ${esc(p.label)}</option>`).join('')}</optgroup>`;
+    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4)');
     $('#dcFunc').addEventListener('change', () => { state.preset = null; toggleInputs(); });
     ['#dcId', '#dcQuery', '#dcBody', '#dcDocId'].forEach((sel) => $(sel).addEventListener('input', () => { if (state.preset && state.preset.script) state.preset = null; }));
     $('#dcLoadPreset').addEventListener('click', loadPreset);

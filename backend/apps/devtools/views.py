@@ -8,7 +8,14 @@ from apps.approvals.flows import FLOWS as APR_FLOWS
 from apps.approvals.models import Approval, ApprovalRequest
 from apps.document_workflow.flows import FLOWS as WF_FLOWS
 from apps.documents.flows import FLOWS as DOC_FLOWS
-from apps.documents.models import DocSection, Document, DocumentTemplate
+from apps.documents.models import (
+    DeviationAction,
+    DeviationChecker,
+    DocSection,
+    Document,
+    DocumentRef,
+    DocumentTemplate,
+)
 
 from .middleware import recall
 
@@ -52,11 +59,32 @@ def snapshot(request):
     slots = _rows(
         Approval.objects.filter(request__document_id=document_id).order_by("request_id", "slot_no")
     )
+    # P4: 업무 대상 참조·개선조치(파일 두 테이블은 스프린트 3 기능이라 아직 비교하지 않는다)
+    refs = _rows(DocumentRef.objects.filter(document_id=document_id).order_by("ref_id"))
+    deviations = _rows(
+        DeviationAction.objects.filter(document_id=document_id).order_by("deviation_id")
+    )
+    checkers = _rows(
+        DeviationChecker.objects.filter(deviation__document_id=document_id).order_by(
+            "deviation_id", "staff_id"
+        )
+    )
     staff_ids = sorted(
-        {document[k] for k in ("created_by_id", "assignee_id", "deleted_by_id") if document[k]}
+        {
+            document[k]
+            for k in ("created_by_id", "assignee_id", "deleted_by_id", "completed_by_id")
+            if document[k]
+        }
         | {row["recorded_by_id"] for row in sections if row["recorded_by_id"]}
         | {row["requested_by_id"] for row in requests}
         | {row["approver_id"] for row in slots}
+        | {
+            row[k]
+            for row in deviations
+            for k in ("actor_id", "created_by_id", "updated_by_id", "deleted_by_id")
+            if row[k]
+        }
+        | {row["staff_id"] for row in checkers}
     )
     return _json(
         {
@@ -70,6 +98,9 @@ def snapshot(request):
                 "staff": [{"staff_id": i} for i in staff_ids],
                 "approval_request": requests,
                 "approval": slots,
+                "document_ref": refs,
+                "deviation_action": deviations,
+                "deviation_checker": checkers,
             },
         }
     )

@@ -53,7 +53,7 @@ class SeedP4Tests(TestCase):
         from apps.document_workflow.tests.base import invariant_violations
         from apps.documents.models import Document
 
-        self.assertEqual(seed_p4("2026-10-11"), {"documents": 11, "lot_rows": 3})
+        self.assertEqual(seed_p4("2026-10-11"), {"documents": 13, "lot_rows": 5})
         self.assertEqual(seed_p4("2026-10-11"), {"documents": 0, "lot_rows": 0})
         self.assertEqual(invariant_violations(), [])
         statuses = set(Document.objects.values_list("status", flat=True))
