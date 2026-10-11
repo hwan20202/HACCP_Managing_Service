@@ -325,7 +325,7 @@
     { id: 'DOC-PS-07', label: '반려 문서 수정', expect: '200 · 잠금 통과 · 상태는 rejected 유지',
       prepare: async () => { const d = need(await findDoc('rejected'), 'rejected'); return { func: 'update', id: d.document_id, body: J({ expected_version: d.version, document: { subject: '반려 후 수정' } }) }; } },
     { id: 'DOC-PS-08', label: '삭제 정상(논리)', expect: '204 · DOC-DEL 3단계 · document 행 유지, deleted_at/by 채워짐',
-      prepare: async () => ({ func: 'delete', id: need(await findDoc('draft', (d) => !d.submitted_at), '상신 이력 없는 draft').document_id }) },
+      prepare: async () => ({ func: 'delete', id: need(await findDoc('draft', (d) => !d.submitted_at && !d.record_key), '상신 이력 없는 draft(작성 요구 문서 제외 — 삭제 불가 C-3)').document_id }) },
     { id: 'DOC-PS-09', label: '삭제 거부(승인 문서)', expect: '409 DOCUMENT_NOT_DELETABLE · DOC-DEL-02a 실패',
       prepare: async () => ({ func: 'delete', id: need(await findDoc('approved'), 'approved').document_id }) },
     { id: 'DOC-PS-10', label: '없는 문서 조회', expect: '404 DOCUMENT_NOT_FOUND · DOC-GET-01 실패',

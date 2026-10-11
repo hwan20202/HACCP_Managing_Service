@@ -1,8 +1,10 @@
 """P4 개발·사용 테스트용 가상 데이터 (p4-s1-screens.md 7장).
 
 - 수불 임시 데이터(apps.devstock): 품목 4, 입고 LOT 5, 생산 배치 2. 개발·테스트 설정에서만.
-- 작성 요구 문서는 REQ가 아직 없으므로(P5) DOC의 N1·N2를 직접 불러 만든다. record_key 형식은
-  req-s2-spec.md와 같다. 결재 상태는 WF 함수로 만든다(문서·회차 상태 짝 유지).
+- 작성 요구 문서는 P5부터 REQ F01·F02(require_for_lot·require_for_batch)로 만든다(REQ-S2-Q11).
+  입고 기록·생산량은 devstock 개발용 보조 테이블(dev_lot_receipts·dev_batch_plans)에 넣고
+  REQ는 뷰로 읽는다(D-069). 입고 LOT 5개 모두 D01·D02가 생긴다(P4 시드는 앞 3개만 — REQ 규칙대로).
+  결재 상태는 WF 함수로 만든다(문서·회차 상태 짝 유지).
 - 파일(D01·D02 첨부)은 스프린트 3(D-058)이라 만들지 않는다. D01·D02는 작성중으로 남는다.
 - 개발 콘솔 P4 프리셋용: 전날 육안검사 draft(LOT 2행), 배치 2 CCP-3P draft(검출량 1, 개선조치 없음).
 """
@@ -12,7 +14,8 @@ from datetime import date, timedelta
 from django.db import transaction
 from django.utils import timezone
 
-from apps.devstock.models import Item, Lot, ProductionBatch
+from apps.devstock.models import DevBatchPlan, DevLotReceipt, Item, Lot, ProductionBatch
+from apps.doc_requirements import services as req
 from apps.document_workflow import services as wf
 from apps.documents import services as doc
 from apps.documents.seed import ensure_p4_templates, ensure_staff
@@ -46,6 +49,13 @@ def ensure_stock(today):
                 "expiration_date": today + timedelta(days=days),
             },
         )
+        received = today if number.startswith("RM-1011") else today - timedelta(days=1)
+        amount, unit = int(qty.rstrip("kgbox")), qty.lstrip("0123456789")
+        DevLotReceipt.objects.get_or_create(
+            lot=lot,
+            defaults={"material_kind": kind, "supplier_name": supplier, "received_date": received,
+                      "quantity": amount, "unit": unit},
+        )  # fmt: skip
         lots.append((lot, item, supplier, kind, qty))
     batches = []
     for number, item, qty in BATCHES:
@@ -58,17 +68,29 @@ def ensure_stock(today):
                 "manufactured_date": today,
             },
         )
+        DevBatchPlan.objects.get_or_create(production_batch=batch, defaults={"quantity_kg": qty})
         batches.append((batch, item, qty))
     return lots, batches
 
 
-def _lot_values(lot, item, supplier, today):
-    return {
-        "lot_number": lot.lot_number,
-        "item_name": item,
-        "supplier_name": supplier,
-        "received_date": today.isoformat(),
-    }
+def _count(made, results):
+    for item in results:
+        made["documents"] += int(
+            item["result"] == "created" or item.get("document_result") == "created"
+        )
+        made["lot_rows"] += int(item["result"] == "row_added")
+
+
+def _assign(actor, results, assignee_id=2):
+    """REQ는 담당자를 비워 둔다(REQ-S2-Q1). P4 시드와 같게 새로 만든 D03·CCP만 담당자 2."""
+    for item in results:
+        if item["type_code"] in ("D01", "D02"):
+            continue  # P4 시드도 D01·D02는 담당자 없음
+        if item["result"] == "created" or item.get("document_result") == "created":
+            document_id = item["document_id"]
+            version = doc.get_document(document_id)["version"]
+            patch = {"expected_version": version, "document": {"assignee_id": assignee_id}}
+            doc.update_document(actor, document_id, patch)
 
 
 def _at(day, hm):
@@ -150,98 +172,35 @@ def seed_p4(today=None):
     actor = 3
 
     with transaction.atomic():
-        # D01·D02: 입고 LOT마다 1건(작성중). D03: 그날 문서 1건에 LOT 3행.
-        d03 = doc.get_or_create_document(
-            actor, "D03", f"D03|date:{today.isoformat()}", today, [], assignee_id=2
-        )
-        d03_id = d03["document"]["document_id"]
-        made["documents"] += int(d03["created"])
-        for lot, item, supplier, kind, qty in lots[:3]:
-            ref = [{"lot_id": lot.id, "label": lot.lot_number}]
-            base = _lot_values(lot, item, supplier, today)
-            for code in ("D01", "D02"):
-                out = doc.get_or_create_document(
-                    actor, code, f"{code}|lot:{lot.id}", today, ref, values={"info": base}
-                )
-                made["documents"] += int(out["created"])
-            row = {
-                **base,
-                "material_kind": kind,
-                "quantity": qty,
-                "expiration_date": lot.expiration_date.isoformat(),
-            }
-            out = doc.add_ref_row(actor, d03_id, "lots", row, ref, "lot_id")
-            made["lot_rows"] += int(out["created"])
+        # 입고 LOT마다 F01: D01·D02 + 입고일 D03 LOT 행. 오늘 3개, 전날 2개(DOC-PS-16·17·22).
+        # 시드는 수불 자리라 호출 전에 자기 쓰기(touched_at)를 먼저 한다(REQ-S2-Q13).
+        lot_out = []
+        for lot, *_ in lots:
+            DevLotReceipt.objects.filter(lot=lot).update(touched_at=timezone.now())
+            out = req.require_for_lot(actor, lot.id)
+            _count(made, out["documents"])
+            _assign(actor, out["documents"])
+            lot_out.append(out)
+        today_d03 = next(d for d in lot_out[0]["documents"] if d["type_code"] == "D03")
+        d03 = {"created": today_d03["document_result"] == "created"}
+        d03_id = today_d03["document_id"]
 
-        # CCP: 배치 1 × 1P·2B·3P, 배치 2 × 1P
-        ccp = {}
-        for batch, item, qty in batches[:1]:
-            for code, process in (("CCP-1P", "1P"), ("CCP-2B", "2B"), ("CCP-3P", "3P")):
-                out = doc.get_or_create_document(
-                    actor,
-                    code,
-                    f"{code}|batch:{batch.id}",
-                    today,
-                    [{"production_batch_id": batch.id, "process_code": process,
-                      "label": batch.batch_number}],
-                    values={"info": {"item_name": item, "batch_qty_kg": qty}},
-                    assignee_id=2,
-                )  # fmt: skip
-                ccp[code] = out
-                made["documents"] += int(out["created"])
-        batch, item, qty = batches[1]
-        rejected = doc.get_or_create_document(
-            actor,
-            "CCP-1P",
-            f"CCP-1P|batch:{batch.id}",
-            today,
-            [{"production_batch_id": batch.id, "process_code": "1P", "label": batch.batch_number}],
-            values={"info": {"item_name": item, "batch_qty_kg": qty}},
-            assignee_id=2,
-        )
-        made["documents"] += int(rejected["created"])
-
-        # 개발 콘솔 프리셋용(DOC-PS-16·17·22): 전날 육안검사 draft(LOT 2행, 입력 전)
-        yesterday = today - timedelta(days=1)
-        d03_prev = doc.get_or_create_document(
-            actor, "D03", f"D03|date:{yesterday.isoformat()}", yesterday, [], assignee_id=2
-        )
-        made["documents"] += int(d03_prev["created"])
-        # 전날 문서가 이미 있으면(다른 날짜로 다시 실행) 행을 더하지 않는다 — 이미 승인됐을 수 있음
-        for lot, lot_item, supplier, kind, lot_qty in lots[3:5] if d03_prev["created"] else []:
-            ref = [{"lot_id": lot.id, "label": lot.lot_number}]
-            row = {
-                **_lot_values(lot, lot_item, supplier, yesterday),
-                "material_kind": kind,
-                "quantity": lot_qty,
-                "expiration_date": lot.expiration_date.isoformat(),
-            }
-            out = doc.add_ref_row(actor, d03_prev["document"]["document_id"], "lots", row, ref,
-                                  "lot_id")  # fmt: skip
-            made["lot_rows"] += int(out["created"])
-        # DOC-PS-18: 배치 2 × 3P — 검출량 > 0(부적합), 개선조치·점검자 없음
-        batch, item, qty = batches[1]
-        batch3p = doc.get_or_create_document(
-            actor,
-            "CCP-3P",
-            f"CCP-3P|batch:{batch.id}",
-            today,
-            [{"production_batch_id": batch.id, "process_code": "3P", "label": batch.batch_number}],
-            values={"info": {"item_name": item, "batch_qty_kg": qty}},
-            assignee_id=2,
-        )
-        made["documents"] += int(batch3p["created"])
-        # S6-25: 배치 2 × 2B — 측정 행 없는 작성중(건조시간 판정 확인용, ISS-010)
-        batch2b = doc.get_or_create_document(
-            actor,
-            "CCP-2B",
-            f"CCP-2B|batch:{batch.id}",
-            today,
-            [{"production_batch_id": batch.id, "process_code": "2B", "label": batch.batch_number}],
-            values={"info": {"item_name": item, "batch_qty_kg": qty}},
-            assignee_id=2,
-        )
-        made["documents"] += int(batch2b["created"])
+        # 생산 배치마다 F02: 제조 배치라 CCP-1P·2B·3P. 배치 2는 1P 반려(S6), 3P 부적합(DOC-PS-18),
+        # 2B 측정 행 없음(S6-25)
+        batch_out = []
+        for batch, *_ in batches:
+            DevBatchPlan.objects.filter(production_batch=batch).update(touched_at=timezone.now())
+            out = req.require_for_batch(actor, batch.id)
+            _count(made, out["documents"])
+            _assign(actor, out["documents"])
+            batch_out.append({d["type_code"]: d for d in out["documents"]})
+        ccp = {
+            code: {"document": {"document_id": d["document_id"]},
+                   "created": d["result"] == "created"}
+            for code, d in batch_out[0].items()
+        }  # fmt: skip
+        rejected = {"document": {"document_id": batch_out[1]["CCP-1P"]["document_id"]}}
+        batch3p = {"document": {"document_id": batch_out[1]["CCP-3P"]["document_id"]}}
 
     if not d03["created"] or not ccp["CCP-1P"]["created"]:
         # 이미 시드된 날짜, 또는 다른 날짜로 다시 실행해 배치 문서가 이미 있는 경우:

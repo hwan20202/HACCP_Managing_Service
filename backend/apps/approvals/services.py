@@ -9,7 +9,7 @@
 import datetime
 
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Max, Q
+from django.db.models import Count, Max, OuterRef, Q, Subquery
 from django.utils import timezone
 
 from apps.core.http import ApiError
@@ -503,3 +503,35 @@ def list_inbox(actor_id, box="pending", filters=None, page=1):
                 }
             )
         return {"items": items, "total": total, "page": page_number, "page_size": PAGE_SIZE}
+
+
+# ------------------------------------------------ A8 최신 승인 회차 (P5, REQ s2-spec 4.2)
+
+
+def latest_approved(document_ids):
+    """A8: 문서별로 status='approved'인 회차 중 attempt가 가장 큰 것(SQL 1회).
+
+    반환 {document_id: {request_id, attempt, closed_at, snapshot}}. 승인 회차가 없는 문서는 빠진다.
+    빈 목록이면 SQL 없이 {}. 정정 뒤 "대체됨" 표시는 P6에서 이 함수에 더한다.
+    """
+    ids = sorted({i for i in document_ids if _is_int(i)})
+    if not ids:
+        return {}
+    with step("APR-LAT-01", "APR", "문서별 최신 승인 회차"):
+        newest = (
+            ApprovalRequest.objects.filter(document_id=OuterRef("document_id"), status="approved")
+            .order_by("-attempt")
+            .values("attempt")[:1]
+        )
+        rows = ApprovalRequest.objects.filter(
+            document_id__in=ids, status="approved", attempt=Subquery(newest)
+        )
+        return {
+            req.document_id: {
+                "request_id": req.request_id,
+                "attempt": req.attempt,
+                "closed_at": _iso(req.closed_at),
+                "snapshot": req.snapshot_json,
+            }
+            for req in rows
+        }

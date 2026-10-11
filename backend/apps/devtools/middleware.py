@@ -3,6 +3,7 @@
 - 응답 헤더 X-Trace-Id 로 trace를 식별하고, /api/dev/traces/<id> 로 다시 읽을 수 있다.
 - JSON 객체 응답에는 "trace" 키도 붙인다(204처럼 본문이 없는 응답은 헤더만).
 - 운영 설정에는 이 미들웨어가 등록되지 않는다(config/settings).
+- P5: 작성 요구 개발 API(/api/dev/req/)도 기록한다(REQ-SC-04 "개발 콘솔에서 보기").
 """
 
 import json
@@ -27,13 +28,13 @@ def recall(trace_id):
 
 
 class TraceMiddleware:
-    prefix = "/api/v1/"
+    prefixes = ("/api/v1/", "/api/dev/req/")
 
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
-        if not request.path.startswith(self.prefix):
+        if not request.path.startswith(self.prefixes):
             return self.get_response(request)
         current, token = tracing.start(request.method, request.get_full_path())
         try:

@@ -59,3 +59,58 @@ class ProductionBatch(models.Model):
             ),
             models.CheckConstraint(condition=Q(status__in=BATCH_STATUSES), name="ck_batch_status"),
         ]
+
+
+# ------------------------------------------------ P5 개발용 보완 (ERD v5 A15·A16, D-069)
+# 수불 입고 기록·생산 계획에는 있지만 위 임시 테이블에는 없는 값. REQ는 이 테이블을 직접 읽지 않고
+# 뷰 v_doc_incoming_lot·v_doc_batch(마이그레이션 0003, RunSQL)만 읽는다.
+# 입고일 형식·매입처 길이는 DB CHECK 대신 개발 API에서 검사한다(REQ-S3-Q2).
+
+MATERIAL_KINDS = ("원료", "부자재")
+UNITS = ("kg", "g", "box", "ea")
+ORIGINS = ("국내", "수입")
+
+
+class DevLotReceipt(models.Model):
+    lot = models.OneToOneField(
+        Lot, models.CASCADE, primary_key=True, db_column="lot_id", related_name="+"
+    )
+    material_kind = models.TextField()
+    supplier_name = models.TextField()
+    received_date = models.DateField(db_index=False)
+    quantity = models.FloatField()
+    unit = models.TextField()
+    origin = models.TextField(null=True, blank=True)
+    touched_at = models.DateTimeField(null=True, blank=True)  # 재호출 자기 쓰기(REQ-S2-Q13)
+
+    class Meta:
+        db_table = "dev_lot_receipts"
+        indexes = [models.Index(fields=["received_date"], name="ix_dev_lot_receipts_date")]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(material_kind__in=MATERIAL_KINDS), name="ck_receipt_material_kind"
+            ),
+            models.CheckConstraint(condition=Q(quantity__gt=0), name="ck_receipt_quantity"),
+            models.CheckConstraint(condition=Q(unit__in=UNITS), name="ck_receipt_unit"),
+            models.CheckConstraint(
+                condition=Q(origin__isnull=True) | Q(origin__in=ORIGINS), name="ck_receipt_origin"
+            ),
+        ]
+
+
+class DevBatchPlan(models.Model):
+    production_batch = models.OneToOneField(
+        ProductionBatch,
+        models.CASCADE,
+        primary_key=True,
+        db_column="production_batch_id",
+        related_name="+",
+    )
+    quantity_kg = models.FloatField()
+    touched_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "dev_batch_plans"
+        constraints = [
+            models.CheckConstraint(condition=Q(quantity_kg__gte=0), name="ck_plan_quantity_kg")
+        ]

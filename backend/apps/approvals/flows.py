@@ -7,6 +7,8 @@ FLOWS = {
     "APR-GET": ["APR-GET-01", "APR-GET-02", "APR-GET-03"],
     "APR-HIS": ["APR-HIS-01", "APR-HIS-02", "APR-HIS-03"],
     "APR-INB": [f"APR-INB-0{n}" for n in range(0, 6)],
+    # P5 A8 (doc-requirements/s2-spec.md 4.2): REQ docs_for_lot의 REQ-FND-03 안에서 실행
+    "APR-LAT": ["APR-LAT-01"],
 }
 
 
