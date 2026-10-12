@@ -46,12 +46,17 @@ def _sql_rows(sql, params):
         return [dict(zip(names, row)) for row in cursor.fetchall()]
 
 
-def _scope_snapshot(kind, target_id):
-    """P5 작성 요구 ④ 패널: LOT·배치 하나에 걸린 행. 수불 임시 테이블은 devstock이 있을 때만."""
+def _scope_snapshot(kind, target_ids, scope):
+    """P5 작성 요구 ④ 패널: LOT·배치(들)에 걸린 행. 수불 임시 테이블은 devstock이 있을 때만.
+
+    scope가 날짜면(received_date·manufactured_date) 그날의 LOT·배치 전부를 본다 — 새 LOT을 만드는
+    호출은 실행 전에 LOT id가 없어서, 그날 이미 있던 D03 같은 문서를 실행 전에 찍어 두려면 날짜로
+    범위를 잡아야 한다(P5 S6-39 K1).
+    """
     from django.apps import apps as django_apps
 
     column = "lot_id" if kind == "lot" else "production_batch_id"
-    refs_of_target = DocumentRef.objects.filter(**{column: target_id})
+    refs_of_target = DocumentRef.objects.filter(**{f"{column}__in": target_ids})
     doc_ids = sorted(set(refs_of_target.values_list("document_id", flat=True)))
     tables = {
         "document": _rows(Document.objects.filter(pk__in=doc_ids).order_by("document_id")),
@@ -62,23 +67,45 @@ def _scope_snapshot(kind, target_id):
             DocumentRef.objects.filter(document_id__in=doc_ids).order_by("ref_id")
         ),
     }
-    exists = False
     if django_apps.is_installed("apps.devstock"):
+        marks = ", ".join(["%s"] * len(target_ids)) or "NULL"
         if kind == "lot":
-            tables["lots"] = _sql_rows("SELECT * FROM lots WHERE id = %s", [target_id])
+            tables["lots"] = _sql_rows(f"SELECT * FROM lots WHERE id IN ({marks})", target_ids)
             tables["dev_lot_receipts"] = _sql_rows(
-                "SELECT * FROM dev_lot_receipts WHERE lot_id = %s", [target_id]
+                f"SELECT * FROM dev_lot_receipts WHERE lot_id IN ({marks})", target_ids
             )
-            exists = bool(tables["lots"])
         else:
             tables["production_batches"] = _sql_rows(
-                "SELECT * FROM production_batches WHERE id = %s", [target_id]
+                f"SELECT * FROM production_batches WHERE id IN ({marks})", target_ids
             )
             tables["dev_batch_plans"] = _sql_rows(
-                "SELECT * FROM dev_batch_plans WHERE production_batch_id = %s", [target_id]
+                f"SELECT * FROM dev_batch_plans WHERE production_batch_id IN ({marks})",
+                target_ids,
             )
-            exists = bool(tables["production_batches"])
-    return _json({"scope": {kind: target_id}, "exists": exists, "tables": tables})
+    exists = bool(tables.get("lots") or tables.get("production_batches"))
+    return _json({"scope": scope, "exists": exists, "tables": tables})
+
+
+def _ids_on(kind, day):
+    """그날 입고된 LOT id·그날 생산 배치 id(devstock 테이블). devstock이 없으면 빈 목록."""
+    from django.apps import apps as django_apps
+
+    if not django_apps.is_installed("apps.devstock"):
+        return []
+    if kind == "lot":
+        sql = "SELECT lot_id FROM dev_lot_receipts WHERE received_date = %s ORDER BY lot_id"
+    else:
+        sql = "SELECT id FROM production_batches WHERE manufactured_date = %s ORDER BY id"
+    return [row[next(iter(row))] for row in _sql_rows(sql, [day])]
+
+
+def _valid_day(value):
+    import datetime
+
+    try:
+        return len(value) == 10 and datetime.date.fromisoformat(value) is not None
+    except ValueError:
+        return False
 
 
 @require_safe
@@ -88,7 +115,15 @@ def snapshot(request):
             value = request.GET[key]
             if not value.isdigit():
                 return _json({"code": "INVALID_REQUEST", "message": f"{key}는 숫자입니다."}, 400)
-            return _scope_snapshot(kind, int(value))
+            return _scope_snapshot(kind, [int(value)], {kind: int(value)})
+    for kind, key in (("lot", "received_date"), ("batch", "manufactured_date")):
+        if key in request.GET:
+            value = request.GET[key]
+            if not _valid_day(value):
+                return _json(
+                    {"code": "INVALID_REQUEST", "message": f"{key}는 YYYY-MM-DD입니다."}, 400
+                )
+            return _scope_snapshot(kind, _ids_on(kind, value), {key: value})
     raw = request.GET.get("document_id", "")
     if not raw.isdigit():
         return _json({"code": "INVALID_REQUEST", "message": "document_id가 필요합니다."}, 400)

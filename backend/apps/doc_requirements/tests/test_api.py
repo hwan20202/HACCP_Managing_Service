@@ -228,3 +228,18 @@ class DevSnapshotTests(ReqTestCase):
         self.assertEqual((data["exists"], data["tables"]["document"]), (True, []))
         self.assertFalse(self.client.get("/api/dev/snapshot?lot_id=999").json()["exists"])
         self.assertEqual(self.client.get("/api/dev/snapshot?lot_id=x").status_code, 400)
+
+    def test_date_scope_snapshot(self):
+        """S6-39 K1: 새 LOT·배치 호출은 실행 전 LOT id가 없어 그날 범위로 비교한다."""
+        self.post("/api/dev/req/lots/88/require")
+        self.post("/api/dev/req/lots/89/require")
+        data = self.client.get(f"/api/dev/snapshot?received_date={DAY}").json()
+        self.assertEqual((data["scope"], data["exists"]), ({"received_date": DAY}, True))
+        self.assertEqual([r["id"] for r in data["tables"]["lots"]], [88, 89])
+        types = sorted(d["template_id"] for d in data["tables"]["document"])
+        self.assertEqual(len(types), 5)  # D01·D02 ×2 + 그날 D03 1건(LOT 행 2)
+        data = self.client.get(f"/api/dev/snapshot?manufactured_date={DAY}").json()
+        self.assertEqual([r["id"] for r in data["tables"]["production_batches"]], [12, 13, 14, 15])
+        empty = self.client.get("/api/dev/snapshot?received_date=2026-01-01").json()
+        self.assertEqual((empty["exists"], empty["tables"]["lots"]), (False, []))
+        self.assertEqual(self.client.get("/api/dev/snapshot?received_date=1011").status_code, 400)

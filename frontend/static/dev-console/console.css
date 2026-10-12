@@ -56,3 +56,11 @@ td.dc-cell-changed { background: #fff3cd !important; font-weight: 700; }
 .dc-tl-item:hover { background: var(--bg-card-hover); }
 .dc-tl-item.active { border-color: var(--border-brand); background: #eef4ff; }
 @media (max-width: 900px) { .dc-main { grid-template-columns: 1fr; } }
+/* S6-39 K2: 여러 호출 프리셋의 [호출 n]·[합계] 탭 */
+.dc-call-tabs { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; font-weight: 600; }
+.dc-call-tab { border: 1px solid var(--border-default); background: var(--bg-surface, #fff); border-radius: var(--radius-full); padding: 0.1rem 0.6rem; font-size: 0.75rem; cursor: pointer; }
+.dc-call-tab.active { border-color: var(--primary, #0d6efd); box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.15); font-weight: 800; }
+/* S6-39 K3: 안쪽 DOC·APR 단계 펼치기 */
+.dc-inner { margin: 0.35rem 0 0.6rem; font-size: 0.78rem; }
+.dc-inner summary { cursor: pointer; color: var(--text-secondary); font-weight: 600; }
+.dc-inner-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; margin-top: 0.3rem; }

@@ -38,17 +38,24 @@
     devUpdate: { label: '개선조치 수정 (F20·A16)', method: 'PATCH', flow: 'DOC-DVU', uses: ['id', 'body', 'docId'], path: (s) => `deviations/${s.id}`, doc: (s) => s.docId },
     devDelete: { label: '개선조치 삭제 (F21·A17)', method: 'DELETE', flow: 'DOC-DVD', uses: ['id', 'query', 'docId'], path: (s) => `deviations/${s.id}${s.query ? `?${s.query}` : ''}`, doc: (s) => s.docId },
     // ---- P5 REQ 작성 요구 — doc-requirements/s2-spec.md 2.2. ④는 LOT·배치 단위 스냅샷(scope)
+    // 새 LOT·배치를 만드는 호출은 실행 전 id가 없다 → 그날(입고일·생산일) 범위로 실행 전/후 비교(S6-39 K1)
     reqLot: { label: 'REQ 테스트 입고 + 작성 요구 (D04→F01)', method: 'POST', flow: 'REQ-DEV-LOT', uses: ['body'], path: () => '/api/dev/req/lots',
-      scope: (s, r) => (r && r.ok ? `lot_id=${r.data.lot.lot_id}` : null) },
+      creates: 'lot', scope: (s) => dayScope(s, 'received_date') },
     reqLotRe: { label: 'REQ 같은 LOT 다시 호출 (D06→F01)', method: 'POST', flow: 'REQ-DEV-RE-LOT', uses: ['id'], path: (s) => `/api/dev/req/lots/${s.id}/require`,
       scope: (s) => `lot_id=${s.id}` },
     reqBatch: { label: 'REQ 테스트 배치 + 작성 요구 (D05→F02)', method: 'POST', flow: 'REQ-DEV-BAT', uses: ['body'], path: () => '/api/dev/req/batches',
-      scope: (s, r) => (r && r.ok ? `batch_id=${r.data.batch.production_batch_id}` : null) },
+      creates: 'batch', scope: (s) => dayScope(s, 'manufactured_date') },
     reqBatchRe: { label: 'REQ 같은 배치 다시 호출 (D07→F02)', method: 'POST', flow: 'REQ-DEV-RE-BAT', uses: ['id'], path: (s) => `/api/dev/req/batches/${s.id}/require`,
       scope: (s) => `batch_id=${s.id}` },
     lotDocs: { label: 'REQ LOT별 연결 문서 (F03·A01)', method: 'GET', flow: 'REQ-FND', uses: ['id'], path: (s) => `lots/${s.id}/documents`, scope: (s) => `lot_id=${s.id}` },
     batchDocs: { label: 'REQ 배치별 연결 문서 (F04·A02)', method: 'GET', flow: 'REQ-FND-B', uses: ['id'], path: (s) => `batches/${s.id}/documents`, scope: (s) => `batch_id=${s.id}` },
   };
+  function dayScope(spec, key) {
+    try {
+      const day = JSON.parse(spec.body || '{}')[key];
+      return /^\d{4}-\d{2}-\d{2}$/.test(day || '') ? `${key}=${day}` : null;
+    } catch (e) { return null; }
+  }
   const flowOf = (fn, record) => (typeof fn.flow === 'function' ? fn.flow(record) : fn.flow);
 
   const state = { flows: {}, history: [], active: null, preset: null };
@@ -89,7 +96,7 @@
       const scope = fn.scope(spec, record) || scopeBefore;
       const snapAfter = await scopeSnapshot(scope);
       const entry = { spec, fn, record, trace, before: snapBefore, after: snapAfter, scope, preset: state.preset };
-      state.history.push(entry);
+      addEntry(entry);
       return entry;
     }
     const docBefore = fn.doc ? fn.doc(spec, null) : null;
@@ -100,8 +107,15 @@
     const docAfter = fn.doc ? fn.doc(spec, record) : null;
     const snapAfter = await snapshot(docAfter || docBefore);
     const entry = { spec, fn, record, trace, before: snapBefore, after: snapAfter, docId: docAfter || docBefore, preset: state.preset };
-    state.history.push(entry);
+    addEntry(entry);
     return entry;
+  }
+
+  // 여러 호출 프리셋(PS-05·PS-08 등): 한 번의 [실행]에서 나온 호출을 묶어 ②③④ 위 [호출 n] 탭으로 고른다(S6-39 K2).
+  // groupScope가 있으면 프리셋 전후 스냅샷을 따로 찍어 [합계] 탭에 최종 변화를 보인다.
+  function addEntry(entry) {
+    if (state.running) { entry.group = state.running; state.running.entries.push(entry); }
+    state.history.push(entry);
   }
 
   async function run() {
@@ -111,7 +125,12 @@
     try {
       const preset = state.preset;
       if (preset && preset.script) {
-        await preset.script(execute);
+        const group = { id: preset.id, entries: [], scope: preset.groupScope || null, concurrent: !!preset.concurrent };
+        if (group.scope) group.before = await scopeSnapshot(group.scope);
+        state.running = group;
+        try { await preset.script(execute); } finally { state.running = null; }
+        if (group.scope) group.after = await scopeSnapshot(group.scope);
+        if (group.scope && group.entries.length > 1) { showTotal(group); $('#dcRunHint').textContent = ''; return; }
       } else {
         const spec = readSpec();
         if (spec.body) { try { JSON.parse(spec.body); } catch (e) { $('#dcRunHint').textContent = '본문 JSON 형식 오류'; return; } }
@@ -163,11 +182,30 @@
     else if (failed) summary = `<span class="dc-status-err">실패 경로: ${esc(failed.step_id)}에서 중단 (${reached}/${expected.length} 단계)</span>`;
     else if (reached === expected.length) summary = `<span class="dc-status-ok">도식 일치 ✅ ${reached}/${expected.length}</span>`;
     else summary = `<span class="dc-status-err">⚠ 누락 단계 있음 (${reached}/${expected.length})</span>`;
+    let innerHtml = '';
     if (nested && inner.length) {
       const innerFail = inner.filter((s) => s.result === 'fail').length;
       summary += ` <span class="te-hint">· 안쪽 DOC·APR 단계 ${inner.length}개${innerFail ? `(실패 ${innerFail} — 예: 잠긴 육안검사에서 다음 번호로)` : ''}</span>`;
+      // S6-39 K3: 어떤 안쪽 단계가 돌았는지 상세 표를 읽지 않고 보도록 실행 순서대로 펼친다(같은 단계 연속은 ×n).
+      const runs = [];
+      steps.forEach((s) => {
+        if (own(s)) { runs.push({ sep: s.step_id }); return; }
+        const last = runs[runs.length - 1];
+        if (last && !last.sep && last.id === s.step_id && last.cls === s.result) last.n += 1;
+        else runs.push({ id: s.step_id, cls: s.result, n: 1 });
+      });
+      const parts = [];
+      let group = [];
+      const flush = (after) => { if (group.length) parts.push(`<div class="dc-inner-row"><span class="te-hint mono">${esc(after)} ›</span> ${group.join('')}</div>`); group = []; };
+      let owner = '(시작)';
+      runs.forEach((r) => {
+        if (r.sep) { flush(owner); owner = r.sep; return; }
+        group.push(`<span class="dc-chip ${r.cls}" title="${r.cls}">${esc(r.id)}${r.n > 1 ? ` ×${r.n}` : ''}</span>`);
+      });
+      flush(owner);
+      innerHtml = `<details class="dc-inner"><summary>안쪽 DOC·APR 단계 ${inner.length}개 펼치기${innerFail ? ` · 실패 ${innerFail}` : ''}</summary>${parts.join('')}</details>`;
     }
-    return { chips, summary };
+    return { chips, summary, innerHtml };
   }
 
   function renderTrace(entry) {
@@ -179,9 +217,9 @@
       return;
     }
     const flowId = flowOf(fn, entry.record);
-    const { chips, summary } = compareFlow(flowId, trace.steps);
+    const { chips, summary, innerHtml } = compareFlow(flowId, trace.steps);
     $('#dcFlowSummary').innerHTML = `${summary} <span class="te-hint">도식 ${esc(flowId)} · trace ${esc(trace.trace_id)}</span>`;
-    $('#dcFlowChips').innerHTML = chips.map((c) => `<span class="dc-chip ${c.cls}" title="${c.cls}">${esc(c.id)}</span>`).join('');
+    $('#dcFlowChips').innerHTML = chips.map((c) => `<span class="dc-chip ${c.cls}" title="${c.cls}">${esc(c.id)}</span>`).join('') + innerHtml;
     const rows = trace.steps.map((s, i) => `
       <tr>
         <td>${i + 1}</td><td class="mono">${esc(s.step_id)}</td>
@@ -252,16 +290,24 @@
     const onlyChanged = $('#dcOnlyChanged').checked;
     const { before, after, docId } = entry;
     if (entry.scope !== undefined) {
+      const { fn, record } = entry;
+      const failedCreate = fn.creates && !record.ok;
       if (!entry.scope) {
         $('#dcDbTitle').textContent = '';
-        $('#dcDbBody').innerHTML = '<div class="dc-empty">새 LOT·배치가 만들어지지 않았습니다(실패 → 호출자 트랜잭션 롤백). LOT·문서·참조 모두 없음.</div>';
+        $('#dcDbBody').innerHTML = failedCreate
+          ? '<div class="dc-empty">새 LOT·배치가 만들어지지 않았습니다(실패 → 호출자 트랜잭션 롤백). LOT·문서·참조 모두 없음.</div>'
+          : '<div class="dc-empty">비교 범위를 정할 수 없습니다(본문의 날짜를 확인하세요).</div>';
         return;
       }
-      const sb = (before && before.tables) || {};
-      const sa = (after && after.tables) || {};
-      $('#dcDbTitle').innerHTML = `${esc(entry.scope.replace('=', ' = '))} ${!before || !before.exists ? '<span class="te-hint">· 실행 전 없음</span>' : ''}`;
-      $('#dcDbBody').innerHTML = ['lots', 'dev_lot_receipts', 'production_batches', 'dev_batch_plans', 'document', 'doc_section', 'document_ref']
-        .filter((t) => t in sa || t in sb).map((t) => diffTable(t, sb[t], sa[t], onlyChanged)).join('');
+      let made = '';
+      if (fn.creates === 'lot' && record.ok) made = ` · 새 LOT ${esc(record.data.lot.lot_number)} (lot_id ${esc(record.data.lot.lot_id)})`;
+      if (fn.creates === 'batch' && record.ok) made = ` · 새 배치 ${esc(record.data.batch.batch_number)} (batch_id ${esc(record.data.batch.production_batch_id)})`;
+      const range = fn.creates ? ` <span class="te-hint">· 그날 ${fn.creates === 'lot' ? '입고 LOT' : '생산 배치'} 전부와 연결 문서</span>` : '';
+      $('#dcDbTitle').innerHTML = `${groupLabel(entry)}${esc(entry.scope.replace('=', ' = '))}${made}${range} ${!fn.creates && (!before || !before.exists) ? '<span class="te-hint">· 실행 전 없음</span>' : ''}`;
+      let note = '';
+      if (failedCreate) note += '<div class="dc-empty">새 LOT·배치가 만들어지지 않았습니다(실패 → 호출자 트랜잭션 롤백). 그날 범위의 행은 실행 전과 같습니다.</div>';
+      if (entry.group && entry.group.concurrent) note += '<div class="dc-empty">동시 호출이라 이 호출의 실행 전/후에 다른 호출의 변화가 섞일 수 있습니다. 최종 결과는 [합계] 탭에서 보세요.</div>';
+      $('#dcDbBody').innerHTML = note + scopeTables(before, after, onlyChanged);
       return;
     }
     if (!docId) {
@@ -275,10 +321,58 @@
     $('#dcDbBody').innerHTML = ['document', 'doc_section', 'document_ref', 'deviation_action', 'deviation_checker', 'approval_request', 'approval', 'document_template', 'staff'].map((t) => diffTable(t, b[t], a[t], onlyChanged)).join('');
   }
 
+  function scopeTables(before, after, onlyChanged) {
+    const sb = (before && before.tables) || {};
+    const sa = (after && after.tables) || {};
+    return ['lots', 'dev_lot_receipts', 'production_batches', 'dev_batch_plans', 'document', 'doc_section', 'document_ref']
+      .filter((t) => t in sa || t in sb).map((t) => diffTable(t, sb[t], sa[t], onlyChanged)).join('');
+  }
+
+  // ---------------------------------------------------------------- 여러 호출 프리셋의 [호출 n]·[합계] 탭 (S6-39 K2)
+  const groupOf = (x) => (x && x.entries ? x : x && x.group);
+  function groupLabel(entry) {
+    const g = entry.group;
+    if (!g || g.entries.length < 2) return '';
+    return `<span class="badge badge-info">호출 ${g.entries.indexOf(entry) + 1}/${g.entries.length}</span> `;
+  }
+  function renderTabs(active) {
+    const g = groupOf(active);
+    const box = $('#dcCallTabs');
+    if (!g || g.entries.length < 2) { box.hidden = true; box.innerHTML = ''; return; }
+    box.hidden = false;
+    const tab = (key, label, cls, on) => `<button type="button" class="dc-call-tab ${on ? 'active' : ''}" data-k="${key}"><span class="${cls}">${label}</span></button>`;
+    box.innerHTML = `<span class="te-hint">${esc(g.id)}${g.concurrent ? ' · 동시' : ' · 순서대로'}</span>`
+      + g.entries.map((e, i) => tab(i, `호출 ${i + 1} · ${e.record.status}`, e.record.ok ? 'dc-status-ok' : 'dc-status-err', active === e)).join('')
+      + (g.scope ? tab('total', '합계', '', active === g) : '');
+    box.querySelectorAll('.dc-call-tab').forEach((b) => b.addEventListener('click', () => {
+      if (b.dataset.k === 'total') showTotal(g); else show(g.entries[Number(b.dataset.k)]);
+    }));
+  }
+
+  function showTotal(g) {
+    state.active = g;
+    renderTabs(g);
+    $('#dcApiBody').innerHTML = `<div class="dc-sub">이 프리셋의 호출 ${g.entries.length}개${g.concurrent ? ' (동시에 보냄)' : ''}</div>`
+      + g.entries.map((e, i) => `<div class="dc-line"><span class="te-hint">호출 ${i + 1}</span><span class="dc-method">▶ ${esc(e.record.request.method)}</span><span class="dc-code">${esc(e.record.request.url)}</span>
+        <span class="${e.record.ok ? 'dc-status-ok' : 'dc-status-err'}">◀ ${e.record.status}</span><span class="te-hint">${e.record.ms} ms</span></div>`).join('')
+      + '<div class="te-hint" style="margin-top:.5rem">요청·응답 본문은 [호출 n] 탭에서 봅니다.</div>';
+    $('#dcFlowSummary').innerHTML = '<span class="te-hint">호출별 도식 비교</span>';
+    $('#dcFlowChips').innerHTML = '';
+    $('#dcTraceBody').innerHTML = g.entries.map((e, i) => {
+      if (!e.trace) return `<div class="dc-line"><span class="te-hint">호출 ${i + 1}</span> trace 없음</div>`;
+      const flowId = flowOf(e.fn, e.record);
+      return `<div class="dc-line"><span class="te-hint">호출 ${i + 1}</span>${compareFlow(flowId, e.trace.steps).summary} <span class="te-hint">도식 ${esc(flowId)}</span></div>`;
+    }).join('');
+    $('#dcDbTitle').innerHTML = `<span class="badge badge-info">합계</span> ${esc(g.scope.replace('=', ' = '))} <span class="te-hint">· 프리셋 실행 전 → 모든 호출이 끝난 뒤</span>`;
+    $('#dcDbBody').innerHTML = scopeTables(g.before, g.after, $('#dcOnlyChanged').checked);
+    renderHistory();
+  }
+
   // ---------------------------------------------------------------- 이력
   function show(entry) {
     if (!entry) return;
     state.active = entry;
+    renderTabs(entry);
     renderApi(entry);
     renderTrace(entry);
     renderDb(entry);
@@ -657,7 +751,7 @@
       prepare: async () => ({ func: 'reqLot', body: J(await lotBody(await freeDay())) }) },
     { id: 'REQ-PS-02', label: '같은 LOT 다시 호출', expect: '200 · REQ-DEV-RE-LOT 도식 일치 · REQ-LOT-05 건너뜀(행 이미 있음), 안쪽 DOC-GOC-01a(이미 있음) · 결과 이미 있음/행 이미 있음 · dev_lot_receipts.touched_at만 변경(자기 쓰기 먼저)',
       prepare: async () => ({ func: 'reqLotRe', id: String((await lotWhere((l) => d03Of(l), 'D03 행이 있는')).lot_id) }) },
-    { id: 'REQ-PS-03', label: '같은 날 두 번째 LOT', expect: '201 · D03 "행 추가"(그날 작성중 육안검사에) · doc_section +1, document_ref +1, 그 D03 version +1',
+    { id: 'REQ-PS-03', label: '같은 날 두 번째 LOT', expect: '201 · D03 "행 추가"(그날 작성중 육안검사에) · ④(그날 범위) lots·dev_lot_receipts +1, document +2 ~1(새 D01·D02, 기존 D03 version +1), doc_section +3(D01·D02 info + D03 LOT 행), document_ref +3',
       prepare: async () => {
         const lot = await lotWhere((l) => { const d = d03Of(l); return d && ['draft', 'rejected'].includes(d.status); }, '육안검사가 작성중·반려인');
         return { func: 'reqLot', body: J(await lotBody(lot.received_date, { supplier_name: '콘솔농협(두 번째)' })) };
@@ -667,18 +761,19 @@
         const lot = await lotWhere((l) => { const d = d03Of(l); return d && ['completed', 'submitted', 'approved'].includes(d.status); }, '육안검사가 작성완료·결재중·승인인');
         return { func: 'reqLot', body: J(await lotBody(lot.received_date, { supplier_name: '콘솔농협(잠긴 날)' })) };
       } },
-    { id: 'REQ-PS-05', label: '동시에 두 LOT 입고', expect: '두 요청 모두 201 · 두 트랜잭션이 직렬 처리(첫 SQL 쓰기 잠금) · 그날 D03 1건, LOT 행 2(한쪽은 새로 만듦, 다른 쪽은 행 추가)',
+    { id: 'REQ-PS-05', label: '동시에 두 LOT 입고', expect: '두 요청 모두 201 · 두 트랜잭션이 직렬 처리(첫 SQL 쓰기 잠금) · 그날 D03 1건, LOT 행 2(한쪽은 새로 만듦, 다른 쪽은 행 추가) · [합계] ④ lots +2, document +5(D01·D02 ×2 + D03 1), doc_section +7',
       prepare: async () => {
         const day = await freeDay();
         const a = { func: 'reqLot', body: J(await lotBody(day, { supplier_name: '콘솔농협(A)' })) };
         const b = { func: 'reqLot', body: J(await lotBody(day, { supplier_name: '콘솔농협(B)' })) };
-        return { ...a, script: async (exec) => { await Promise.all([exec({ ...a, staff: api.staffId }), exec({ ...b, staff: api.staffId })]); } };
+        return { ...a, groupScope: `received_date=${day}`, concurrent: true,
+          script: async (exec) => { await Promise.all([exec({ ...a, staff: api.staffId }), exec({ ...b, staff: api.staffId })]); } };
       } },
     { id: 'REQ-PS-06', label: '작성 요구 중 실패 → 롤백', expect: '500 SIMULATED_FAILURE · REQ-LOT 전체 통과 뒤 REQ-DEV-03 실패 → 호출자 트랜잭션 롤백 · LOT·입고 기록·문서·참조 모두 없음',
       prepare: async () => ({ func: 'reqLot', body: J(await lotBody(await freeDay(), { fail_after: true })) }) },
     { id: 'REQ-PS-07', label: '생산 시작(제조)', expect: '201 · REQ-DEV-BAT 도식 일치(REQ-BAT-03 ×3) · production_batches·dev_batch_plans +1, document +3(CCP-1P·2B·3P), document_ref(배치 + 공정) +3',
       prepare: async () => ({ func: 'reqBatch', body: J({ item_id: await itemId('유자차'), process_type: 'MANUFACTURE', manufactured_date: localDay(0), quantity_kg: 900 }) }) },
-    { id: 'REQ-PS-08', label: '같은 배치 다시 호출 / 포장 배치', expect: '① 200 · 이미 있음 ×3, touched_at만 변경 ② 201 · REQ-BAT-03 건너뜀(공정 없음) · 문서 0',
+    { id: 'REQ-PS-08', label: '같은 배치 다시 호출 / 포장 배치', expect: '[호출 1] 200 · 이미 있음 ×3 · ④ dev_batch_plans ~1(touched_at만) [호출 2] 201 · REQ-BAT-03 건너뜀(공정 없음) · ④ production_batches·dev_batch_plans +1, 문서 변화 없음',
       prepare: async () => {
         const batch = (await reqList('batches')).find((b) => b.process_type === 'MANUFACTURE' && b.status !== 'CANCELLED' && b.documents.length);
         if (!batch) throw new Error(`CCP 문서가 있는 제조 배치가 없습니다. ${REQ_HINT}.`);
@@ -710,7 +805,7 @@
       $('#dcDocId').value = spec.docId || '';
       if (spec.staff) { api.setStaff(spec.staff); $('#dcStaff').value = spec.staff; }
       else if (!api.staffId || api.staffId === '999') { api.setStaff('3'); $('#dcStaff').value = '3'; }
-      state.preset = { id: p.id, script: spec.script };
+      state.preset = { id: p.id, script: spec.script, groupScope: spec.groupScope, concurrent: spec.concurrent };
       toggleInputs();
       $('#dcPresetDesc').innerHTML = `<b>${esc(p.id)} ${esc(p.label)}</b><br>기대: ${esc(p.expect)}${spec.script ? '<br><span class="te-hint">여러 호출을 순서/동시에 실행하는 프리셋입니다. [실행]을 누르세요.</span>' : ''}`;
     } catch (error) {
@@ -764,7 +859,7 @@
     ['#dcId', '#dcQuery', '#dcBody', '#dcDocId'].forEach((sel) => $(sel).addEventListener('input', () => { if (state.preset && state.preset.script) state.preset = null; }));
     $('#dcLoadPreset').addEventListener('click', loadPreset);
     $('#dcRun').addEventListener('click', run);
-    $('#dcOnlyChanged').addEventListener('change', () => state.active && renderDb(state.active));
+    $('#dcOnlyChanged').addEventListener('change', () => { if (!state.active) return; if (state.active.entries) showTotal(state.active); else renderDb(state.active); });
     const flows = await devGet('/api/dev/flows');
     state.flows = flows ? flows.flows : {};
     toggleInputs();
