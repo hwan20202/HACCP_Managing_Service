@@ -1,6 +1,8 @@
 """문서 도메인 서비스 (s2-spec 4.1, 흐름은 s2-flows.md).
 
-- 상태 판단은 상태 집합(EDITABLE, COMPLETABLE, REOPENABLE, LOCKABLE, DELETABLE)만 본다(DOC-FR-12).
+- 상태 판단은 상태 집합(EDITABLE, COMPLETABLE, REOPENABLE, LOCKABLE, CORRECTABLE, DELETABLE)으로
+  한다(DOC-FR-12). P6: 작성 재개·반려의 목적지만 "열린 정정 여부"를 UPDATE 안의 CASE로 더 본다
+  (p6-s2-spec 2.2).
 - P4(p4-s2-spec): 작성완료·작성 재개, 업무 대상 참조, 작성 요구 함수(N1~N3), 개선조치.
   모든 쓰기 기능은 트랜잭션의 첫 SQL을 쓰기로 한다(p4-s2-flows "읽는 법").
 - 쓰기 기능은 트랜잭션의 첫 SQL을 조건부 UPDATE로 해서 검사와 잠금을 한 번에 한다(DOC-NFR-02).
@@ -11,7 +13,7 @@
 import json
 
 from django.db import IntegrityError, models, transaction
-from django.db.models import Count, Exists, F, Func, OuterRef, Q, Subquery, Value
+from django.db.models import Case, Count, Exists, F, Func, OuterRef, Q, Subquery, Value, When
 from django.utils import timezone
 
 from apps.core.http import ApiError
@@ -26,15 +28,19 @@ from .models import (
     DeviationChecker,
     DocSection,
     Document,
+    DocumentCorrection,
     DocumentFile,
     DocumentRef,
     DocumentTemplate,
 )
 
-EDITABLE = ("draft", "rejected")
-COMPLETABLE = ("draft", "rejected")
-REOPENABLE = ("completed",)
+EDITABLE = ("draft", "rejected", "correcting")  # P6: 정정 중도 수정·작성완료(P6-FR-04)
+COMPLETABLE = ("draft", "rejected", "correcting")
+REOPENABLE = ("completed",)  # 목적지: 열린 정정이 있으면 correcting, 없으면 draft(P6-FR-05)
 LOCKABLE = ("completed",)  # 상신은 작성완료 상태에서만(P4-S2-Q1, D-055)
+CORRECTABLE = ("approved",)  # 정정 시작(P6-FR-01)
+ROW_APPENDABLE = ("draft", "rejected")  # N2 — P4 그대로(P6a: 정정 중 문서에 행 추가 경로 없음)
+CORRECTION_REASON_MAX = 200
 DELETABLE = (
     "draft",
 )  # 그리고 submitted_at IS NULL, record_key IS NULL(작성 요구 문서 삭제 불가 C-3)
@@ -43,6 +49,13 @@ DEVIATION_MAX_CHECKERS = 10
 PAGE_SIZE = 20
 MAX_RANGE_DAYS = 366
 EDITABLE_FIELDS = ("subject", "work_date", "assignee_id", "due_at")
+
+
+def _open_correction(**match):
+    """열린 정정(closed_at NULL) 서브쿼리. 문서마다 최대 1개(ux_correction_open)."""
+    return DocumentCorrection.objects.filter(
+        document_id=OuterRef("document_id"), closed_at__isnull=True, **match
+    )
 
 
 # ---------------------------------------------------------------- 직렬화
@@ -172,7 +185,36 @@ def _section_row(row):
     }
 
 
-def _assemble(document, rows, refs=None, files=None, deviations=None, hints=None):
+def _correction_row(c, document=None):
+    row = {
+        "correction_id": c.correction_id,
+        "started_at": _iso(c.started_at),
+        "started_by": c.started_by_id,
+        "reason": c.reason,
+        "closed_at": _iso(c.closed_at),
+        "outcome": c.outcome,
+    }
+    if document is not None:
+        # 정정 취소 가능 = 정정 중이고 정정 시작 뒤 수정하지 않음(D-075)
+        row["cancellable"] = document.status == "correcting" and document.version == c.start_version
+    return row
+
+
+def _corrections_of(document):
+    """(열린 정정, 정정 이력 최신순). SQL 1개(ix_correction_document)."""
+    history = list(
+        DocumentCorrection.objects.filter(document_id=document.document_id).order_by(
+            "-started_at", "-correction_id"
+        )
+    )
+    current = next((c for c in history if c.closed_at is None), None)
+    return (
+        None if current is None else _correction_row(current, document),
+        [_correction_row(c) for c in history],
+    )
+
+
+def _assemble(document, rows, refs=None, files=None, deviations=None, hints=None, corrections=None):
     order = validation.section_order(document.template.schema_json)
     rows = sorted(rows, key=lambda r: (order.get(r.section_def, len(order)), r.row_no))
     refs = refs or []
@@ -185,6 +227,7 @@ def _assemble(document, rows, refs=None, files=None, deviations=None, hints=None
             row["hints"] = hints[row["section_id"]]
     data["files"] = files or []
     data["deviations"] = deviations or []
+    data["correction"], data["corrections"] = corrections or (None, [])
     return data
 
 
@@ -301,6 +344,7 @@ def _full(document):
         files=_files_of(document.document_id),
         deviations=_deviations_of(document.document_id),
         hints=_hints(document, rows, refs),
+        corrections=_corrections_of(document),
     )
 
 
@@ -380,6 +424,11 @@ def list_documents(filters=None, page=1):
         target = filters.get("target") or None
         if target is not None and (not isinstance(target, str) or not 1 <= len(target) <= 50):
             problems.append(validation.error("target", "invalid", "대상은 1~50자여야 합니다."))
+        correcting = filters.get("correcting") or None
+        if correcting is not None and correcting not in ("true", "false"):
+            problems.append(
+                validation.error("correcting", "invalid", "true 또는 false여야 합니다.")
+            )
         template_id = _int_filter(filters, "template_id", problems)
         author_id = _int_filter(filters, "author_id", problems)
         assignee_id = _int_filter(filters, "assignee_id", problems)
@@ -389,7 +438,11 @@ def list_documents(filters=None, page=1):
         if problems:
             raise errors.InvalidFilter(details=problems)
 
-    queryset = Document.objects.filter(deleted_at__isnull=True)
+    queryset = Document.objects.filter(deleted_at__isnull=True).annotate(
+        correcting=Exists(_open_correction())
+    )
+    if correcting is not None:
+        queryset = queryset.filter(correcting=correcting == "true")
     if date_from:
         queryset = queryset.filter(work_date__gte=date_from)
     if date_to:
@@ -426,6 +479,7 @@ def list_documents(filters=None, page=1):
         items = []
         for d in documents:
             item = _document_head(d)
+            item["correcting"] = d.correcting
             item["requirement"] = _requirement(d.record_key, refs.get(d.document_id, []))
             item["target_summary"] = _target_summary(
                 d, refs.get(d.document_id, []), names.get(d.document_id)
@@ -457,8 +511,8 @@ def get_document(document_id):
         files = _files_of(document_id)
         deviations = _deviations_of(document_id)
         hints = _hints(document, rows, refs)
-    with step("DOC-GET-03", "DOC", "조립"):
-        return _assemble(document, rows, refs, files, deviations, hints)
+    with step("DOC-GET-03", "DOC", "정정 기록 조회·조립"):
+        return _assemble(document, rows, refs, files, deviations, hints, _corrections_of(document))
 
 
 # ---------------------------------------------------------------- 검증 공통
@@ -977,13 +1031,22 @@ def lock_for_review(document_id, expected_version=None):
 
 
 def mark_approved(document_id):
-    """승인 확정: submitted → approved. WF 트랜잭션 안에서만 호출한다."""
+    """승인 확정: submitted → approved. 열린 정정이 있으면 같은 트랜잭션에서 닫는다(P6-FR-07).
+
+    WF 트랜잭션 안에서만 호출한다.
+    """
     _require_transaction()
-    with step("DOC-APV-01", "DOC", "승인 확정(조건부 UPDATE)") as s:
+    now = timezone.now()
+    with step("DOC-APV-01", "DOC", "승인 확정(조건부 UPDATE)·정정 닫기") as s:
         changed = Document.objects.filter(
             pk=document_id, deleted_at__isnull=True, status="submitted"
-        ).update(status="approved", updated_at=timezone.now(), version=F("version") + 1)
-        s.note(f"영향 행 {changed}")
+        ).update(status="approved", updated_at=now, version=F("version") + 1)
+        closed = 0
+        if changed:
+            closed = DocumentCorrection.objects.filter(
+                document_id=document_id, closed_at__isnull=True
+            ).update(closed_at=now, outcome="approved")
+        s.note(f"영향 행 {changed}, 닫은 정정 {closed}")
     if changed == 0:
         _transition_failure(document_id, "DOC-APV-01a")
     with step("DOC-APV-02", "DOC", "결과"):
@@ -991,12 +1054,25 @@ def mark_approved(document_id):
 
 
 def mark_rejected(document_id):
-    """반려: submitted → rejected. WF 트랜잭션 안에서만 호출한다."""
+    """반려: submitted → rejected, 열린 정정이 있으면 correcting(작성완료 기록 지움, P6-FR-06).
+
+    목적지는 UPDATE 안의 CASE로 정한다 — 앞에 SELECT를 두지 않는다(P6-NFR-01).
+    WF 트랜잭션 안에서만 호출한다.
+    """
     _require_transaction()
-    with step("DOC-RJT-01", "DOC", "반려(조건부 UPDATE)") as s:
+    open_correction = Exists(_open_correction())
+    with step("DOC-RJT-01", "DOC", "반려(조건부 UPDATE, 목적지 CASE)") as s:
         changed = Document.objects.filter(
             pk=document_id, deleted_at__isnull=True, status="submitted"
-        ).update(status="rejected", updated_at=timezone.now(), version=F("version") + 1)
+        ).update(
+            status=Case(When(open_correction, then=Value("correcting")), default=Value("rejected")),
+            completed_at=Case(When(open_correction, then=Value(None)), default=F("completed_at")),
+            completed_by_id=Case(
+                When(open_correction, then=Value(None)), default=F("completed_by_id")
+            ),
+            updated_at=timezone.now(),
+            version=F("version") + 1,
+        )
         s.note(f"영향 행 {changed}")
     if changed == 0:
         _transition_failure(document_id, "DOC-RJT-01a")
@@ -1053,7 +1129,10 @@ def complete_document(actor_id, document_id, expected_version):
 
 
 def reopen_document(actor_id, document_id, expected_version):
-    """작성 재개: completed → draft. 작성완료 기록을 지운다(P4-S2-Q7)."""
+    """작성 재개: completed → draft, 열린 정정이 있으면 correcting(P6-FR-05).
+
+    작성완료 기록을 지운다(P4-S2-Q7). 목적지는 UPDATE 안의 CASE(P6-NFR-01).
+    """
     now = timezone.now()
     with transaction.atomic():
         with step("DOC-ROP-02", "DOC", "작성 재개(조건부 UPDATE)") as s:
@@ -1063,7 +1142,10 @@ def reopen_document(actor_id, document_id, expected_version):
                 status__in=REOPENABLE,
                 version=expected_version,
             ).update(
-                status="draft",
+                status=Case(
+                    When(Exists(_open_correction()), then=Value("correcting")),
+                    default=Value("draft"),
+                ),
                 completed_at=None,
                 completed_by_id=None,
                 updated_at=now,
@@ -1101,6 +1183,143 @@ def reopen_document(actor_id, document_id, expected_version):
                     ]
                 )
     with step("DOC-ROP-03", "DOC", "결과 조회"):
+        return _detail(document_id)
+
+
+# ---------------------------------------------------------------- F22·F24 정정 시작·정정 취소 (P6)
+
+
+def _clean_reason(reason):
+    """정정 사유: 문자열, 앞뒤 공백 제거 후 1~200자(P6-VR-02)."""
+    text = reason.strip() if isinstance(reason, str) else ""
+    if not text:
+        message = "정정 사유를 입력하세요."
+        code = "required"
+    elif len(text) > CORRECTION_REASON_MAX:
+        message = f"정정 사유는 {CORRECTION_REASON_MAX}자 이하여야 합니다."
+        code = "too_long"
+    else:
+        return text
+    raise errors.ValidationFailed(details=[validation.error("reason", code, message)])
+
+
+def _correction_failure(document_id, step_id, expected_version, allowed):
+    """조건부 쓰기가 0행일 때: 없음·삭제 404 → 상태 409 → 버전 409(P1 F07과 같은 순서)."""
+    with step(step_id, "DOC", "실패 사유 확인"):
+        row = (
+            Document.objects.filter(pk=document_id)
+            .values("status", "deleted_at", "version", "updated_at")
+            .first()
+        )
+        if row is None or row["deleted_at"] is not None:
+            raise errors.DocumentNotFound()
+        if row["status"] not in allowed:
+            raise errors.InvalidTransition(
+                details=[
+                    {
+                        "path": "status",
+                        "code": row["status"],
+                        "message": f"현재 상태: {row['status']}",
+                    }
+                ]
+            )
+        if row["version"] != expected_version:
+            raise errors.VersionConflict(
+                details=[
+                    {
+                        "path": "expected_version",
+                        "code": "conflict",
+                        "message": f"내가 연 버전 {expected_version}, 현재 {row['version']}",
+                        "expected": expected_version,
+                        "current": row["version"],
+                        "updated_at": _iso(row["updated_at"]),
+                    }
+                ]
+            )
+        return row
+
+
+def start_correction(actor_id, document_id, expected_version, reason):
+    """DOC-F22 정정 시작: approved → correcting, 정정 기록을 연다(T20, P6-FR-01~03).
+
+    첫 SQL = 정정 기록 INSERT … SELECT(문서가 승인·버전 일치일 때만 1행). 정정 전 작성완료 기록을
+    같은 문장에서 옮겨 적은 뒤 문서를 바꾼다 — 문서를 먼저 바꾸면 지운 작성완료 기록을 남길 곳이
+    없다(P6-S4a G1). 회차는 읽지도 쓰지도 않는다.
+    """
+    with step("DOC-COR-02", "DOC", "사유 검사"):
+        text = _clean_reason(reason)
+    now = timezone.now()
+    with transaction.atomic():
+        with step("DOC-COR-03", "DOC", "정정 기록 열기(조건부 INSERT … SELECT)") as s:
+            with connection_cursor() as cursor:
+                try:
+                    cursor.execute(
+                        "INSERT INTO document_correction (document_id, started_at, started_by,"
+                        " reason, start_version, prev_completed_at, prev_completed_by)"
+                        " SELECT document_id, %s, %s, %s, version + 1, completed_at, completed_by"
+                        " FROM document WHERE document_id = %s AND deleted_at IS NULL"
+                        " AND status = 'approved' AND version = %s",
+                        [_db_datetime(now), actor_id, text, document_id, expected_version],
+                    )
+                except IntegrityError as error:
+                    # 열린 정정이 이미 있는 승인 문서 = 어긋난 데이터 — 방어선(P6-NFR-05)
+                    s.fail("열린 정정 중복")
+                    raise errors.InvalidTransition() from error
+                opened = cursor.rowcount
+            s.note(f"영향 행 {opened}")
+        if opened == 0:
+            _correction_failure(document_id, "DOC-COR-03a", expected_version, CORRECTABLE)
+        with step("DOC-COR-04", "DOC", "문서 정정 중(UPDATE)") as s:
+            changed = Document.objects.filter(
+                pk=document_id, status="approved", version=expected_version
+            ).update(
+                status="correcting",
+                completed_at=None,
+                completed_by_id=None,
+                updated_at=now,
+                version=F("version") + 1,
+            )
+            s.note(f"영향 행 {changed}")
+    with step("DOC-COR-05", "DOC", "결과 조회"):
+        return _detail(document_id)
+
+
+def cancel_correction(actor_id, document_id, expected_version):
+    """DOC-F24 정정 취소: correcting → approved, 정정 시작 뒤 수정하지 않았을 때만(T30, D-075).
+
+    작성완료 기록을 정정 전 값으로 되돌리고 정정 기록을 cancelled로 닫는다. 회차 변화 없음.
+    """
+    now = timezone.now()
+    current = _open_correction()
+    with transaction.atomic():
+        with step("DOC-CCN-02", "DOC", "정정 취소(조건부 UPDATE)") as s:
+            changed = (
+                Document.objects.filter(
+                    pk=document_id,
+                    deleted_at__isnull=True,
+                    status="correcting",
+                    version=expected_version,
+                )
+                .filter(Exists(_open_correction(start_version=expected_version)))
+                .update(
+                    status="approved",
+                    completed_at=Subquery(current.values("prev_completed_at")[:1]),
+                    completed_by_id=Subquery(current.values("prev_completed_by")[:1]),
+                    updated_at=now,
+                    version=F("version") + 1,
+                )
+            )
+            s.note(f"영향 행 {changed}")
+        if changed == 0:
+            _correction_failure(document_id, "DOC-CCN-02a", expected_version, ("correcting",))
+            with step("DOC-CCN-02b", "DOC", "시작 뒤 수정함"):
+                raise errors.CorrectionHasChanges()
+        with step("DOC-CCN-03", "DOC", "정정 기록 닫기(cancelled)") as s:
+            closed = DocumentCorrection.objects.filter(
+                document_id=document_id, closed_at__isnull=True
+            ).update(closed_at=now, outcome="cancelled")
+            s.note(f"영향 행 {closed}")
+    with step("DOC-CCN-04", "DOC", "결과 조회"):
         return _detail(document_id)
 
 
@@ -1495,7 +1714,7 @@ def add_ref_row(actor_id, document_id, section_def, values, refs, dedupe_on):
 
     with step("DOC-ARR-01", "DOC", "잠금용 UPDATE(값·버전 변화 없음)") as s:
         locked = Document.objects.filter(
-            pk=document_id, deleted_at__isnull=True, status__in=EDITABLE
+            pk=document_id, deleted_at__isnull=True, status__in=ROW_APPENDABLE
         ).update(updated_at=F("updated_at"))
         s.note(f"영향 행 {locked}")
     if locked == 0:
@@ -1571,9 +1790,9 @@ def find_documents_by_ref(lot_id=None, production_batch_id=None, process_code=No
         refs = list(DocumentRef.objects.filter(**filters).order_by("document_id", "ref_id"))
         documents = {
             d.document_id: d
-            for d in Document.objects.select_related("template").filter(
-                pk__in={r.document_id for r in refs}, deleted_at__isnull=True
-            )
+            for d in Document.objects.select_related("template")
+            .filter(pk__in={r.document_id for r in refs}, deleted_at__isnull=True)
+            .annotate(correction_reason=Subquery(_open_correction().values("reason")[:1]))
         }
         return [
             {
@@ -1582,6 +1801,9 @@ def find_documents_by_ref(lot_id=None, production_batch_id=None, process_code=No
                 "status": documents[r.document_id].status,
                 "version": documents[r.document_id].version,
                 "section_id": r.section_id,
+                # P6-FR-14: 열린 정정 여부와 사유(REQ F03 correcting·correction_reason)
+                "correcting": documents[r.document_id].correction_reason is not None,
+                "correction_reason": documents[r.document_id].correction_reason,
             }
             for r in refs
             if r.document_id in documents

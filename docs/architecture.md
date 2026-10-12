@@ -38,11 +38,12 @@ HTTP 자동 검사는 `scripts/smoke_process.py`가 `scripts/smoke_server.py`를
 |---|---|---|
 | `staff` | staff | 사람 id |
 | `document_template` | documents | 양식(유형·버전·섹션 정의 JSON). 버전의 내용은 만든 뒤 바꾸지 않음 |
-| `document` | documents | 문서 기본 정보·상태(작성중/작성완료/결재중/승인/반려)·작성 요구 키(`record_key`)·버전·논리 삭제 |
+| `document` | documents | 문서 기본 정보·상태(작성중/작성완료/결재중/승인/반려/정정 중)·작성 요구 키(`record_key`)·버전·논리 삭제 |
 | `doc_section` | documents | 문서 섹션 행(값 JSON, 기록 시각·기록자) |
 | `document_ref` | documents | 문서 ↔ 업무 대상(LOT·생산 배치+공정·품목) 연결. 수불 테이블에 DB FK |
 | `file`, `document_file` | documents | 첨부 파일과 문서 연결(기능은 후속) |
 | `deviation_action`, `deviation_checker` | documents | 이탈 개선조치와 확인자 |
+| `document_correction` | documents | 승인 문서의 정정 기록(시작자·사유·정정 전 작성완료 기록, 열린 정정은 문서마다 1개) |
 | `approval_request` | approvals | 결재 회차(상태, 상신 시점 문서 스냅샷, 결재함 요약) |
 | `approval` | approvals | 결재 칸(결재자, 대기/승인/반려/미처리 종료, 의견) |
 

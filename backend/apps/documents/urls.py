@@ -13,6 +13,16 @@ urlpatterns = [
     ),
     path("documents/<int:document_id>/reopen", api.document_reopen, name="api-document-reopen"),
     path(
+        "documents/<int:document_id>/correction",
+        api.document_correction,
+        name="api-document-correction",
+    ),
+    path(
+        "documents/<int:document_id>/correction/cancel",
+        api.document_correction_cancel,
+        name="api-document-correction-cancel",
+    ),
+    path(
         "documents/<int:document_id>/deviations",
         api.deviation_collection,
         name="api-deviation-collection",

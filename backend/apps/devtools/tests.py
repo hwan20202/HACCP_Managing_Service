@@ -65,17 +65,24 @@ class SeedP4Tests(TestCase):
         self.assertEqual(seed_p4("2026-10-12"), {"documents": 0})
         self.assertEqual(invariant_violations(), [])
         statuses = set(Document.objects.values_list("status", flat=True))
-        self.assertEqual(statuses, {"draft", "completed", "submitted", "approved", "rejected"})
+        self.assertEqual(
+            statuses, {"draft", "completed", "submitted", "approved", "rejected", "correcting"}
+        )
         d03 = Document.objects.get(record_key="D03|lot:1")
         self.assertEqual(d03.assignee_id, 2)  # P4 시드와 같게 D03·CCP는 담당자 2
         d03_status = dict(
-            Document.objects.filter(record_key__in=[f"D03|lot:{n}" for n in (1, 2, 3)]).values_list(
-                "record_key", "status"
-            )
+            Document.objects.filter(
+                record_key__in=[f"D03|lot:{n}" for n in (1, 2, 3, 4)]
+            ).values_list("record_key", "status")
         )
         self.assertEqual(  # 오늘 LOT 1 승인, LOT 2 작성완료, LOT 3 작성중(P6a-S1 7장)
             d03_status,
-            {"D03|lot:1": "approved", "D03|lot:2": "completed", "D03|lot:3": "draft"},
+            {
+                "D03|lot:1": "approved",
+                "D03|lot:2": "completed",
+                "D03|lot:3": "draft",
+                "D03|lot:4": "correcting",  # P6 정정 중
+            },
         )
         self.assertEqual(
             set(

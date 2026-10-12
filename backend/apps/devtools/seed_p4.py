@@ -196,6 +196,8 @@ def seed_p4(today=None):
         today_d03 = [
             next(d for d in out["documents"] if d["type_code"] == "D03") for out in lot_out[:3]
         ]
+        # P6: 전날 LOT RM-1012-01 D03 — 승인 뒤 정정 중(WF-PS-17, p6a-s1-screens 7장)
+        correcting_d03 = next(d for d in lot_out[3]["documents"] if d["type_code"] == "D03")
         d03 = {"created": today_d03[0]["result"] == "created"}
         d03_id = today_d03[0]["document_id"]
 
@@ -222,6 +224,7 @@ def seed_p4(today=None):
         return made
 
     # 상태: 오늘 LOT 1 D03 승인, LOT 2 D03 작성완료, LOT 3 D03 작성중(P6a — LOT마다 문서),
+    # 전날 LOT RM-1012-01 D03 정정 중(P6),
     # CCP-1P 작성완료, CCP-2B 결재중, CCP-3P 작성중(부적합+개선조치), 배치 2 CCP-1P 반려
     for item in today_d03[:2]:
         _inspect(actor, item["document_id"], "PASS")
@@ -230,6 +233,18 @@ def seed_p4(today=None):
     ids = _submit(actor, d03_id)
     wf.decide(3, ids[1], "approved")
     wf.decide(1, ids[2], "approved")
+
+    # 정정 중 D03(P6 S4a): 적합으로 승인 → 정정 시작(사유 있음)
+    fix_id = correcting_d03["document_id"]
+    _inspect(actor, fix_id, "PASS")
+    _set_info(actor, fix_id, {"inspector": 4})
+    _complete(actor, fix_id)
+    ids = _submit(actor, fix_id)
+    wf.decide(3, ids[1], "approved")
+    wf.decide(1, ids[2], "approved")
+    doc.start_correction(
+        3, fix_id, doc.get_document(fix_id)["version"], "외포장 판정 재확인(시드: 정정 중)"
+    )
 
     for code, out in ccp.items():
         document_id = out["document"]["document_id"]

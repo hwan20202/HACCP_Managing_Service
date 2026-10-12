@@ -12,6 +12,7 @@
     submitted: { label: '결재중', badge: 'badge-info' },
     approved: { label: '승인', badge: 'badge-success' },
     rejected: { label: '반려', badge: 'badge-danger' },
+    correcting: { label: '정정 중', badge: 'badge-warning' },  // P6 S4a — 화면 설계는 P6 S5
   };
 
   const TempEntry = {

@@ -13,6 +13,7 @@ from apps.approvals.models import ApprovalRequest
 from apps.core import trace as tracing
 from apps.doc_requirements import errors, flows, rules, services
 from apps.document_workflow import services as wf
+from apps.document_workflow.tests.base import invariant_violations
 from apps.documents import services as doc
 from apps.documents.models import DocSection, Document, DocumentRef
 from apps.staff.services import InvalidStaff
@@ -68,6 +69,9 @@ def approve_d03(document_id, verdict):
 
 
 class RequireForLotTests(TestCase):
+    def tearDown(self):
+        self.assertEqual(invariant_violations(), [])  # P6-TC-090(정정 중을 실제 함수로 만듦)
+
     def setUp(self):
         setup_req()
 
@@ -143,7 +147,7 @@ class RequireForLotTests(TestCase):
     def test_p6a_tc020_other_lot_state_does_not_matter(self):
         """P6a-TC-020(REQ-TC-003·004·005 대체): 같은 날 다른 LOT의 D03 상태와 관계없이 새 D03.
 
-        정정 중(correcting)은 ERD v6(P6 S4) 뒤에 이 매개변수에 더한다.
+        정정 중(correcting)은 실제 함수로 만든다(승인 → 정정 시작, P6 S4a — D-090 이월).
         """
         for status in ("draft", "rejected", "completed", "submitted", "approved"):
             with self.subTest(status=status), transaction.atomic():
@@ -158,6 +162,32 @@ class RequireForLotTests(TestCase):
                     Document.objects.values_list("version", "status").get(pk=first), before
                 )
                 transaction.savepoint_rollback(sid)
+        first = by_type(lot(88))["D03"]["document_id"]
+        approve_d03(first, "PASS")
+        doc.start_correction(3, first, detail(first)["version"], "판정 오기")
+        before = Document.objects.values_list("version", "status").get(pk=first)
+        self.assertEqual(before[1], "correcting")
+        out = by_type(lot(89))["D03"]
+        self.assertEqual((out["result"], out["record_key"]), ("created", "D03|lot:89"))
+        self.assertEqual(Document.objects.values_list("version", "status").get(pk=first), before)
+
+    def test_p6a_tc022_recall_while_correcting(self):
+        """P6a-TC-022(P6-TC-041 대체): 정정 중인 LOT 88 D03이 있을 때 LOT 88 재호출 → existing."""
+        d03 = by_type(lot(88))["D03"]["document_id"]
+        approve_d03(d03, "PASS")
+        doc.start_correction(3, d03, detail(d03)["version"], "판정 오기")
+        before = (
+            Document.objects.values_list("version", "status").get(pk=d03),
+            list(DocSection.objects.filter(document_id=d03).values_list("values_json", flat=True)),
+        )
+        out = by_type(lot(88))
+        self.assertEqual({k: v["result"] for k, v in out.items()}, dict.fromkeys(out, "existing"))
+        self.assertEqual(out["D03"]["document_id"], d03)
+        after = (
+            Document.objects.values_list("version", "status").get(pk=d03),
+            list(DocSection.objects.filter(document_id=d03).values_list("values_json", flat=True)),
+        )
+        self.assertEqual(after, before)
 
     def test_tc006_errors_leave_nothing(self):
         cases = [
@@ -241,11 +271,41 @@ class RequireForBatchTests(TestCase):
 
 
 class DocsForLotTests(TestCase):
+    def tearDown(self):
+        self.assertEqual(invariant_violations(), [])  # P6-TC-090(정정 중을 실제 함수로 만듦)
+
     def setUp(self):
         setup_req()
         self.first = lot(88)
         self.d03 = by_type(self.first)["D03"]["document_id"]
         self.d03_89 = by_type(lot(89))["D03"]["document_id"]
+
+    def test_p6_tc042_correcting(self):
+        """P6-TC-042: 정정 중 D03 — correcting true·사유, 판정은 정정 전 승인본 기준(FR-14)."""
+        approve_d03(self.d03, "PASS")
+        doc.start_correction(3, self.d03, detail(self.d03)["version"], "판정 오기(적합 → 부적합)")
+        # 정정 중에 판정을 FAIL로 고쳐도 승인본 판정(PASS)을 쓴다
+        check = next(
+            s for s in detail(self.d03)["sections"] if s["section_def"] == rules.D03_INSPECTION
+        )
+        doc.update_document(
+            3,
+            self.d03,
+            {
+                "expected_version": detail(self.d03)["version"],
+                "sections": {
+                    "update": [{"section_id": check["section_id"], "values": {"verdict": "FAIL"}}]
+                },
+            },
+        )
+        rows = {d["type_code"]: d for d in services.docs_for_lot(88)["documents"]}
+        self.assertEqual(
+            (rows["D03"]["correcting"], rows["D03"]["correction_reason"], rows["D03"]["verdict"]),
+            (True, "판정 오기(적합 → 부적합)", "PASS"),
+        )
+        self.assertEqual(
+            (rows["D01"]["correcting"], rows["D01"]["correction_reason"]), (False, None)
+        )
 
     def test_tc020_approved_verdict(self):
         approve_d03(self.d03, "PASS")

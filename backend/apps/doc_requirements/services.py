@@ -211,7 +211,9 @@ def docs_for_lot(lot_id):
                     if approved is None
                     else {k: approved[k] for k in ("request_id", "attempt", "closed_at")},
                     "verdict": _approved_verdict(approved, ref["type_code"]),
-                    "correcting": False,  # 정정중은 P6
+                    # P6-FR-14: 열린 정정 여부·사유(N3). 판정은 계속 유효 승인본 기준
+                    "correcting": ref["correcting"],
+                    "correction_reason": ref["correction_reason"],
                 }
             )
         return {

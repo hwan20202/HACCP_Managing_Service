@@ -87,3 +87,13 @@ class CompletionIncomplete(DocumentError):
 
 class DeviationNotFound(DocumentError):
     status, code, message = 404, "DEVIATION_NOT_FOUND", "개선조치를 찾을 수 없습니다."
+
+
+class CorrectionHasChanges(DocumentError):
+    """정정 시작 뒤 수정한 문서는 정정을 취소할 수 없다(D-075, P6-FR-16)."""
+
+    status, code, message = (
+        409,
+        "CORRECTION_HAS_CHANGES",
+        "정정 시작 뒤 수정한 내용이 있어 취소할 수 없습니다. 작성완료 후 재상신하세요.",
+    )

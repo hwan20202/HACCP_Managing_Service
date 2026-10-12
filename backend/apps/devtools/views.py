@@ -14,6 +14,7 @@ from apps.documents.models import (
     DeviationChecker,
     DocSection,
     Document,
+    DocumentCorrection,
     DocumentRef,
     DocumentTemplate,
 )
@@ -155,6 +156,10 @@ def snapshot(request):
             "deviation_id", "staff_id"
         )
     )
+    # P6: 정정 기록
+    corrections = _rows(
+        DocumentCorrection.objects.filter(document_id=document_id).order_by("correction_id")
+    )
     staff_ids = sorted(
         {
             document[k]
@@ -171,6 +176,12 @@ def snapshot(request):
             if row[k]
         }
         | {row["staff_id"] for row in checkers}
+        | {
+            row[k]
+            for row in corrections
+            for k in ("started_by_id", "prev_completed_by_id")
+            if row[k]
+        }
     )
     return _json(
         {
@@ -187,6 +198,7 @@ def snapshot(request):
                 "document_ref": refs,
                 "deviation_action": deviations,
                 "deviation_checker": checkers,
+                "document_correction": corrections,
             },
         }
     )

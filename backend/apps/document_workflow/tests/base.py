@@ -25,7 +25,17 @@ ALLOWED_PAIRS = {
     ("submitted", "in_progress"),
     ("approved", "approved"),
     ("rejected", "rejected"),
+    # P6 정정(p6-s2-spec 3.1): F0·F1 — 열린 정정이 있을 때만
+    ("correcting", "approved"),
+    ("correcting", "rejected"),
+    ("completed", "approved"),
 }
+NEEDS_OPEN_CORRECTION = {
+    ("correcting", "approved"),
+    ("correcting", "rejected"),
+    ("completed", "approved"),
+}
+CORRECTION_STATES = {"correcting", "completed", "submitted"}
 
 
 def slots():
@@ -73,19 +83,33 @@ def db_state(document_id):
 
 
 def invariant_violations():
-    """WF-TC-030: 삭제되지 않은 모든 문서의 (상태, 최신 회차 상태)가 결합 상태 안에 있는지."""
+    """WF-TC-030 + P6-TC-090: 삭제 안 된 문서마다 (상태, 최신 회차 상태)가 결합 상태 안에 있는지.
+
+    P6-FR-12: 열린 정정이 있으면 상태는 correcting·completed·submitted이고 승인 회차가 1개 이상,
+    correcting(과 정정 작성완료 F1)이면 열린 정정이 있어야 한다.
+    """
     rows = sql(
         "SELECT d.document_id, d.status,"
         " (SELECT r.status FROM approval_request r WHERE r.document_id = d.document_id"
         "  ORDER BY r.attempt DESC LIMIT 1),"
         " (SELECT COUNT(*) FROM approval_request r WHERE r.document_id = d.document_id"
-        "  AND r.status = 'in_progress')"
+        "  AND r.status = 'in_progress'),"
+        " (SELECT COUNT(*) FROM approval_request r WHERE r.document_id = d.document_id"
+        "  AND r.status = 'approved'),"
+        " (SELECT COUNT(*) FROM document_correction c WHERE c.document_id = d.document_id"
+        "  AND c.closed_at IS NULL)"
         " FROM document d WHERE d.deleted_at IS NULL"
     )
     bad = []
-    for document_id, status, latest, open_count in rows:
-        if (status, latest) not in ALLOWED_PAIRS or open_count > 1:
-            bad.append((document_id, status, latest, open_count))
+    for document_id, status, latest, in_progress, approved, open_corr in rows:
+        pair = (status, latest)
+        wrong = pair not in ALLOWED_PAIRS or in_progress > 1 or open_corr > 1
+        if open_corr:
+            wrong = wrong or status not in CORRECTION_STATES or approved == 0
+        elif pair in NEEDS_OPEN_CORRECTION:
+            wrong = True
+        if wrong:
+            bad.append((document_id, status, latest, in_progress, open_corr))
     return bad
 
 

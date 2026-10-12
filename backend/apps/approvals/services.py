@@ -9,7 +9,8 @@
 import datetime
 
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Max, OuterRef, Q, Subquery
+from django.db.models import Count, Exists, Max, OuterRef, Q, Subquery
+from django.db.models.fields.json import KeyTextTransform, KeyTransform
 from django.utils import timezone
 
 from apps.core.http import ApiError
@@ -145,7 +146,36 @@ def _slot_dict(slot):
     }
 
 
-def _request_dict(req, slots, *, with_snapshot):
+def _snapshot_reason(path):
+    """스냅샷 JSON의 correction.reason(SQL 안에서 꺼냄 — 스냅샷 전체를 읽지 않는다)."""
+    return KeyTextTransform("reason", KeyTransform("correction", path))
+
+
+def _correction_reason(req):
+    """정정 상신 회차면 스냅샷의 정정 사유(P6 2.3). 스냅샷을 읽지 않은 행은 annotate 값."""
+    if hasattr(req, "snapshot_correction_reason"):
+        return req.snapshot_correction_reason
+    correction = (req.snapshot_json or {}).get("correction") if req.snapshot_json else None
+    return correction.get("reason") if isinstance(correction, dict) else None
+
+
+def _correction_values(req, next_approved):
+    """회차 표시 값(계산, 저장 안 함 — P6-S2-Q2).
+
+    next_approved: 바로 다음 승인 회차 (attempt, closed_at), 없으면 None.
+    """
+    reason = _correction_reason(req)
+    approved = req.status == "approved"
+    return {
+        "effective": approved and next_approved is None,
+        "superseded_by": next_approved[0] if approved and next_approved else None,
+        "superseded_at": _iso(next_approved[1]) if approved and next_approved else None,
+        "is_correction": reason is not None,
+        "correction_reason": reason,
+    }
+
+
+def _request_dict(req, slots, *, with_snapshot, next_approved=None):
     data = {
         "request_id": req.request_id,
         "document_id": req.document_id,
@@ -159,6 +189,7 @@ def _request_dict(req, slots, *, with_snapshot):
         "requested_at": _iso(req.requested_at),
         "closed_at": _iso(req.closed_at),
         "slots": [_slot_dict(s) for s in sorted(slots, key=lambda s: s.slot_no)],
+        **_correction_values(req, next_approved),
     }
     if with_snapshot:
         data["snapshot"] = req.snapshot_json
@@ -360,8 +391,21 @@ def get_request(request_id):
             raise errors.RequestNotFound()
     with step("APR-GET-02", "APR", "슬롯 조회"):
         slots = list(Approval.objects.filter(request_id=request_id).order_by("slot_no"))
-    with step("APR-GET-03", "APR", "조립"):
-        return _request_dict(req, slots, with_snapshot=True)
+    with step("APR-GET-03", "APR", "다음 승인 회차(대체됨 계산)") as s:
+        next_approved = None
+        if req.status == "approved":
+            next_approved = (
+                ApprovalRequest.objects.filter(
+                    document_id=req.document_id, status="approved", attempt__gt=req.attempt
+                )
+                .order_by("attempt")
+                .values_list("attempt", "closed_at")
+                .first()
+            )
+        else:
+            s.skip("승인 회차 아님")
+    with step("APR-GET-04", "APR", "조립"):
+        return _request_dict(req, slots, with_snapshot=True, next_approved=next_approved)
 
 
 def list_requests(document_id):
@@ -369,6 +413,7 @@ def list_requests(document_id):
         reqs = list(
             ApprovalRequest.objects.filter(document_id=document_id)
             .defer("snapshot_json")
+            .annotate(snapshot_correction_reason=_snapshot_reason("snapshot_json"))
             .order_by("-attempt")
         )
     with step("APR-HIS-02", "APR", "슬롯 조회"):
@@ -378,11 +423,19 @@ def list_requests(document_id):
                 request_id__in=[r.request_id for r in reqs]
             ).order_by("request_id", "slot_no"):
                 by_request.setdefault(slot.request_id, []).append(slot)
-    with step("APR-HIS-03", "APR", "조립"):
+    with step("APR-HIS-03", "APR", "조립·대체됨 계산"):
+        # 승인 회차를 attempt 오름차순으로 — 각 승인 회차의 "바로 다음 승인 회차"
+        approved = sorted((r.attempt, r.closed_at) for r in reqs if r.status == "approved")
+        following = {a[0]: b for a, b in zip(approved, approved[1:])}
         return {
             "document_id": document_id,
             "items": [
-                _request_dict(r, by_request.get(r.request_id, []), with_snapshot=False)
+                _request_dict(
+                    r,
+                    by_request.get(r.request_id, []),
+                    with_snapshot=False,
+                    next_approved=following.get(r.attempt),
+                )
                 for r in reqs
             ],
         }
@@ -452,9 +505,19 @@ def list_inbox(actor_id, box="pending", filters=None, page=1):
         total = queryset.count()
     with step("APR-INB-03", "APR", "페이지 조회"):
         offset = (page_number - 1) * PAGE_SIZE
+        later_approved = ApprovalRequest.objects.filter(
+            document_id=OuterRef("request__document_id"),
+            status="approved",
+            attempt__gt=OuterRef("request__attempt"),
+        )
         slots = list(
             queryset.select_related("request")
             .defer("request__snapshot_json")
+            .annotate(
+                # P6: 정정 상신 사유(스냅샷 값), 대체됨(그 문서의 모든 회차 대상 — 페이지와 무관)
+                correction_reason=_snapshot_reason("request__snapshot_json"),
+                later_approved=Exists(later_approved),
+            )
             .order_by(*order)[offset : offset + PAGE_SIZE]
         )
     with step("APR-INB-04", "APR", "진행률 집계") as s:
@@ -494,6 +557,9 @@ def list_inbox(actor_id, box="pending", filters=None, page=1):
                         "template_id": req.template_id,
                         "requested_by": req.requested_by_id,
                         "requested_at": _iso(req.requested_at),
+                        "is_correction": slot.correction_reason is not None,
+                        "correction_reason": slot.correction_reason,
+                        "superseded": req.status == "approved" and slot.later_approved,
                         "progress": {
                             "total": p.get("total", 0),
                             "approved": p.get("approved", 0),

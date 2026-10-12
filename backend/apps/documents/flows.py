@@ -38,6 +38,9 @@ FLOWS = {
     "DOC-GOC": [f"DOC-GOC-0{n}" for n in range(0, 6)],
     "DOC-ARR": [f"DOC-ARR-0{n}" for n in range(0, 7)],
     "DOC-FND": ["DOC-FND-01"],
+    # P6 정정 (dev-notes/document-workflow/p6-s2-flows.md 2·2.1장)
+    "DOC-COR": [f"DOC-COR-0{n}" for n in range(1, 6)],
+    "DOC-CCN": [f"DOC-CCN-0{n}" for n in range(1, 5)],
 }
 
 

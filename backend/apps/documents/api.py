@@ -70,7 +70,16 @@ def document_collection(request):
         query = request.GET
         filters = {
             key: query.get(key)
-            for key in ("from", "to", "template_id", "status", "author_id", "assignee_id", "target")
+            for key in (
+                "from",
+                "to",
+                "template_id",
+                "status",
+                "author_id",
+                "assignee_id",
+                "target",
+                "correcting",
+            )
         }
         return json_response(services.list_documents(filters, query.get("page", "1")))
 
@@ -156,6 +165,30 @@ def document_reopen(request, document_id):
     """DOC-A10 작성 재개."""
     actor, expected = _version_body(request, "DOC-ROP-01")
     return json_response(services.reopen_document(actor, document_id, expected))
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@_api
+def document_correction(request, document_id):
+    """DOC-A18 정정 시작 {expected_version, reason}. 판정 순서: 형식 → 사용자 → 사유 → 404 → 409."""
+    with step("DOC-COR-01", "API", "요청 형식·사용자 확인"):
+        body = parse_json_body(request)
+        reject_unknown_keys(body, ("expected_version", "reason"))
+        expected = services._expected_version(body)
+        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+    return json_response(
+        services.start_correction(actor, document_id, expected, body.get("reason"))
+    )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@_api
+def document_correction_cancel(request, document_id):
+    """DOC-A19 정정 취소 {expected_version} (D-075)."""
+    actor, expected = _version_body(request, "DOC-CCN-01")
+    return json_response(services.cancel_correction(actor, document_id, expected))
 
 
 @csrf_exempt

@@ -1,7 +1,8 @@
-"""문서 도메인 테이블. 이름·제약은 ERD(dev-notes/erd/v5)와 같게 유지한다.
+"""문서 도메인 테이블. 이름·제약은 ERD(dev-notes/erd/v6)와 같게 유지한다.
 
 v5(P4): 작성완료 상태·작성 요구 키(document), 업무 대상 참조(document_ref, RunSQL·managed=False),
 파일(file, document_file — 기능은 스프린트 3), 개선조치(deviation_action, deviation_checker).
+v6(P6): 정정 중 상태(correcting), 정정 기록(document_correction).
 Django는 on_delete를 DB의 ON DELETE로 만들지 않는다(ERD v5 메모, ORM이 처리).
 """
 
@@ -11,7 +12,7 @@ from django.db.models.functions import Length
 
 from apps.staff.models import Staff
 
-STATUS_CHOICES = ("draft", "completed", "submitted", "approved", "rejected")
+STATUS_CHOICES = ("draft", "completed", "submitted", "approved", "rejected", "correcting")
 FILE_MIME_TYPES = ("application/pdf", "image/jpeg", "image/png")
 FILE_MAX_BYTES = 20 * 1024 * 1024
 
@@ -124,7 +125,8 @@ class Document(models.Model):
                 name="ck_document_completed_required",
             ),
             models.CheckConstraint(
-                condition=~Q(status="draft") | Q(completed_at__isnull=True),
+                # ERD v6 M11: 정정 중도 작성완료 기록 없음(P6-S2-Q6)
+                condition=~Q(status__in=("draft", "correcting")) | Q(completed_at__isnull=True),
                 name="ck_document_draft_not_completed",
             ),
             # 작성 요구 문서 1건(삭제 문서 포함). get_or_create_document의 ON CONFLICT 대상
@@ -140,6 +142,78 @@ class Document(models.Model):
                 condition=Q(deleted_at__isnull=True),
                 name="ix_document_list",
             ),
+        ]
+
+
+class DocumentCorrection(models.Model):
+    """정정 기록(ERD v6 A17). 열린 정정(closed_at NULL)이 있으면 정정 진행 중, 문서마다 1개.
+
+    승인 회차를 FK로 가리키지 않는다(DOC → APR 의존 없음, P6-NFR-02).
+    """
+
+    correction_id = models.AutoField(primary_key=True)
+    document = models.ForeignKey(
+        Document,
+        models.PROTECT,
+        db_column="document_id",
+        related_name="corrections",
+        db_index=False,
+    )
+    started_at = models.DateTimeField()
+    started_by = models.ForeignKey(
+        Staff, models.PROTECT, db_column="started_by", related_name="+", db_index=False
+    )
+    reason = models.TextField()
+    # 정정 시작 직후 문서 버전 — 정정 취소 조건(D-075)
+    start_version = models.IntegerField()
+    # 정정 전 작성완료 기록 — 정정 취소 때 복원(P6-S2-Q6)
+    prev_completed_at = models.DateTimeField(null=True, blank=True)
+    prev_completed_by = models.ForeignKey(
+        Staff,
+        models.PROTECT,
+        null=True,
+        blank=True,
+        db_column="prev_completed_by",
+        related_name="+",
+        db_index=False,
+    )
+    closed_at = models.DateTimeField(null=True, blank=True)
+    outcome = models.TextField(null=True, blank=True)  # approved / cancelled
+
+    class Meta:
+        db_table = "document_correction"
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(reason__length__gte=1, reason__length__lte=200)
+                & ~Q(reason__trim_ws=""),
+                name="ck_correction_reason",
+            ),
+            models.CheckConstraint(
+                condition=Q(start_version__gte=1), name="ck_correction_start_version"
+            ),
+            models.CheckConstraint(
+                condition=Q(prev_completed_at__isnull=True, prev_completed_by__isnull=True)
+                | Q(prev_completed_at__isnull=False, prev_completed_by__isnull=False),
+                name="ck_correction_prev_pair",
+            ),
+            # outcome IN (...)만으로는 NULL을 못 막는다(SQLite CHECK) — IS NOT NULL 명시(ERD v6 V16)
+            models.CheckConstraint(
+                condition=Q(closed_at__isnull=True, outcome__isnull=True)
+                | Q(
+                    closed_at__isnull=False,
+                    outcome__isnull=False,
+                    outcome__in=("approved", "cancelled"),
+                ),
+                name="ck_correction_closed_pair",
+            ),
+            models.UniqueConstraint(
+                fields=["document"],
+                condition=Q(closed_at__isnull=True),
+                name="ux_correction_open",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["document", "started_at"], name="ix_correction_document"),
         ]
 
 
