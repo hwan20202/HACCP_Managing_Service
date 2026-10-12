@@ -22,6 +22,7 @@ from apps.core.http import (
     reject_unknown_keys,
 )
 from apps.core.trace import step
+from apps.devstock import inventory
 from apps.devstock.models import (
     MATERIAL_KINDS,
     ORIGINS,
@@ -46,6 +47,7 @@ LOT_KEYS = (
     "expiration_date",
     "origin",
     "fail_after",
+    "inspection",  # P6 D-080: 입고 화면에서 육안검사까지(형식 검사는 REQ-LOT-00b)
 )
 BATCH_KEYS = ("item_id", "process_type", "manufactured_date", "quantity_kg", "fail_after")
 
@@ -126,6 +128,7 @@ def _clean_lot(body):
     data["fail_after"] = _fail_after(body, problems)
     _raise_if(problems)
     data.update(
+        inspection=body.get("inspection"),
         material_kind=body["material_kind"],
         supplier_name=supplier,
         quantity=body["quantity"],
@@ -255,7 +258,18 @@ def lot_collection(request):
                 unit=data["unit"],
                 origin=data["origin"],
             )
-        result = req.require_for_lot(actor, lot_id)
+        result = req.require_for_lot(actor, lot_id, data["inspection"])
+        d03 = next(d for d in result["documents"] if d["type_code"] == "D03")
+        if d03.get("inspection_applied"):
+            # 수불 입고 화면 흉내: 입고와 같은 트랜잭션에서 수불이 판정을 직접 반영한다(D-080)
+            with step("REQ-DEV-02b", "API", "판정 반영(수불 흉내 — devstock 임시 함수)"):
+                inventory.apply_incoming_judgment(
+                    lot_id=lot_id,
+                    result=data["inspection"]["verdict"],
+                    staff_id=actor,
+                    document_id=d03["document_id"],
+                    judged_at=timezone.now(),
+                )
         return _finish(
             data["fail_after"], lambda: {"lot": sources.incoming_lot(lot_id), "result": result}, 201
         )

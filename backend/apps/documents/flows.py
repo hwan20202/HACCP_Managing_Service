@@ -26,11 +26,12 @@ FLOWS = {
     ],
     "DOC-DEL": ["DOC-DEL-01", "DOC-DEL-02", "DOC-DEL-03"],
     "DOC-LCK": ["DOC-LCK-00", "DOC-LCK-01", "DOC-LCK-02"],
-    "DOC-APV": ["DOC-APV-01", "DOC-APV-02"],
-    "DOC-RJT": ["DOC-RJT-01", "DOC-RJT-02"],
+    # P6: 생명주기 함수는 상태 변경 뒤 DOC-SIG-01(신호)을 지난다(p6-s2-spec 4.7)
+    "DOC-APV": ["DOC-APV-01", "DOC-SIG-01", "DOC-APV-02"],
+    "DOC-RJT": ["DOC-RJT-01", "DOC-SIG-01", "DOC-RJT-02"],
     # P4 (dev-notes/document/p4-s2-flows.md)
-    "DOC-CMP": ["DOC-CMP-01", "DOC-CMP-02", "DOC-CMP-03", "DOC-CMP-04"],
-    "DOC-ROP": ["DOC-ROP-01", "DOC-ROP-02", "DOC-ROP-03"],
+    "DOC-CMP": ["DOC-CMP-01", "DOC-CMP-02", "DOC-CMP-03", "DOC-SIG-01", "DOC-CMP-04"],
+    "DOC-ROP": ["DOC-ROP-01", "DOC-ROP-02", "DOC-SIG-01", "DOC-ROP-03"],
     "DOC-DVC": ["DOC-DVC-00", "DOC-DVC-01", "DOC-DVC-02", "DOC-DVC-03", "DOC-DVC-04"],
     "DOC-DVU": ["DOC-DVU-00", "DOC-DVU-01", "DOC-DVU-02", "DOC-DVU-03", "DOC-DVU-04"],
     "DOC-DVD": ["DOC-DVD-01", "DOC-DVD-02"],
@@ -39,11 +40,35 @@ FLOWS = {
     "DOC-ARR": [f"DOC-ARR-0{n}" for n in range(0, 7)],
     "DOC-FND": ["DOC-FND-01"],
     # P6 정정 (dev-notes/document-workflow/p6-s2-flows.md 2·2.1장)
-    "DOC-COR": [f"DOC-COR-0{n}" for n in range(1, 6)],
-    "DOC-CCN": [f"DOC-CCN-0{n}" for n in range(1, 5)],
+    "DOC-COR": [*[f"DOC-COR-0{n}" for n in range(1, 5)], "DOC-SIG-01", "DOC-COR-05"],
+    "DOC-CCN": [*[f"DOC-CCN-0{n}" for n in range(1, 4)], "DOC-SIG-01", "DOC-CCN-04"],
 }
 
 
+def _group(step_id):
+    return step_id.rsplit("-", 1)[0]  # DOC-CMP-03 → DOC-CMP
+
+
 def matches(flow_id, step_ids):
-    """정상 경로 단계가 빠짐없이 순서대로 실행됐는지 본다."""
-    return [s for s in step_ids if not s.endswith("a")] == FLOWS[flow_id]
+    """정상 경로 단계가 빠짐없이 순서대로 실행됐는지 본다.
+
+    P6: 생명주기 신호(DOC-SIG-01) 안에서 실행된 받는 쪽 단계(EFF-…와 그 안의 DOC 조회)만 건너뛴다.
+    신호 다음에 이 흐름의 단계 묶음이 다시 나오면 신호 구간이 끝난 것이다. 그 밖에 다른 묶음의
+    단계가 끼면 불일치로 잡힌다(P6 S4b 검토 B1).
+    """
+    expected = FLOWS[flow_id]
+    groups = {_group(s) for s in expected} - {"DOC-SIG"}
+    own, inside_signal = [], False
+    for step_id in step_ids:
+        if step_id.endswith("a"):
+            continue
+        if step_id == "DOC-SIG-01":
+            own.append(step_id)
+            inside_signal = True
+            continue
+        if inside_signal:
+            if _group(step_id) not in groups:
+                continue
+            inside_signal = False
+        own.append(step_id)
+    return own == expected

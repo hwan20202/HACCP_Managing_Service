@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     "apps.approvals",
     "apps.document_workflow",
     "apps.doc_requirements",
+    "apps.doc_effects",  # P6 EFF 문서 후속 처리(D-079)
 ]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -94,5 +95,10 @@ LOGGING = {
 
 # 개발 콘솔(처리 단계 추적, DB 스냅샷 API). 개발 설정에서만 켤 수 있다(development.py).
 HACCP_DEV_CONSOLE = False
+# [P6 EFF-A1] 수불 판정 함수(점 경로)와 거부로 바꿀 예외.
+# 비어 있으면 육안검사 작성완료가 503(W001). 수불 통합 때:
+#   apps.inventory.judgment.apply_incoming_judgment / apps.inventory.errors.InventoryError
+HACCP_INVENTORY_JUDGMENT = os.environ.get("HACCP_INVENTORY_JUDGMENT", "")
+HACCP_INVENTORY_ERRORS = env_list("HACCP_INVENTORY_ERRORS")
 # [임시 진입점 T5] 시제품 사이드바의 "개발 검증 (임시)" 탭. 운영(사용 테스트)에서도 켤 수 있다.
 HACCP_TEMP_ENTRY = env_bool("HACCP_TEMP_ENTRY", False)

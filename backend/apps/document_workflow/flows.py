@@ -16,8 +16,23 @@ _DEC_HEAD = ["WF-DEC-01", "WF-DEC-02", "WF-DEC-03", "WF-DEC-04"] + [
 FLOWS = {
     "WF-SUB": _SUB,
     "WF-DEC-PROGRESS": [*_DEC_HEAD, "WF-DEC-05", "WF-DEC-06"],
-    "WF-DEC-APPROVED": [*_DEC_HEAD, "WF-DEC-05", "DOC-APV-01", "DOC-APV-02", "WF-DEC-06"],
-    "WF-DEC-REJECTED": [*_DEC_HEAD, "WF-DEC-05", "DOC-RJT-01", "DOC-RJT-02", "WF-DEC-06"],
+    # P6: DOC 생명주기 신호(DOC-SIG-01)가 DOC 단계 안에 더해진다
+    "WF-DEC-APPROVED": [
+        *_DEC_HEAD,
+        "WF-DEC-05",
+        "DOC-APV-01",
+        "DOC-SIG-01",
+        "DOC-APV-02",
+        "WF-DEC-06",
+    ],
+    "WF-DEC-REJECTED": [
+        *_DEC_HEAD,
+        "WF-DEC-05",
+        "DOC-RJT-01",
+        "DOC-SIG-01",
+        "DOC-RJT-02",
+        "WF-DEC-06",
+    ],
 }
 
 

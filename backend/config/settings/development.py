@@ -18,3 +18,7 @@ INSTALLED_APPS = ["apps.devserver", *INSTALLED_APPS]
 
 # [P4] 수불 개발용 임시 테이블(ERD v5 A13). 수불 앱이 들어오면 빼고 개발 DB를 다시 만든다(P4-S3-Q7).
 INSTALLED_APPS = [*INSTALLED_APPS, "apps.devstock"]
+
+# [P6 EFF-A1] 개발: 수불 판정 함수 대신 devstock 임시 함수(같은 이름·규칙)
+HACCP_INVENTORY_JUDGMENT = "apps.devstock.inventory.apply_incoming_judgment"
+HACCP_INVENTORY_ERRORS = ["apps.devstock.inventory.InventoryError"]

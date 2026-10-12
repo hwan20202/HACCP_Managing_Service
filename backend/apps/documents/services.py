@@ -21,7 +21,7 @@ from apps.core.trace import step
 from apps.staff import services as staff_services
 from apps.staff.models import Staff
 
-from . import errors, validation
+from . import errors, signals, validation
 from .models import (
     STATUS_CHOICES,
     DeviationAction,
@@ -41,6 +41,7 @@ LOCKABLE = ("completed",)  # 상신은 작성완료 상태에서만(P4-S2-Q1, D-
 CORRECTABLE = ("approved",)  # 정정 시작(P6-FR-01)
 ROW_APPENDABLE = ("draft", "rejected")  # N2 — P4 그대로(P6a: 정정 중 문서에 행 추가 경로 없음)
 CORRECTION_REASON_MAX = 200
+NOTE_MAX = 200  # 작성완료 메모(판정 변경 사유) — 저장하지 않고 신호로만(D-080, P6-VR-06)
 DELETABLE = (
     "draft",
 )  # 그리고 submitted_at IS NULL, record_key IS NULL(작성 요구 문서 삭제 불가 C-3)
@@ -1006,6 +1007,25 @@ def _transition_failure(document_id, step_id):
         raise errors.InvalidTransition() if exists else errors.DocumentNotFound()
 
 
+def _send_signal(document_id, event, actor_id=None, note=None, at=None):
+    """DOC-SIG-01: 생명주기 신호(P6-FR-17). 받는 쪽 단계(EFF-…)는 이 단계 안에 이어서 기록된다."""
+    with step("DOC-SIG-01", "DOC", f"생명주기 신호({event})"):
+        type_code = (
+            Document.objects.filter(pk=document_id)
+            .values_list("template__type_code", flat=True)
+            .first()
+        )
+        signals.document_transitioned.send(
+            sender=Document,
+            document_id=document_id,
+            event=event,
+            actor_id=actor_id,
+            note=note,
+            at=at or timezone.now(),
+            type_code=type_code,
+        )
+
+
 def lock_for_review(document_id, expected_version=None):
     """상신 잠금: completed → submitted (P4-S2-Q1). WF 트랜잭션 안에서만 호출한다.
 
@@ -1049,6 +1069,7 @@ def mark_approved(document_id):
         s.note(f"영향 행 {changed}, 닫은 정정 {closed}")
     if changed == 0:
         _transition_failure(document_id, "DOC-APV-01a")
+    _send_signal(document_id, "approved", at=now)
     with step("DOC-APV-02", "DOC", "결과"):
         return _lifecycle_result(document_id)
 
@@ -1076,6 +1097,7 @@ def mark_rejected(document_id):
         s.note(f"영향 행 {changed}")
     if changed == 0:
         _transition_failure(document_id, "DOC-RJT-01a")
+    _send_signal(document_id, "rejected")
     with step("DOC-RJT-02", "DOC", "결과"):
         return _lifecycle_result(document_id)
 
@@ -1083,8 +1105,29 @@ def mark_rejected(document_id):
 # ---------------------------------------------------------------- F12·F13 작성완료·작성 재개
 
 
-def complete_document(actor_id, document_id, expected_version):
-    """작성완료: draft/rejected → completed. 잠근 뒤 검사하고, 실패하면 전체를 되돌린다(DOC-CMP)."""
+def _clean_note(note):
+    """작성완료 메모: 문자열, 앞뒤 공백 제거 후 0~200자, 빈 값은 없음(P6-VR-06)."""
+    if note is None:
+        return None
+    if not isinstance(note, str):
+        raise errors.ValidationFailed(
+            details=[validation.error("note", "invalid", "문자열이어야 합니다.")]
+        )
+    text = note.strip()
+    if len(text) > NOTE_MAX:
+        raise errors.ValidationFailed(
+            details=[validation.error("note", "too_long", f"{NOTE_MAX}자 이하여야 합니다.")]
+        )
+    return text or None
+
+
+def complete_document(actor_id, document_id, expected_version, note=None):
+    """작성완료: draft/rejected/correcting → completed. 잠근 뒤 검사하고, 실패하면 전체를 되돌린다.
+
+    note(D-080): 저장하지 않고 생명주기 신호로만 넘긴다(육안검사 판정 변경 사유). 받는 쪽(EFF)이
+    예외를 내면 작성완료도 롤백된다(P6-FR-17).
+    """
+    note = _clean_note(note)
     now = timezone.now()
     with transaction.atomic():
         with step("DOC-CMP-02", "DOC", "작성완료(조건부 UPDATE)") as s:
@@ -1124,6 +1167,7 @@ def complete_document(actor_id, document_id, expected_version):
             if problems:
                 s.fail(f"빠진 항목 {len(problems)}건")
                 raise errors.CompletionIncomplete(details=problems)
+        _send_signal(document_id, "completed", actor_id, note, now)
     with step("DOC-CMP-04", "DOC", "결과 조회"):
         return _detail(document_id)
 
@@ -1182,6 +1226,7 @@ def reopen_document(actor_id, document_id, expected_version):
                         }
                     ]
                 )
+        _send_signal(document_id, "reopened", actor_id, at=now)
     with step("DOC-ROP-03", "DOC", "결과 조회"):
         return _detail(document_id)
 
@@ -1280,6 +1325,7 @@ def start_correction(actor_id, document_id, expected_version, reason):
                 version=F("version") + 1,
             )
             s.note(f"영향 행 {changed}")
+        _send_signal(document_id, "correction_started", actor_id, at=now)
     with step("DOC-COR-05", "DOC", "결과 조회"):
         return _detail(document_id)
 
@@ -1319,6 +1365,7 @@ def cancel_correction(actor_id, document_id, expected_version):
                 document_id=document_id, closed_at__isnull=True
             ).update(closed_at=now, outcome="cancelled")
             s.note(f"영향 행 {closed}")
+        _send_signal(document_id, "correction_cancelled", actor_id, at=now)
     with step("DOC-CCN-04", "DOC", "결과 조회"):
         return _detail(document_id)
 

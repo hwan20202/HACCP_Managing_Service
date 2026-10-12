@@ -165,15 +165,28 @@
     const expected = state.flows[flowId] || [];
     // P5 REQ 흐름은 안에 DOC·APR 단계를 품고 반복(#n 번호·공정)이 있다(s2-flows 9장, D-070 G3):
     // 이 흐름의 단계만 골라 연속 반복을 하나로 줄여 비교하고, 안쪽 단계는 칩 대신 개수로만 보인다.
-    const nested = flowId.startsWith('REQ-');
+    // P6: DOC 생명주기 신호(DOC-SIG-01) 안의 받는 쪽 단계(EFF-…와 그 안의 DOC 조회)도 안쪽 단계다
+    // (documents/flows.py와 같은 규칙).
+    const reqFlow = flowId.startsWith('REQ-');
+    const group = (id) => id.replace(/-[^-]+$/, '');
+    const groups = new Set(expected.map(group));
     const byId = Object.fromEntries(steps.map((s) => [s.step_id, s]));
     const chips = expected.map((id) => ({ id, cls: byId[id] ? byId[id].result : 'none' }));
-    const own = (s) => !nested || s.step_id.startsWith('REQ-');
-    const inner = nested ? steps.filter((s) => !own(s)) : [];
+    // 신호(DOC-SIG-01) 안에서 실행된 단계만 안쪽으로 본다 — 다음에 이 흐름의 단계 묶음이 나오면 끝(S4b B1)
+    const insideSignal = new Set();
+    let inSignal = false;
+    steps.forEach((s) => {
+      if (s.step_id === 'DOC-SIG-01') { inSignal = true; return; }
+      if (inSignal && groups.has(group(s.step_id)) && group(s.step_id) !== 'DOC-SIG') inSignal = false;
+      if (inSignal) insideSignal.add(s);
+    });
+    const own = (s) => (reqFlow ? s.step_id.startsWith('REQ-') : !insideSignal.has(s));
+    const inner = steps.filter((s) => !own(s));
+    const nested = inner.length > 0;
     steps.filter((s) => own(s) && !expected.includes(s.step_id))
       .forEach((s) => chips.push({ id: s.step_id, cls: s.result === 'fail' ? 'fail extra' : 'extra' }));
-    let mainRun = steps.map((s) => s.step_id).filter((id) => (nested ? expected.includes(id) : !id.endsWith('a')));
-    if (nested) mainRun = mainRun.filter((id, i) => i === 0 || mainRun[i - 1] !== id);
+    let mainRun = steps.filter(own).map((s) => s.step_id).filter((id) => (reqFlow ? expected.includes(id) : !id.endsWith('a')));
+    if (reqFlow) mainRun = mainRun.filter((id, i) => i === 0 || mainRun[i - 1] !== id);
     const inOrder = mainRun.every((id, i) => expected[i] === id);
     const failed = steps.find((s) => s.result === 'fail' && own(s));
     const reached = expected.filter((id) => byId[id]).length;
@@ -185,7 +198,7 @@
     let innerHtml = '';
     if (nested && inner.length) {
       const innerFail = inner.filter((s) => s.result === 'fail').length;
-      summary += ` <span class="te-hint">· 안쪽 DOC·APR 단계 ${inner.length}개${innerFail ? `(실패 ${innerFail} — 예: 잠긴 육안검사에서 다음 번호로)` : ''}</span>`;
+      summary += ` <span class="te-hint">· 안쪽 단계(DOC·APR·EFF) ${inner.length}개${innerFail ? `(실패 ${innerFail})` : ''}</span>`;
       // S6-39 K3: 어떤 안쪽 단계가 돌았는지 상세 표를 읽지 않고 보도록 실행 순서대로 펼친다(같은 단계 연속은 ×n).
       const runs = [];
       steps.forEach((s) => {
@@ -203,7 +216,7 @@
         group.push(`<span class="dc-chip ${r.cls}" title="${r.cls}">${esc(r.id)}${r.n > 1 ? ` ×${r.n}` : ''}</span>`);
       });
       flush(owner);
-      innerHtml = `<details class="dc-inner"><summary>안쪽 DOC·APR 단계 ${inner.length}개 펼치기${innerFail ? ` · 실패 ${innerFail}` : ''}</summary>${parts.join('')}</details>`;
+      innerHtml = `<details class="dc-inner"><summary>안쪽 단계 ${inner.length}개 펼치기${innerFail ? ` · 실패 ${innerFail}` : ''}</summary>${parts.join('')}</details>`;
     }
     return { chips, summary, innerHtml };
   }

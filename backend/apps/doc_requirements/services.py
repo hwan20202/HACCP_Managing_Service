@@ -89,12 +89,41 @@ def _info(type_code, lot, day):
     return _drop_empty(values)
 
 
-def require_for_lot(actor_id, lot_id):
-    """F01: 원료 입고 LOT의 D01·D02·D03(LOT마다 1건, P6a — D-084)(REQ-LOT)."""
+def _check_inspection(inspection):
+    """REQ-LOT-00b: inspection 형식(P6-VR-07). 객체, 키는 D03 검사 항목만, 필수 4개."""
+    if not isinstance(inspection, dict):
+        raise errors.ValidationFailed(
+            details=[{"path": "inspection", "code": "invalid", "message": "객체여야 합니다."}]
+        )
+    problems = [
+        {"path": f"inspection.{key}", "code": "unknown", "message": "알 수 없는 항목입니다."}
+        for key in inspection
+        if key not in rules.D03_INSPECTION_KEYS
+    ]
+    problems += [
+        {"path": f"inspection.{key}", "code": "required", "message": "필수 항목입니다."}
+        for key in rules.D03_INSPECTION_REQUIRED
+        if inspection.get(key) in (None, "")
+    ]
+    if problems:
+        raise errors.ValidationFailed(details=problems)
+    return dict(inspection)
+
+
+def require_for_lot(actor_id, lot_id, inspection=None):
+    """F01: 원료 입고 LOT의 D01·D02·D03(LOT마다 1건, P6a — D-084)(REQ-LOT).
+
+    inspection(D-080): 수불 입고 화면에서 육안검사까지 입력한 값. D03을 **새로 만들 때만**
+    inspection 섹션에 채운다(이미 있으면 덮지 않음 — inspection_applied false). 문서는 작성중
+    그대로이고, REQ는 인벤토리를 부르지 않는다(입고 때 판정 반영은 수불이 직접).
+    """
     with step("REQ-LOT-00", "REQ", "트랜잭션·입력 확인"):
         _require_transaction()
         _check_id("lot_id", lot_id)
         _check_actor(actor_id)
+    if inspection is not None:
+        with step("REQ-LOT-00b", "REQ", "inspection 형식 검사"):
+            inspection = _check_inspection(inspection)
     with step("REQ-LOT-01", "REQ", "입고 뷰 읽기"):
         lot = _incoming(lot_id)
     day = _text(lot["received_date"])
@@ -102,16 +131,28 @@ def require_for_lot(actor_id, lot_id):
     documents = []
     for n, type_code in enumerate(rules.LOT_DOCUMENTS, start=2):
         with step(f"REQ-LOT-0{n}", "REQ", f"{type_code} 찾기/만들기(N1)"):
+            values = {"info": _info(type_code, lot, day)}
+            if type_code == rules.D03 and inspection is not None:
+                values[rules.D03_INSPECTION] = inspection  # 값은 N1(DOC-GOC-02)이 양식 규칙으로
             out = doc.get_or_create_document(
                 actor_id,
                 type_code,
                 rules.lot_key(type_code, lot_id),
                 day,
                 refs,
-                {"info": _info(type_code, lot, day)},
+                values,
             )
+            extra = {}
+            if type_code == rules.D03:
+                # 이미 있던 D03은 N1이 values를 쓰지 않는다 → 덮어쓰지 않음(FR-22)
+                extra["inspection_applied"] = inspection is not None and out["created"]
             documents.append(
-                _item(type_code, out["document"], "created" if out["created"] else "existing")
+                _item(
+                    type_code,
+                    out["document"],
+                    "created" if out["created"] else "existing",
+                    **extra,
+                )
             )
     with step("REQ-LOT-06", "REQ", "결과"):
         return {"lot_id": lot_id, "documents": documents}

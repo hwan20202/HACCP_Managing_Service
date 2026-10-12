@@ -27,6 +27,9 @@ def setup_p4():
     for lot_id in (88, 89, 90):
         stub("lots", id=lot_id, lot_number=f"RM-1011-0{lot_id - 87}", item_id=1,
              lot_kind="INCOMING", status="QUARANTINE")  # fmt: skip
+        # P6 EFF: D03 작성완료 판정은 수불(개발: devstock 임시 함수)에 전달 — 입고 기록 필요
+        stub("dev_lot_receipts", lot_id=lot_id, material_kind="원료", supplier_name="고흥농협",
+             received_date=DAY, quantity=500, unit="kg")  # fmt: skip
     stub("production_batches", id=12, batch_number="PB-1011-01", process_type="MANUFACTURE",
          item_id=2, status="IN_PROGRESS")  # fmt: skip
     return templates

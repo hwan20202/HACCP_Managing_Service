@@ -154,8 +154,12 @@ def _version_body(request, step_id):
 @_api
 def document_complete(request, document_id):
     """DOC-A09 작성완료."""
-    actor, expected = _version_body(request, "DOC-CMP-01")
-    return json_response(services.complete_document(actor, document_id, expected))
+    with step("DOC-CMP-01", "API", "요청 형식·사용자 확인"):
+        body = parse_json_body(request)
+        reject_unknown_keys(body, ("expected_version", "note"))  # note: D-080 판정 변경 사유
+        expected = services._expected_version(body)
+        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+    return json_response(services.complete_document(actor, document_id, expected, body.get("note")))
 
 
 @csrf_exempt
