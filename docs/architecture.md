@@ -28,18 +28,21 @@ HTTP 자동 검사는 `scripts/smoke_process.py`가 `scripts/smoke_server.py`를
 - `backend/apps/documents`: 문서 도메인 — 양식 조회, 문서 작성·조회·수정(바뀐 부분만, 버전 확인)·논리 삭제, 문서 생명주기 전이
 - `backend/apps/approvals`: 결재 도메인 — 결재 요청(회차)·칸(병렬, 칸마다 결재자 1명), 승인·반려 판정, 결재함·이력 조회
 - `backend/apps/document_workflow`: 문서 워크플로우 — 상신(결재선 지정)·승인·반려에서 두 도메인을 한 트랜잭션으로 묶음. 테이블 없음
-- `backend/apps/doc_requirements`: 작성 요구 — 수불·생산이 입고 등록·생산 시작 때 같은 트랜잭션에서 부르는 함수(`require_for_lot`·`require_for_batch`)로 필요한 문서를 만들고, LOT·배치별 연결 문서를 조회. 수불·생산 값은 뷰(`v_doc_incoming_lot`·`v_doc_batch`)로만 읽음. 테이블 없음
+- `backend/apps/doc_requirements`: 작성 요구 — 수불·생산이 입고 등록·생산 시작 때 같은 트랜잭션에서 부르는 함수(`require_for_lot`·`require_for_batch`)로 필요한 문서를 만들고, LOT·배치별 연결 문서를 조회. 수불·생산 값은 뷰(`v_doc_incoming_lot`·`v_doc_batch`)로만 읽음. 테이블 없음. 문서 영역(`documents`·`approvals`·`document_workflow`·`doc_requirements`)의 결정 사항은 [document-decisions.md](document-decisions.md), 생산·수불 앱 연동 명세는 [document-inventory-interface.md](document-inventory-interface.md)
 - `backend/apps/devstock`: 개발·테스트 전용 수불 임시 테이블과 개발용 뷰. 수불·생산 앱이 들어오면 빼고 개발 DB를 다시 만듦
 - `backend/apps/devtools`, `backend/apps/devserver`: 개발 전용(개발 콘솔 API, 개발 시드 명령 `seed_dev_workflow`, 정적 파일 no-cache 개발 서버). 운영 설정에는 등록하지 않음
 
-계정·로그인·세션·권한·Django 관리자·첨부파일 앱은 제거했습니다. Django의 `contenttypes`는 기본 DB 메타데이터로 유지하며, 계정 테이블은 없습니다. 업무 테이블은 문서·결재 도메인의 6개입니다.
+계정·로그인·세션·권한·Django 관리자·첨부파일 앱은 제거했습니다. Django의 `contenttypes`는 기본 DB 메타데이터로 유지하며, 계정 테이블은 없습니다. 문서 영역의 업무 테이블은 아래 11개입니다(Django 마이그레이션 `documents 0001~0005`·`approvals 0001`·`staff 0001`).
 
 | 테이블 | 소유 앱 | 내용 |
 |---|---|---|
 | `staff` | staff | 사람 id |
 | `document_template` | documents | 양식(유형·버전·섹션 정의 JSON). 버전의 내용은 만든 뒤 바꾸지 않음 |
-| `document` | documents | 문서 기본 정보·상태(작성중/결재중/승인/반려)·버전·논리 삭제 |
+| `document` | documents | 문서 기본 정보·상태(작성중/작성완료/결재중/승인/반려)·작성 요구 키(`record_key`)·버전·논리 삭제 |
 | `doc_section` | documents | 문서 섹션 행(값 JSON, 기록 시각·기록자) |
+| `document_ref` | documents | 문서 ↔ 업무 대상(LOT·생산 배치+공정·품목) 연결. 수불 테이블에 DB FK |
+| `file`, `document_file` | documents | 첨부 파일과 문서 연결(기능은 후속) |
+| `deviation_action`, `deviation_checker` | documents | 이탈 개선조치와 확인자 |
 | `approval_request` | approvals | 결재 회차(상태, 상신 시점 문서 스냅샷, 결재함 요약) |
 | `approval` | approvals | 결재 칸(결재자, 대기/승인/반려/미처리 종료, 의견) |
 
