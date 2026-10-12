@@ -18,7 +18,7 @@ from apps.documents.tests.p4 import (
     add_lot_row,
     filled_ccp1p,
     lot_ref,
-    new_d03,
+    new_rows_doc,
     rows_of,
     setup_p4,
     version_of,
@@ -54,7 +54,7 @@ class P4ConcurrencyTests(TransactionTestCase):
         self.assertEqual((Document.objects.count(), DocumentRef.objects.count()), (1, 1))
 
     def test_tc126_rows_in_parallel(self):
-        d03 = new_d03()["document"]["document_id"]
+        d03 = new_rows_doc()["document"]["document_id"]
         for first_lot, second_lot, rows in ((88, 89, 2), (90, 90, 3)):
             with self.subTest(first=first_lot, second=second_lot):
                 results = self.run_threads(

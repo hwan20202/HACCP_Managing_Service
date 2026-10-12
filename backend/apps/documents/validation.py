@@ -424,7 +424,7 @@ def completion_problems(schema, rows, *, deviation_count, file_count):
             error(
                 "deviations",
                 "deviation_required",
-                "부적합 행이 있어 이탈·개선조치를 1건 이상 적으세요.",
+                "부적합 항목이 있어 이탈·개선조치를 1건 이상 적으세요.",
             )
         )
     file_rule = schema.get("files")

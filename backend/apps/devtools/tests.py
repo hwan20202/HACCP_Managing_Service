@@ -54,20 +54,34 @@ class SeedP4Tests(TestCase):
         from apps.document_workflow.tests.base import invariant_violations
         from apps.documents.models import Document
 
-        # P4 시드 14건 + 전날 입고 LOT 2개의 D01·D02 4건(REQ 규칙: 모든 입고 LOT)
-        self.assertEqual(seed_p4("2026-10-11"), {"documents": 18, "lot_rows": 5})
+        # 입고 LOT 5개(오늘 3·전날 2) × D01·D02·D03 + 배치 2개 × CCP 3(P6a — D03도 LOT마다)
+        self.assertEqual(seed_p4("2026-10-11"), {"documents": 21})
         keys = set(Document.objects.values_list("record_key", flat=True))
         lots = [f"lot:{n}" for n in range(1, 6)]
-        expected = {f"{c}|{lot}" for c in ("D01", "D02") for lot in lots}
-        expected |= {"D03|date:2026-10-11", "D03|date:2026-10-10"}
+        expected = {f"{c}|{lot}" for c in ("D01", "D02", "D03") for lot in lots}
         expected |= {f"CCP-{p}|batch:{b}" for p in ("1P", "2B", "3P") for b in (1, 2)}
         self.assertEqual(keys, expected)
-        self.assertEqual(seed_p4("2026-10-11"), {"documents": 0, "lot_rows": 0})
-        # 다른 날짜로 다시 실행: LOT 행은 입고일 육안검사에 이미 있어 늘지 않는다.
-        # (P4 시드는 그날 육안검사를 새로 만들어 같은 LOT 행을 다시 넣었다)
-        self.assertEqual(seed_p4("2026-10-12"), {"documents": 0, "lot_rows": 0})
+        self.assertEqual(seed_p4("2026-10-11"), {"documents": 0})
+        self.assertEqual(seed_p4("2026-10-12"), {"documents": 0})
         self.assertEqual(invariant_violations(), [])
         statuses = set(Document.objects.values_list("status", flat=True))
         self.assertEqual(statuses, {"draft", "completed", "submitted", "approved", "rejected"})
-        d03 = Document.objects.get(record_key="D03|date:2026-10-11")
+        d03 = Document.objects.get(record_key="D03|lot:1")
         self.assertEqual(d03.assignee_id, 2)  # P4 시드와 같게 D03·CCP는 담당자 2
+        d03_status = dict(
+            Document.objects.filter(record_key__in=[f"D03|lot:{n}" for n in (1, 2, 3)]).values_list(
+                "record_key", "status"
+            )
+        )
+        self.assertEqual(  # 오늘 LOT 1 승인, LOT 2 작성완료, LOT 3 작성중(P6a-S1 7장)
+            d03_status,
+            {"D03|lot:1": "approved", "D03|lot:2": "completed", "D03|lot:3": "draft"},
+        )
+        self.assertEqual(
+            set(
+                Document.objects.filter(record_key__startswith="D03|").values_list(
+                    "template__version", flat=True
+                )
+            ),
+            {2},
+        )

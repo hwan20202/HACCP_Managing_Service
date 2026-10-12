@@ -59,7 +59,7 @@ class CompleteApiTests(P4ApiTestCase):
     def test_list_target_param(self):
         new_d01()
         items = self.client.get("/api/v1/documents?target=RM-1011-01").json()["items"]
-        self.assertEqual([i["target_summary"] for i in items], ["LOT RM-1011-01"])
+        self.assertEqual([i["target_summary"] for i in items], ["LOT RM-1011-01 · 유자"])
         self.assertError(
             self.client.get("/api/v1/documents?target=" + "x" * 51), 400, "INVALID_FILTER"
         )

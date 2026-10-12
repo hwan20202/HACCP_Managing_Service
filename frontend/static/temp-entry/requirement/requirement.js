@@ -11,27 +11,15 @@
   const esc = (v) => T.esc(v);
   const DEV = '/api/dev/req';
 
-  const RESULT = {
-    created: '새로 만듦', existing: '이미 있음', row_added: '행 추가', row_existing: '행 이미 있음',
-  };
+  const RESULT = { created: '새로 만듦', existing: '이미 있음' };
   const BATCH_STATUS = { PLANNED: '계획', IN_PROGRESS: '진행 중', COMPLETED: '완료', CANCELLED: '취소' };
   const PROCESS = { MANUFACTURE: '제조', PACKAGING: '포장' };
   const VERDICT = { PASS: '적합(PASS)', FAIL: '부적합(FAIL)' };
-  const ORDINAL = ['', '첫', '두', '세', '네', '다섯', '여섯', '일곱', '여덟', '아홉'];
   const today = () => new Date().toLocaleDateString('sv-SE');
   const mmdd = (iso) => (iso || '').slice(5, 10).replace('-', '');
 
-  // D03 요구 키 'D03|date:2026-10-11#2' → 2
-  const d03Number = (key) => { const m = /#(\d+)$/.exec(key || ''); return m ? Number(m[1]) : 1; };
-
-  // SC-04 결과 문구: D03는 행 결과와 문서 결과를 합쳐 "새로 만듦 / 행 추가 / 두 번째 문서"(s1 4장)
-  function resultText(item) {
-    if (item.type_code !== 'D03') return RESULT[item.result] || item.result;
-    const n = d03Number(item.record_key);
-    if (item.result === 'row_existing') return RESULT.row_existing;
-    const base = item.document_result === 'created' ? RESULT.created : RESULT.row_added;
-    return n > 1 ? `${base} · ${ORDINAL[n] || n} 번째 문서(#${n})` : base;
-  }
+  // SC-04 결과 문구: D03도 D01·D02와 같은 "새로 만듦 / 이미 있음"(P6a-S1 REQ-SC-04)
+  const resultText = (item) => RESULT[item.result] || item.result;
 
   // 양식 이름(type_code → name). /api/v1/templates 에서 한 번 읽는다
   let templateNames = null;
@@ -144,8 +132,7 @@
     lotSummary(docs) {
       if (!docs.length) return '<span class="te-hint">–</span>';
       const has = (code) => docs.some((d) => d.type_code === code);
-      const parts = ['D01', 'D02'].filter(has);
-      if (docs.some((d) => d.type_code === 'D03' && d.section_id !== null)) parts.push('D03행');
+      const parts = ['D01', 'D02', 'D03'].filter(has);
       return `${parts.join('·')}${parts.length === 3 ? ' ✓' : ''}`;
     },
 
@@ -355,14 +342,14 @@
       const rows = documents.map((d) => `
         <tr data-doc="${d.document_id}">
           <td>#${d.document_id}</td><td>${formName(d.type_code)}</td>
-          <td>${d.section_id === null ? '문서' : '행'}</td><td>${T.statusBadge(d.status)}</td>
+          <td>${T.statusBadge(d.status)}</td>
           <td class="${d.verdict === 'FAIL' ? 'te-judge-ng' : d.verdict === 'PASS' ? 'te-judge-ok' : ''}">${d.verdict ? esc(VERDICT[d.verdict] || d.verdict) : '<span class="te-hint">–</span>'}</td>
           <td>${d.correcting ? '정정 중' : '<span class="te-hint">–</span>'}</td>
           <td><button class="btn btn-secondary btn-sm" data-open-doc="${d.document_id}">문서 열기</button></td>
         </tr>`).join('');
       this.root.innerHTML = `
         <div class="fade-in" id="teLotDocs">
-          ${T.topBar(`LOT ${lot.lot_number} 연결 문서`, '이 LOT에 연결된 문서(문서 단위·행 단위)와 승인본 기준 판정')}
+          ${T.topBar(`LOT ${lot.lot_number} 연결 문서`, '이 LOT에 연결된 문서와 승인본 기준 판정')}
           <div class="card">
             <div class="card-header"><div class="te-meta" id="teLotHead">
               <span>품목 <b>${esc(lot.item_name)}</b></span><span>매입처 <b>${esc(lot.supplier_name)}</b></span>
@@ -370,9 +357,9 @@
               <div class="page-actions">${back}</div></div>
             ${documents.length ? `
               <div class="te-table-wrap"><table class="data-table">
-                <thead><tr><th>문서</th><th>양식</th><th>단위</th><th>상태</th><th>승인본 기준 판정</th><th>정정 중</th><th></th></tr></thead>
+                <thead><tr><th>문서</th><th>양식</th><th>상태</th><th>승인본 기준 판정</th><th>정정 중</th><th></th></tr></thead>
                 <tbody>${rows}</tbody></table></div>
-              <p class="te-hint">승인본 기준 판정은 승인된 회차의 스냅샷에서 이 LOT 행의 최종판정입니다. 승인본이 없으면 "–"(작성 중인 값은 쓰지 않음). 행 단위 문서는 문서를 열어 LOT 번호로 행을 찾습니다.</p>`
+              <p class="te-hint">승인본 기준 판정은 승인된 회차의 스냅샷에 있는 육안검사 최종판정입니다. 승인본이 없으면 "–"(작성 중인 값은 쓰지 않음).</p>`
               : '<div class="te-empty">이 LOT에 연결된 문서가 없습니다</div>'}
           </div>
         </div>`;

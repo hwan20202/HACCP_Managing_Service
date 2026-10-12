@@ -194,7 +194,7 @@ def lot_list(request):
     items = []
     for lot in sources.lots_received_on(_query_date(request)):
         found = req.docs_for_lot(lot["lot_id"])
-        items.append({**lot, "documents": _doc_summary(found["documents"], "section_id")})
+        items.append({**lot, "documents": _doc_summary(found["documents"])})
     return json_response({"items": items})
 
 

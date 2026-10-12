@@ -629,7 +629,7 @@
       prepare: async () => ({ func: 'inbox', staff: '2', query: 'box=pending&page=1' }) },
   );
 
-  // ---------------------------------------------------------------- 프리셋 DOC-PS-16~26 (document/p4-s1-screens.md 6장, P4)
+  // ---------------------------------------------------------------- 프리셋 DOC-PS-16~27 (document/p4-s1-screens.md 6장, P4·P6a)
   // 파일 프리셋(PS-23·24)은 스프린트 3(D-058). 시드: seed_dev_p4
   const P4_HINT = 'seed_dev_p4로 시드 데이터를 넣으세요';
   async function templateIdOf(code) {
@@ -652,22 +652,23 @@
   }
   const rowsOf = (d, key) => d.sections.filter((x) => x.section_def === key);
   const infoOf = (d) => rowsOf(d, 'info')[0];
-  const unfilledD03 = (d) => rowsOf(d, 'lots').some((x) => !x.values.verdict);
-  const PASS_ROW = { appearance: '양호', packaging: '양호', labeling: '양호', verdict: 'PASS' };
+  // P6a: D03은 LOT 1건 문서 — 검사 값은 반복 없는 inspection 섹션 1개(D-088)
+  const inspectionOf = (d) => rowsOf(d, 'inspection')[0];
+  const unfilledD03 = (d) => !inspectionOf(d)?.values.verdict;
+  const PASS_INSPECTION = { appearance: '양호', packaging: '양호', labeling: '양호', verdict: 'PASS' };
 
   PRESETS.push(
     { id: 'DOC-PS-16', unit: 'P4', label: '작성 요구 문서 저장(필수값 비어도 저장)', expect: '200 · DOC-UPD 통과(05 형식 검사만, 필수값 검사 없음) · doc_section 값 변경, version +1',
       prepare: async () => {
         const d = await p4Doc('D03', 'draft', unfilledD03);
-        const row = rowsOf(d, 'lots')[0];
-        return { func: 'update', id: d.document_id, body: J({ expected_version: d.version, sections: { update: [{ section_id: row.section_id, values: { appearance: '양호' } }] } }) };
+        return { func: 'update', id: d.document_id, body: J({ expected_version: d.version, sections: { update: [{ section_id: inspectionOf(d).section_id, values: { appearance: '양호' } }] } }) };
       } },
     { id: 'DOC-PS-17', unit: 'P4', label: '작성완료 정상', expect: '수정 200(필수값 채움) → 작성완료 200 · DOC-CMP 도식 일치(02 잠금 → 03 검사 통과 → 04) · document draft→completed, completed_at/by, version +1',
       prepare: async () => {
         const d = await p4Doc('D03', 'draft', unfilledD03);
         const fill = { expected_version: d.version, sections: { update: [
           { section_id: infoOf(d).section_id, values: { inspector: 4 } },
-          ...rowsOf(d, 'lots').map((x) => ({ section_id: x.section_id, values: PASS_ROW })),
+          { section_id: inspectionOf(d).section_id, values: PASS_INSPECTION },
         ] } };
         const done = { func: 'complete', id: d.document_id, body: J({ expected_version: d.version + 1 }) };
         return { ...done, script: async (exec) => {
@@ -689,23 +690,13 @@
       } },
     { id: 'DOC-PS-21', unit: 'P4', label: '작성 요구 문서 삭제 거부', expect: '409 DOCUMENT_NOT_DELETABLE(reason requirement) · DOC-DEL-02 영향 0행 → 02a 실패 · DB 변화 없음',
       prepare: async () => { const d = await p4Doc('D01', 'draft'); return { func: 'delete', id: d.document_id }; } },
-    { id: 'DOC-PS-22', unit: 'P4', label: '작성 요구 문서의 LOT 행 추가·삭제·자동 열 수정 거부', expect: '400 VALIDATION_ERROR(readonly·system_rows) · DOC-UPD-05 실패 → 롤백 · DB 변화 없음',
-      prepare: async () => {
-        const d = await p4Doc('D03', 'draft');
-        const [first, second] = rowsOf(d, 'lots');
-        return { func: 'update', id: d.document_id, body: J({ expected_version: d.version, sections: {
-          update: [{ section_id: first.section_id, values: { item_name: '바꾸면 안 됨' } }],
-          add: [{ section_def: 'lots', values: { appearance: '양호' } }],
-          delete: second ? [second.section_id] : [],
-        } }) };
-      } },
     { id: 'DOC-PS-25', unit: 'P4', label: 'CCP 판정 계산', expect: '200 · DOC-UPD-05b(판정 재계산) 포함 도식 일치 · 새 행 values_json.verdict = 부적합(SUS 우 X), 판정은 서버가 저장',
       prepare: async () => {
         const d = await p4Doc('CCP-3P', 'draft', (x) => x.deviations.length > 0);
         const ok = { fe_l: '○', fe_c: '○', fe_r: '○', sus_l: '○', sus_c: '○', sus_r: 'X', product_only: 'X', product_fe: '○', product_sus: '○' };
         return { func: 'update', id: d.document_id, body: J({ expected_version: d.version, sections: { add: [{ section_def: 'checks', values: { phase: '중간', passed_at: `${d.work_date}T13:00`, ...ok } }] } }) };
       } },
-    { id: 'DOC-PS-26', unit: 'P4', label: '승인된 문서의 개선조치 쓰기·수정', expect: '쓰기 201 → 수정 200 · DOC-DVC·DOC-DVU 도식 일치, 문서 잠금 검사 없음 · deviation_action·checker만 변경, document 변화 없음',
+    { id: 'DOC-PS-26', unit: 'P4', label: '승인된 문서의 개선조치 쓰기·수정', expect: '사전 조건: 승인된 D03(LOT 1건) · 쓰기 201 → 수정 200 · DOC-DVC·DOC-DVU 도식 일치, 문서 잠금 검사 없음 · deviation_action(관련 행 없음, section_id NULL)·checker만 변경, document 변화 없음',
       prepare: async () => {
         const d = await p4Doc('D03', 'approved');
         const create = { func: 'devCreate', id: d.document_id, body: J({ description: '입고 검사 후 포장 파손 1건 발견(콘솔)', actor_id: 4, checker_ids: [2, 5] }) };
@@ -717,9 +708,17 @@
             body: J({ expected_version: dev.version, action_result: '공급사 반품, 재입고 검사 적합', checker_ids: [2] }) });
         } };
       } },
+    // DOC-PS-22(LOT 행 추가·삭제)는 P6a에서 폐지 — 번호는 비워 둠(P6a-S1-Q4)
+    { id: 'DOC-PS-27', unit: 'P4', label: 'D03 입고 정보(자동 값) 수정 거부', expect: '400 VALIDATION_ERROR(readonly) · DOC-UPD-05 실패 → 롤백 · DB 변화 없음',
+      prepare: async () => {
+        const d = await p4Doc('D03', 'draft');
+        return { func: 'update', id: d.document_id, body: J({ expected_version: d.version, sections: {
+          update: [{ section_id: infoOf(d).section_id, values: { item_name: '바꾸면 안 됨' } }],
+        } }) };
+      } },
   );
 
-  // ---------------------------------------------------------------- 프리셋 REQ-PS-01~10 (doc-requirements/s1-screens.md 6장)
+  // ---------------------------------------------------------------- 프리셋 REQ-PS-01~12 (doc-requirements/s1-screens.md 6장, P6a-S1 6장)
   const REQ_HINT = 'seed_dev_p4로 시드를 넣거나 작성 요구 화면에서 LOT 생성을 먼저 하세요';
   const reqList = async (kind, q = '') => { const r = await devGet(`/api/dev/req/${kind}${q}`); return r ? r.items : []; };
   const localDay = (offset = 0) => { const d = new Date(); d.setDate(d.getDate() + offset); return d.toLocaleDateString('sv-SE'); };
@@ -747,21 +746,11 @@
   }
 
   PRESETS.push(
-    { id: 'REQ-PS-01', label: '입고 정상(그날 육안검사 없음)', expect: '201 · REQ-DEV-LOT 도식 일치(안쪽 DOC-GOC ×3·FND·ARR) · lots·dev_lot_receipts +1, document +3(D01·D02·D03 새로 만듦), doc_section(info 초기값·LOT 행), document_ref +3(D03은 행 단위)',
+    { id: 'REQ-PS-01', label: '입고 정상', expect: '201 · REQ-DEV-LOT 도식 일치(안쪽 DOC-GOC ×3) · lots·dev_lot_receipts +1, document +3(D01·D02·D03 새로 만듦), doc_section(info 초기값), document_ref +3(모두 문서 단위)',
       prepare: async () => ({ func: 'reqLot', body: J(await lotBody(await freeDay())) }) },
-    { id: 'REQ-PS-02', label: '같은 LOT 다시 호출', expect: '200 · REQ-DEV-RE-LOT 도식 일치 · REQ-LOT-05 건너뜀(행 이미 있음), 안쪽 DOC-GOC-01a(이미 있음) · 결과 이미 있음/행 이미 있음 · dev_lot_receipts.touched_at만 변경(자기 쓰기 먼저)',
-      prepare: async () => ({ func: 'reqLotRe', id: String((await lotWhere((l) => d03Of(l), 'D03 행이 있는')).lot_id) }) },
-    { id: 'REQ-PS-03', label: '같은 날 두 번째 LOT', expect: '201 · D03 "행 추가"(그날 작성중 육안검사에) · ④(그날 범위) lots·dev_lot_receipts +1, document +2 ~1(새 D01·D02, 기존 D03 version +1), doc_section +3(D01·D02 info + D03 LOT 행), document_ref +3',
-      prepare: async () => {
-        const lot = await lotWhere((l) => { const d = d03Of(l); return d && ['draft', 'rejected'].includes(d.status); }, '육안검사가 작성중·반려인');
-        return { func: 'reqLot', body: J(await lotBody(lot.received_date, { supplier_name: '콘솔농협(두 번째)' })) };
-      } },
-    { id: 'REQ-PS-04', label: '그날 육안검사가 잠겨 있음', expect: '201 · 안쪽 DOC-ARR-01a 실패(DOCUMENT_LOCKED) → 다음 번호 N1·N2 · D03 결과 "…번째 문서(#2 이상)" · 새 D03(…#n) +1',
-      prepare: async () => {
-        const lot = await lotWhere((l) => { const d = d03Of(l); return d && ['completed', 'submitted', 'approved'].includes(d.status); }, '육안검사가 작성완료·결재중·승인인');
-        return { func: 'reqLot', body: J(await lotBody(lot.received_date, { supplier_name: '콘솔농협(잠긴 날)' })) };
-      } },
-    { id: 'REQ-PS-05', label: '동시에 두 LOT 입고', expect: '두 요청 모두 201 · 두 트랜잭션이 직렬 처리(첫 SQL 쓰기 잠금) · 그날 D03 1건, LOT 행 2(한쪽은 새로 만듦, 다른 쪽은 행 추가) · [합계] ④ lots +2, document +5(D01·D02 ×2 + D03 1), doc_section +7',
+    { id: 'REQ-PS-02', label: '같은 LOT 다시 호출', expect: '200 · REQ-DEV-RE-LOT 도식 일치 · 안쪽 DOC-GOC-01a(이미 있음) ×3 · 결과 이미 있음 ×3 · dev_lot_receipts.touched_at만 변경(자기 쓰기 먼저)',
+      prepare: async () => ({ func: 'reqLotRe', id: String((await lotWhere((l) => d03Of(l), 'D03 문서가 있는')).lot_id) }) },
+    { id: 'REQ-PS-05', label: '동시에 두 LOT 입고', expect: '두 요청 모두 201 · 두 트랜잭션이 직렬 처리(첫 SQL 쓰기 잠금) · 그날 D03 2건(LOT마다, 둘 다 새로 만듦) · [합계] ④ lots +2, document +6(D01·D02·D03 ×2), document_ref +6',
       prepare: async () => {
         const day = await freeDay();
         const a = { func: 'reqLot', body: J(await lotBody(day, { supplier_name: '콘솔농협(A)' })) };
@@ -769,7 +758,7 @@
         return { ...a, groupScope: `received_date=${day}`, concurrent: true,
           script: async (exec) => { await Promise.all([exec({ ...a, staff: api.staffId }), exec({ ...b, staff: api.staffId })]); } };
       } },
-    { id: 'REQ-PS-06', label: '작성 요구 중 실패 → 롤백', expect: '500 SIMULATED_FAILURE · REQ-LOT 전체 통과 뒤 REQ-DEV-03 실패 → 호출자 트랜잭션 롤백 · LOT·입고 기록·문서·참조 모두 없음',
+    { id: 'REQ-PS-06', label: '작성 요구 중 실패 → 롤백', expect: '500 SIMULATED_FAILURE · REQ-LOT 전체 통과 뒤 REQ-DEV-03 실패 → 호출자 트랜잭션 롤백 · LOT·입고 기록·문서(D01·D02·D03 문서)·참조 모두 없음',
       prepare: async () => ({ func: 'reqLot', body: J(await lotBody(await freeDay(), { fail_after: true })) }) },
     { id: 'REQ-PS-07', label: '생산 시작(제조)', expect: '201 · REQ-DEV-BAT 도식 일치(REQ-BAT-03 ×3) · production_batches·dev_batch_plans +1, document +3(CCP-1P·2B·3P), document_ref(배치 + 공정) +3',
       prepare: async () => ({ func: 'reqBatch', body: J({ item_id: await itemId('유자차'), process_type: 'MANUFACTURE', manufactured_date: localDay(0), quantity_kg: 900 }) }) },
@@ -783,11 +772,17 @@
       } },
     { id: 'REQ-PS-09', label: '없는 LOT id로 조회', expect: '404 LOT_NOT_FOUND · REQ-FND-01(입고 뷰 읽기)에서 실패 · DB 변화 없음',
       prepare: async () => ({ func: 'lotDocs', id: '99999' }) },
-    { id: 'REQ-PS-10', label: 'LOT별 연결 문서', expect: '200 · REQ-FND 4단계(안쪽 DOC-FND-01, APR-LAT-01) · SQL 4개 · D03 행은 승인본 기준 판정(작성중 값 안 씀) · DB 변화 없음',
+    { id: 'REQ-PS-10', label: 'LOT별 연결 문서', expect: '200 · REQ-FND 4단계(안쪽 DOC-FND-01, APR-LAT-01) · SQL 4개 · D03 문서의 승인본 기준 판정(작성중 값 안 씀) · DB 변화 없음',
       prepare: async () => {
         const lot = await lotWhere((l) => { const d = d03Of(l); return d && d.status === 'approved'; }, '육안검사가 승인된')
           .catch(() => lotWhere(() => true, '테스트 입고'));
         return { func: 'lotDocs', id: String(lot.lot_id) };
+      } },
+    // REQ-PS-03·04는 P6a에서 폐지 — 번호는 비워 둠(P6a-S1-Q4)
+    { id: 'REQ-PS-12', label: '그날 다른 LOT의 D03이 승인돼 있어도 새 LOT은 새 D03', expect: '201 · REQ-DEV-LOT 도식 일치 · D01·D02·D03 모두 새로 만듦(요구 키 D03|lot:{id}) · 다른 LOT의 D03 변화 없음 · ④(그날 범위) lots·dev_lot_receipts +1, document +3, document_ref +3',
+      prepare: async () => {
+        const lot = await lotWhere((l) => { const d = d03Of(l); return d && ['completed', 'submitted', 'approved'].includes(d.status); }, '육안검사가 작성완료·결재중·승인인');
+        return { func: 'reqLot', body: J(await lotBody(lot.received_date, { supplier_name: '콘솔농협(같은 날)' })) };
       } },
   );
 
@@ -854,7 +849,7 @@
     $('#dcStaff').addEventListener('change', (e) => api.setStaff(e.target.value));
     $('#dcFunc').innerHTML = Object.entries(FUNCS).map(([k, f]) => `<option value="${k}">${esc(f.label)}</option>`).join('');
     const group = (unit, label) => `<optgroup label="${label}">${PRESETS.filter((p) => (p.unit || p.id.split('-')[0]) === unit).map((p) => `<option value="${p.id}">${p.id} ${esc(p.label)}</option>`).join('')}</optgroup>`;
-    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4)') + group('REQ', 'REQ 작성 요구 (P5)');
+    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)');
     $('#dcFunc').addEventListener('change', () => { state.preset = null; toggleInputs(); });
     ['#dcId', '#dcQuery', '#dcBody', '#dcDocId'].forEach((sel) => $(sel).addEventListener('input', () => { if (state.preset && state.preset.script) state.preset = null; }));
     $('#dcLoadPreset').addEventListener('click', loadPreset);

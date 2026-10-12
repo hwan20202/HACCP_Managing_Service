@@ -70,6 +70,8 @@ class LookupApiTests(ReqTestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual([d["type_code"] for d in res.json()["documents"]], ["D01", "D02", "D03"])
         self.assertEqual(res.json()["lot"]["lot_number"], "RM-1011-01")
+        # P6a-TC-040: 문서 단위라 section_id 없음(P6a-S2 Q4)
+        self.assertTrue(all("section_id" not in d for d in res.json()["documents"]))
         self.assertError(self.client.get("/api/v1/lots/999/documents"), 404, "LOT_NOT_FOUND")
         self.assertError(self.client.get("/api/v1/lots/90/documents"), 409, "LOT_NOT_INCOMING")
         res = self.client.get("/api/v1/batches/12/documents")
@@ -88,9 +90,7 @@ class DevLotApiTests(ReqTestCase):
             (body["lot"]["lot_number"], body["lot"]["supplier_name"], body["lot"]["quantity"]),
             ("RM-1011-04", "고흥농협", 450),
         )
-        self.assertEqual(
-            [d["result"] for d in body["result"]["documents"]], ["created", "created", "row_added"]
-        )
+        self.assertEqual([d["result"] for d in body["result"]["documents"]], ["created"] * 3)
         steps = [s["step_id"] for s in body["trace"]["steps"]]
         self.assertTrue(flows.matches("REQ-DEV-LOT", steps), steps)
         self.assertEqual(
@@ -141,9 +141,7 @@ class DevLotApiTests(ReqTestCase):
         res = self.post("/api/dev/req/lots/88/require")
         self.assertEqual(res.status_code, 200, res.content)
         res = self.post("/api/dev/req/lots/88/require")
-        self.assertEqual(
-            [d["result"] for d in res.json()["documents"]], ["existing", "existing", "row_existing"]
-        )
+        self.assertEqual([d["result"] for d in res.json()["documents"]], ["existing"] * 3)
         steps = [s["step_id"] for s in res.json()["trace"]["steps"]]
         self.assertTrue(flows.matches("REQ-DEV-RE-LOT", steps), steps)
         from apps.devstock.models import DevLotReceipt
@@ -237,7 +235,7 @@ class DevSnapshotTests(ReqTestCase):
         self.assertEqual((data["scope"], data["exists"]), ({"received_date": DAY}, True))
         self.assertEqual([r["id"] for r in data["tables"]["lots"]], [88, 89])
         types = sorted(d["template_id"] for d in data["tables"]["document"])
-        self.assertEqual(len(types), 5)  # D01·D02 ×2 + 그날 D03 1건(LOT 행 2)
+        self.assertEqual(len(types), 6)  # LOT 2개 × D01·D02·D03(P6a — D03도 LOT마다)
         data = self.client.get(f"/api/dev/snapshot?manufactured_date={DAY}").json()
         self.assertEqual([r["id"] for r in data["tables"]["production_batches"]], [12, 13, 14, 15])
         empty = self.client.get("/api/dev/snapshot?received_date=2026-01-01").json()

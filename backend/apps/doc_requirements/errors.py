@@ -32,14 +32,6 @@ class BatchCancelled(RequirementError):
     status, code, message = 409, "BATCH_CANCELLED", "취소된 생산 배치입니다."
 
 
-class RequirementLimit(RequirementError):
-    status, code, message = (
-        409,
-        "REQUIREMENT_LIMIT",
-        "같은 날 육안검사 일지가 너무 많습니다(상한 9). HACCP 담당자에게 문의하세요.",
-    )
-
-
 class SourceUnavailable(RequirementError):
     # 수불·생산 뷰가 아직 없는 DB(운영 첫 배포 등). s2-spec 밖 — S4 구현 메모 G1
     status, code, message = 503, "REQ_SOURCE_MISSING", "수불·생산 뷰가 아직 준비되지 않았습니다."

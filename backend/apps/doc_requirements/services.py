@@ -10,15 +10,11 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.approvals import services as apr
-from apps.core.http import ApiError
 from apps.core.trace import step
 from apps.documents import services as doc
 from apps.staff import services as staff_services
 
 from . import errors, rules, sources
-
-DOCUMENT_LOCKED = "DOCUMENT_LOCKED"  # DOC N2가 내는 코드 — 다음 번호 판단에만 쓴다(s2-flows 3장)
-
 
 # ---------------------------------------------------------------- 공통 확인
 
@@ -76,8 +72,25 @@ def _incoming(lot_id):
     return lot
 
 
+def _info(type_code, lot, day):
+    """문서 머리(info) 초기값. D03 v2는 v1 LOT 행의 입고 정보 7개를 그대로 가진다(P6a-S2 3.1)."""
+    values = {
+        "lot_number": lot["lot_number"],
+        "item_name": lot["item_name"],
+        "supplier_name": lot["supplier_name"],
+        "received_date": day,
+    }
+    if type_code == rules.D03:
+        values |= {
+            "material_kind": lot["material_kind"],
+            "quantity": _quantity(lot),
+            "expiration_date": _text(lot["expiration_date"]),
+        }
+    return _drop_empty(values)
+
+
 def require_for_lot(actor_id, lot_id):
-    """F01: 원료 입고 LOT의 D01·D02와 입고일 육안검사(D03) LOT 행(REQ-LOT)."""
+    """F01: 원료 입고 LOT의 D01·D02·D03(LOT마다 1건, P6a — D-084)(REQ-LOT)."""
     with step("REQ-LOT-00", "REQ", "트랜잭션·입력 확인"):
         _require_transaction()
         _check_id("lot_id", lot_id)
@@ -86,82 +99,22 @@ def require_for_lot(actor_id, lot_id):
         lot = _incoming(lot_id)
     day = _text(lot["received_date"])
     refs = [{"lot_id": lot_id, "label": lot["lot_number"]}]
-    info = _drop_empty(
-        {
-            "lot_number": lot["lot_number"],
-            "item_name": lot["item_name"],
-            "supplier_name": lot["supplier_name"],
-            "received_date": day,
-        }
-    )
     documents = []
     for n, type_code in enumerate(rules.LOT_DOCUMENTS, start=2):
         with step(f"REQ-LOT-0{n}", "REQ", f"{type_code} 찾기/만들기(N1)"):
             out = doc.get_or_create_document(
-                actor_id, type_code, rules.lot_key(type_code, lot_id), day, refs, {"info": info}
+                actor_id,
+                type_code,
+                rules.lot_key(type_code, lot_id),
+                day,
+                refs,
+                {"info": _info(type_code, lot, day)},
             )
             documents.append(
                 _item(type_code, out["document"], "created" if out["created"] else "existing")
             )
-    with step("REQ-LOT-04", "REQ", "D03 기존 행 찾기(N3)"):
-        found = next(
-            (
-                d
-                for d in doc.find_documents_by_ref(lot_id=lot_id)
-                if d["type_code"] == rules.D03 and d["section_id"] is not None
-            ),
-            None,
-        )
-    with step("REQ-LOT-05", "REQ", "D03 문서·행(번호 반복)") as s:
-        if found is not None:
-            s.skip("이 LOT 행이 이미 있음")
-            existing = doc.get_document(found["document_id"])
-            documents.append(
-                _item(
-                    rules.D03,
-                    existing,
-                    "row_existing",
-                    document_result="existing",
-                    section_id=found["section_id"],
-                )
-            )
-        else:
-            documents.append(_add_d03_row(actor_id, lot, day, refs))
     with step("REQ-LOT-06", "REQ", "결과"):
         return {"lot_id": lot_id, "documents": documents}
-
-
-def _add_d03_row(actor_id, lot, day, refs):
-    row = _drop_empty(
-        {
-            "lot_number": lot["lot_number"],
-            "received_date": day,
-            "supplier_name": lot["supplier_name"],
-            "material_kind": lot["material_kind"],
-            "item_name": lot["item_name"],
-            "quantity": _quantity(lot),
-            "expiration_date": _text(lot["expiration_date"]),
-        }
-    )
-    for n in range(1, rules.D03_LIMIT + 1):
-        out = doc.get_or_create_document(actor_id, rules.D03, rules.d03_key(day, n), day, [])
-        document = out["document"]
-        try:
-            added = doc.add_ref_row(
-                actor_id, document["document_id"], rules.D03_SECTION, row, refs, "lot_id"
-            )
-        except ApiError as error:
-            if error.code == DOCUMENT_LOCKED:
-                continue  # 그날 #n이 작성완료·결재중·승인 → 다음 번호(REQ-S2-Q2)
-            raise
-        return _item(
-            rules.D03,
-            document,
-            "row_added" if added["created"] else "row_existing",
-            document_result="created" if out["created"] else "existing",
-            section_id=added["section_id"],
-        )
-    raise errors.RequirementLimit()
 
 
 # ---------------------------------------------------------------- F02 require_for_batch
@@ -225,11 +178,12 @@ def require_for_batch(actor_id, batch_id):
 # ---------------------------------------------------------------- F03 docs_for_lot
 
 
-def _approved_verdict(approved, section_id):
-    if approved is None or section_id is None:
+def _approved_verdict(approved, type_code):
+    """D03 승인본 스냅샷의 검사 섹션 최종판정(P6a-S2 3.2). 다른 양식은 None."""
+    if approved is None or type_code != rules.D03:
         return None
     for row in (approved.get("snapshot") or {}).get("sections", []):
-        if row.get("section_id") == section_id:
+        if row.get("section_def") == rules.D03_INSPECTION:
             return (row.get("values") or {}).get("verdict")
     return None
 
@@ -253,11 +207,10 @@ def docs_for_lot(lot_id):
                     "type_code": ref["type_code"],
                     "status": ref["status"],
                     "version": ref["version"],
-                    "section_id": ref["section_id"],
                     "approved": None
                     if approved is None
                     else {k: approved[k] for k in ("request_id", "attempt", "closed_at")},
-                    "verdict": _approved_verdict(approved, ref["section_id"]),
+                    "verdict": _approved_verdict(approved, ref["type_code"]),
                     "correcting": False,  # 정정중은 P6
                 }
             )

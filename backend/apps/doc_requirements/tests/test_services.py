@@ -21,7 +21,6 @@ from .base import (
     DAY,
     by_type,
     cleanup_refs,
-    d03_rows,
     deactivate,
     detail,
     in_tx,
@@ -43,21 +42,15 @@ def batch(batch_id, actor=3):
     return in_tx(services.require_for_batch, actor, batch_id)
 
 
-def approve_d03(document_id, verdicts):
-    """D03 행 판정을 채우고 작성완료 → 상신 → 두 칸 승인(실제 DOC·WF 함수)."""
-    info = next(s for s in detail(document_id)["sections"] if s["section_def"] == "info")
-    rows = [s for s in detail(document_id)["sections"] if s["section_def"] == "lots"]
-    updates = [{"section_id": info["section_id"], "values": {"inspector": 4}}] + [
-        {
-            "section_id": r["section_id"],
-            "values": {
-                "appearance": "양호",
-                "packaging": "양호",
-                "labeling": "양호",
-                "verdict": verdicts[r["values"]["lot_number"]],
-            },
-        }
-        for r in rows
+def approve_d03(document_id, verdict):
+    """D03(LOT 문서, P6a) 검사 판정을 채우고 작성완료 → 상신 → 두 칸 승인(실제 DOC·WF 함수)."""
+    sections = detail(document_id)["sections"]
+    info = next(s for s in sections if s["section_def"] == "info")
+    check = next(s for s in sections if s["section_def"] == rules.D03_INSPECTION)
+    values = {"appearance": "양호", "packaging": "양호", "labeling": "양호", "verdict": verdict}
+    updates = [
+        {"section_id": info["section_id"], "values": {"inspector": 4}},
+        {"section_id": check["section_id"], "values": values},
     ]
     with transaction.atomic():
         doc.update_document(
@@ -65,7 +58,7 @@ def approve_d03(document_id, verdicts):
             document_id,
             {"expected_version": detail(document_id)["version"], "sections": {"update": updates}},
         )
-    if "FAIL" in verdicts.values():  # 부적합 행이 있으면 개선조치가 있어야 작성완료(P4)
+    if verdict == "FAIL":  # 부적합이면 개선조치가 있어야 작성완료(P4)
         doc.create_deviation(4, document_id, {"description": "포장 파손", "action_result": "반품"})
     doc.complete_document(3, document_id, detail(document_id)["version"])
     out = wf.submit(3, document_id, detail(document_id)["version"], [dict(s) for s in SLOTS])
@@ -84,10 +77,8 @@ class RequireForLotTests(TestCase):
         d01, d02, d03 = (by_type(out)[k] for k in ("D01", "D02", "D03"))
         self.assertEqual((d01["result"], d01["record_key"]), ("created", "D01|lot:88"))
         self.assertEqual((d02["result"], d02["record_key"]), ("created", "D02|lot:88"))
-        self.assertEqual(
-            (d03["result"], d03["document_result"], d03["record_key"]),
-            ("row_added", "created", f"D03|date:{DAY}"),
-        )
+        self.assertEqual((d03["result"], d03["record_key"]), ("created", "D03|lot:88"))
+        self.assertNotIn("section_id", d03)  # P6a: D03도 문서 단위(행 결과 없음)
         info = next(s for s in detail(d01["document_id"])["sections"] if s["section_def"] == "info")
         self.assertEqual(
             info["values"],
@@ -107,7 +98,10 @@ class RequireForLotTests(TestCase):
             ),
             [(None, 88, "RM-1011-01")],
         )
-        row = DocSection.objects.get(pk=d03["section_id"]).values_json
+        d03_info = next(
+            s for s in detail(d03["document_id"])["sections"] if s["section_def"] == "info"
+        )
+        row = d03_info["values"]
         self.assertEqual(
             {
                 k: row[k]
@@ -131,55 +125,39 @@ class RequireForLotTests(TestCase):
                 "expiration_date": "2027-04-30",
             },
         )
-        self.assertEqual(d03_rows(d03["document_id"]), [88])
+        self.assertEqual(detail(d03["document_id"])["template"]["version"], 2)
+        self.assertEqual(
+            set(DocumentRef.objects.values_list("section_id", "lot_id")), {(None, 88)}
+        )  # 세 문서 모두 문서 단위 LOT 참조
         self.assertEqual((Document.objects.count(), DocumentRef.objects.count()), (3, 3))
 
     def test_tc002_recall_changes_nothing(self):
         first = lot(88)
         versions = dict(Document.objects.values_list("document_id", "version"))
         again = lot(88)
-        self.assertEqual(
-            [d["result"] for d in again["documents"]], ["existing", "existing", "row_existing"]
-        )
-        self.assertEqual(by_type(again)["D03"]["document_result"], "existing")
-        self.assertEqual(by_type(again)["D03"]["section_id"], by_type(first)["D03"]["section_id"])
+        self.assertEqual([d["result"] for d in again["documents"]], ["existing"] * 3)
+        self.assertEqual(by_type(again)["D03"]["document_id"], by_type(first)["D03"]["document_id"])
         self.assertEqual(dict(Document.objects.values_list("document_id", "version")), versions)
         self.assertEqual((Document.objects.count(), DocumentRef.objects.count()), (3, 3))
 
-    def test_tc003_second_lot_same_day(self):
-        d03 = by_type(lot(88))["D03"]["document_id"]
-        before = detail(d03)["version"]
-        out = by_type(lot(89))["D03"]
-        self.assertEqual(
-            (out["document_id"], out["result"], out["document_result"]),
-            (d03, "row_added", "existing"),
-        )
-        self.assertEqual(detail(d03)["version"], before + 1)
-        self.assertEqual(d03_rows(d03), [88, 89])
+    def test_p6a_tc020_other_lot_state_does_not_matter(self):
+        """P6a-TC-020(REQ-TC-003·004·005 대체): 같은 날 다른 LOT의 D03 상태와 관계없이 새 D03.
 
-    def test_tc004_locked_day_goes_to_next_number(self):
-        first = by_type(lot(88))["D03"]["document_id"]
-        set_status(first, "completed")
-        out = by_type(lot(89))["D03"]
-        self.assertEqual(
-            (out["record_key"], out["result"], out["document_result"]),
-            (f"D03|date:{DAY}#2", "row_added", "created"),
-        )
-        second = out["document_id"]
-        self.assertEqual(by_type(lot(89))["D03"]["result"], "row_existing")
-        set_status(first, "draft")  # [작성 재개]
-        again = by_type(lot(89))["D03"]
-        self.assertEqual((again["document_id"], again["result"]), (second, "row_existing"))
-        self.assertEqual((d03_rows(first), d03_rows(second)), ([88], [89]))
-
-    def test_tc005_limit(self):
-        for n in range(1, rules.D03_LIMIT + 1):
-            made = in_tx(doc.get_or_create_document, 3, "D03", rules.d03_key(DAY, n), DAY, [])
-            set_status(made["document"]["document_id"], "completed")
-        with self.assertRaises(errors.RequirementLimit):
-            lot(89)
-        self.assertFalse(Document.objects.filter(record_key__in=["D01|lot:89", "D02|lot:89"]))
-        self.assertFalse(Document.objects.filter(record_key=f"D03|date:{DAY}#10").exists())
+        정정 중(correcting)은 ERD v6(P6 S4) 뒤에 이 매개변수에 더한다.
+        """
+        for status in ("draft", "rejected", "completed", "submitted", "approved"):
+            with self.subTest(status=status), transaction.atomic():
+                sid = transaction.savepoint()
+                first = by_type(lot(88))["D03"]["document_id"]
+                set_status(first, status)
+                before = Document.objects.values_list("version", "status").get(pk=first)
+                out = by_type(lot(89))["D03"]
+                self.assertEqual((out["result"], out["record_key"]), ("created", "D03|lot:89"))
+                self.assertNotEqual(out["document_id"], first)
+                self.assertEqual(
+                    Document.objects.values_list("version", "status").get(pk=first), before
+                )
+                transaction.savepoint_rollback(sid)
 
     def test_tc006_errors_leave_nothing(self):
         cases = [
@@ -266,11 +244,12 @@ class DocsForLotTests(TestCase):
     def setUp(self):
         setup_req()
         self.first = lot(88)
-        lot(89)
         self.d03 = by_type(self.first)["D03"]["document_id"]
+        self.d03_89 = by_type(lot(89))["D03"]["document_id"]
 
     def test_tc020_approved_verdict(self):
-        approve_d03(self.d03, {"RM-1011-01": "PASS", "RM-1011-02": "FAIL"})
+        approve_d03(self.d03, "PASS")
+        approve_d03(self.d03_89, "FAIL")
         out = services.docs_for_lot(88)
         self.assertEqual(
             out["lot"],
@@ -283,10 +262,9 @@ class DocsForLotTests(TestCase):
         )
         found = by_type(out)
         for code in ("D01", "D02"):
-            self.assertEqual(
-                (found[code]["section_id"], found[code]["approved"], found[code]["verdict"]),
-                (None, None, None),
-            )
+            self.assertEqual((found[code]["approved"], found[code]["verdict"]), (None, None))
+        for item in out["documents"]:
+            self.assertNotIn("section_id", item)  # P6a-S2 Q4
         d03 = found["D03"]
         self.assertEqual(
             (d03["status"], d03["approved"]["attempt"], d03["verdict"], d03["correcting"]),
@@ -295,10 +273,11 @@ class DocsForLotTests(TestCase):
         self.assertEqual(by_type(services.docs_for_lot(89))["D03"]["verdict"], "FAIL")
 
     def test_tc021_only_approved_values(self):
-        # 승인 전(작성완료): 행에 PASS를 적어도 승인본이 없으므로 판정 없음
-        row = by_type(self.first)["D03"]["section_id"]
-        values = DocSection.objects.get(pk=row).values_json
-        DocSection.objects.filter(pk=row).update(values_json={**values, "verdict": "PASS"})
+        # 승인 전(작성완료): 검사 섹션에 PASS를 적어도 승인본이 없으므로 판정 없음
+        row = DocSection.objects.get(document_id=self.d03, section_def=rules.D03_INSPECTION)
+        DocSection.objects.filter(pk=row.pk).update(
+            values_json={**row.values_json, "verdict": "PASS"}
+        )
         set_status(self.d03, "completed")
         d03 = by_type(services.docs_for_lot(88))["D03"]
         self.assertEqual(
@@ -315,7 +294,7 @@ class DocsForLotTests(TestCase):
                 services.docs_for_lot(lot_id)
         DocumentRef.objects.filter(lot_id=89).delete()
         self.assertEqual(services.docs_for_lot(89)["documents"], [])
-        approve_d03(self.d03, {"RM-1011-01": "PASS", "RM-1011-02": "PASS"})
+        approve_d03(self.d03, "PASS")
         with CaptureQueriesContext(connection) as queries:
             services.docs_for_lot(88)
         self.assertLessEqual(len(queries), 4, [q["sql"] for q in queries])
@@ -439,7 +418,9 @@ class TraceTests(TestCase):
         self.assertTrue(flows.matches("REQ-LOT", first), first)
         self.assertIn("DOC-GOC-01", first)
         again = self._steps(in_tx, services.require_for_lot, 3, 88)
-        self.assertTrue(flows.matches("REQ-LOT", again), again)  # 05는 skip으로 남음
+        self.assertTrue(flows.matches("REQ-LOT", again), again)
+        # P6a REQ-TC-031: D03도 N1이라 05(N2 행 추가) 단계가 없다
+        self.assertNotIn("REQ-LOT-05", first + again)
         batch_steps = self._steps(in_tx, services.require_for_batch, 3, 12)
         self.assertTrue(flows.matches("REQ-BAT", batch_steps), batch_steps)
         self.assertEqual(batch_steps.count("REQ-BAT-03"), 3)

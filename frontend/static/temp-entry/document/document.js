@@ -59,6 +59,12 @@
   const optionLabel = (fd, v) => (fd.option_labels && fd.option_labels[v]) || v;
   const fmtMinutes = (m) => `${Math.floor(m / 60)}시간 ${m % 60}분`;
 
+  // 문서 단위 LOT 문서(D01·D02·D03)의 머리 정보: 품명·매입처(P6a-S1 DOC-SC-04). info 값이 없으면 빈 배열
+  function lotInfo(d) {
+    const info = (d.sections || []).find((x) => x.section_def === 'info');
+    const v = (info && info.values) || {};
+    return [v.item_name, v.supplier_name].filter(Boolean);
+  }
   // 업무 대상 표시 (DOC-SC-01·03·04)
   function targetText(d) {
     const refs = d.refs || [];
@@ -66,7 +72,7 @@
     const docLevel = refs.filter((r) => r.section_id === null);
     const parts = docLevel.map((r) => {
       if (r.production_batch_id !== null) return `배치 ${r.label || r.production_batch_id}${r.process_code ? ` · ${r.process_code}` : ''}`;
-      if (r.lot_id !== null) return `LOT ${r.label || r.lot_id}`;
+      if (r.lot_id !== null) return [`LOT ${r.label || r.lot_id}`, ...lotInfo(d)].join(' · ');
       return r.label || r.process_code || '-';
     });
     const rowLots = refs.filter((r) => r.section_id !== null && r.lot_id !== null);
@@ -82,7 +88,7 @@
     const docLevel = refs.filter((r) => r.section_id === null);
     const parts = docLevel.map((r) => {
       if (r.production_batch_id !== null) return esc(`배치 ${r.label || r.production_batch_id}${r.process_code ? ` · ${r.process_code}` : ''}`);
-      if (r.lot_id !== null) return `LOT ${lotLink(r)}`;
+      if (r.lot_id !== null) return [`LOT ${lotLink(r)}`, ...lotInfo(d).map(esc)].join(' · ');
       return esc(r.label || r.process_code || '-');
     });
     const rowLots = refs.filter((r) => r.section_id !== null && r.lot_id !== null);
@@ -139,6 +145,8 @@
       const templateOptions = ['<option value="">전체</option>']
         .concat(templates.map((t) => `<option value="${t.template_id}" ${String(f.template_id) === String(t.template_id) ? 'selected' : ''}>${esc(t.name)} v${t.version}</option>`))
         .join('');
+      // 육안검사 오늘 빠른 필터(P6a-S1-Q6): 그날 육안검사 묶음 화면(P7) 전까지 목록으로 본다. D03 중 최신 버전
+      const d03 = templates.filter((t) => t.type_code === 'D03').sort((a, b) => b.version - a.version)[0];
       this.root.innerHTML = `
         <div class="fade-in" id="teDocList">
           ${T.topBar('문서 작성', '문서 도메인 사용 화면 — 작성·조회·수정·삭제, 작성완료(P4)')}
@@ -152,6 +160,7 @@
               <label class="te-check"><input type="checkbox" id="fMine" ${f.mine ? 'checked' : ''}> 내가 작성</label>
               <label class="te-check"><input type="checkbox" id="fAssigned" ${f.assigned ? 'checked' : ''}> 내 담당</label>
               <button class="btn btn-secondary" id="fSearch">조회</button>
+              ${d03 ? '<button class="btn btn-secondary" id="fD03Today" title="작업일 = 오늘 · 양식 = 육안검사(D03)">육안검사 오늘</button>' : ''}
               <span style="flex:1"></span>
               <button class="btn btn-primary" id="btnNew">+ 새 문서</button>
             </div>
@@ -169,6 +178,12 @@
         this.loadList();
       };
       $('#fSearch').addEventListener('click', search);
+      if (d03) {
+        $('#fD03Today').addEventListener('click', () => {
+          Object.assign(f, { from: today(0), to: today(0), template_id: String(d03.template_id), status: '', target: '', mine: false, assigned: false, page: 1 });
+          this.showList();
+        });
+      }
       $('#fTarget').addEventListener('keydown', (e) => { if (e.key === 'Enter') search(); });
       $('#btnNew').addEventListener('click', () => this.showPicker());
       this.loadList();
@@ -461,7 +476,8 @@
         const sectionErr = f.errors[`section.${s.key}`] ? `<div class="te-error-text" data-error-section="${s.key}">${esc(f.errors[`section.${s.key}`])}</div>` : '';
         if (!s.repeat) {
           const row = rows[0];
-          return `<div class="te-section"><div class="te-section-head"><span class="te-section-title">${esc(s.label)}</span><span class="te-hint">행 1개</span></div>${sectionErr}
+          const ng = row && isNonconforming(s, row.values) ? ' te-section-ng' : '';
+          return `<div class="te-section${ng}" ${s.nonconforming && row ? `data-ng-section="${row.uid}"` : ''}><div class="te-section-head"><span class="te-section-title">${esc(s.label)}</span><span class="te-hint">행 1개</span></div>${sectionErr}
             <div class="te-grid">${s.fields.map((fd) => `
               <div class="form-group"><label class="form-label">${esc(fd.label)}${fd.required ? ' *' : ''}${fd.unit ? ` (${esc(fd.unit)})` : ''}</label>
                 ${this.fieldInput(fd, row.values[fd.key], row)}${this.errorFor(row.uid, fd.key)}</div>`).join('')}</div></div>`;
@@ -538,6 +554,7 @@
           f.hinted.delete(`${row.uid}.${field.key}`);
           const tr = root.querySelector(`tr[data-tr="${row.uid}"]`);
           if (tr) tr.className = `te-row-${this.rowState(row) || 'same'}${isNonconforming(section, row.values) ? ' te-row-ng' : ''}`;
+          root.querySelector(`[data-ng-section="${row.uid}"]`)?.classList.toggle('te-section-ng', isNonconforming(section, row.values));
           const judge = root.querySelector(`[data-judge="${row.uid}"]`);
           if (judge) judge.innerHTML = this.judgeCell(section, row.values);
           const computed = withComputed(section, row.values);
@@ -779,7 +796,7 @@
         T.open('temp-lot-docs', { lotId: Number(a.dataset.lot), back: { page: 'temp-doc', documentId: d.document_id } });
       }));
       this.root.querySelectorAll('[data-dev-for]').forEach((b) => b.addEventListener('click', () => {
-        this.devDrafts.push({ section_id: Number(b.dataset.devFor), description: b.dataset.devText });
+        this.devDrafts.push({ section_id: b.dataset.devFor ? Number(b.dataset.devFor) : null, description: b.dataset.devText });
         this.renderDeviations(d, schema);
         this.root.querySelector('#teDeviationArea').scrollIntoView({ block: 'center' });
       }));
@@ -795,7 +812,9 @@
         const rows = d.sections.filter((x) => x.section_def === s.key);
         if (!s.repeat) {
           const v = rows[0] ? rows[0].values : {};
-          return `<div class="te-section"><div class="te-section-title">${esc(s.label)}</div>
+          const ng = !!rows[0] && isNonconforming(s, v);
+          const add = ng && detail && api.staffId ? ` <button class="btn btn-secondary btn-sm te-dev-add" data-dev-for="" data-dev-text="${esc(`${s.label} 부적합`)}">개선조치 추가</button>` : '';
+          return `<div class="te-section${ng ? ' te-section-ng' : ''}"><div class="te-section-title">${esc(s.label)}${ng ? ' <span class="te-judge-ng">⚠ 부적합</span>' : ''}${add}</div>
             <dl class="te-kv">${s.fields.map((fd) => `<div><dt>${esc(fd.label)}</dt><dd>${this.display(fd, withComputed(s, v)[fd.key])}</dd></div>`).join('')}</dl></div>`;
         }
         const legacy = this.legacyJudge(s);
@@ -827,9 +846,10 @@
         }
         return sid ? `행 #${sid}` : '–';
       };
+      const hasRows = schema.sections.some((x) => x.repeat) || list.some((x) => x.section_id);
       return `<div class="te-section" id="teSnapDeviation"><div class="te-section-title">${esc(title)} <span class="te-hint">${list.length}건</span></div>
-        ${list.length ? `<div class="te-table-wrap"><table class="data-table"><thead><tr><th>관련 행</th><th>한계기준 이탈내용</th><th>조치자</th><th>개선조치 및 결과</th><th>확인자</th></tr></thead>
-        <tbody>${list.map((x) => `<tr><td>${esc(rowName(x.section_id))}</td><td>${esc(x.description)}</td><td>${x.actor_id ? `staff ${x.actor_id}` : '-'}</td>
+        ${list.length ? `<div class="te-table-wrap"><table class="data-table"><thead><tr>${hasRows ? '<th>관련 행</th>' : ''}<th>한계기준 이탈내용</th><th>조치자</th><th>개선조치 및 결과</th><th>확인자</th></tr></thead>
+        <tbody>${list.map((x) => `<tr>${hasRows ? `<td>${esc(rowName(x.section_id))}</td>` : ''}<td>${esc(x.description)}</td><td>${x.actor_id ? `staff ${x.actor_id}` : '-'}</td>
           <td>${esc(x.action_result || '-')}</td><td>${(x.checker_ids || []).map((c) => `staff ${c}`).join(', ') || '-'}</td></tr>`).join('')}</tbody></table></div>`
         : '<p class="te-hint">기록된 개선조치가 없습니다.</p>'}</div>`;
     },
@@ -865,7 +885,7 @@
       const checkerSelect = (ids) => `<span class="te-checkers">${(T.staff || []).map((sid) => `<label class="te-check"><input type="checkbox" data-checker value="${sid}" ${ids.includes(sid) ? 'checked' : ''}>${sid}</label>`).join('')}</span>`;
       const line = (x, key) => `
         <tr data-dev="${key}">
-          <td><select class="form-control" data-k="section_id">${rowSelect(x.section_id)}</select></td>
+          ${hasRows ? `<td><select class="form-control" data-k="section_id">${rowSelect(x.section_id)}</select></td>` : ''}
           <td><input class="form-control" data-k="description" maxlength="500" value="${esc(x.description || '')}" placeholder="이탈내용(필수)"></td>
           <td><select class="form-control" data-k="actor_id">${staffOpts(x.actor_id)}</select></td>
           <td><input class="form-control" data-k="action_result" maxlength="1000" value="${esc(x.action_result || '')}"></td>
@@ -875,23 +895,25 @@
             <button class="btn btn-secondary btn-sm" data-dev-del="${key}" ${api.staffId ? '' : 'disabled'}>${x.deviation_id ? '삭제' : '취소'}</button></td>
         </tr>`;
       const saved = d.deviations || [];
-      const nonconforming = schema.sections.some((s) => s.repeat && d.sections.some((x) => x.section_def === s.key && isNonconforming(s, x.values)));
+      const nonconforming = schema.sections.some((s) => d.sections.some((x) => x.section_def === s.key && isNonconforming(s, x.values)));
+      // 반복 섹션이 없는 양식(D03 v2 등)은 "관련 행" 열을 숨긴다(P6a-S1 DOC-SC-04). 행이 아직 없는 CCP 문서는 열 유지
+      const hasRows = schema.sections.some((s) => s.repeat);
       el.innerHTML = `
         <div class="te-section te-deviation" id="teDeviation">
           <div class="te-section-head"><span class="te-section-title">한계기준 이탈·개선조치 <span class="te-hint">문서 상태와 상관없이 언제든 수정할 수 있습니다 · 확인 기능은 다음 스프린트</span></span>
             <button class="btn btn-secondary btn-sm" id="devAdd" ${api.staffId ? '' : 'disabled'}>+ 추가</button></div>
-          ${nonconforming && !saved.length ? '<div class="te-error-text">부적합 행이 있어 작성완료하려면 이탈·개선조치를 1건 이상 적어야 합니다.</div>' : ''}
+          ${nonconforming && !saved.length ? '<div class="te-error-text">부적합 항목이 있어 작성완료하려면 이탈·개선조치를 1건 이상 적어야 합니다.</div>' : ''}
           <div class="te-table-wrap"><table class="data-table te-rows">
-            <thead><tr><th>관련 행</th><th>한계기준 이탈내용 *</th><th>조치자</th><th>개선조치 및 결과</th><th>확인자 <span class="te-hint">(staff, 여러 명)</span></th><th>확인</th><th></th></tr></thead>
+            <thead><tr>${hasRows ? '<th>관련 행</th>' : ''}<th>한계기준 이탈내용 *</th><th>조치자</th><th>개선조치 및 결과</th><th>확인자 <span class="te-hint">(staff, 여러 명)</span></th><th>확인</th><th></th></tr></thead>
             <tbody>${saved.map((x) => line(x, `s${x.deviation_id}`)).join('')}${this.devDrafts.map((x, i) => line(x, `n${i}`)).join('')
-              || (saved.length ? '' : '<tr><td colspan="7" class="te-empty">기록된 개선조치가 없습니다.</td></tr>')}</tbody>
+              || (saved.length ? '' : `<tr><td colspan="${hasRows ? 7 : 6}" class="te-empty">기록된 개선조치가 없습니다.</td></tr>`)}</tbody>
           </table></div>
         </div>`;
       const read = (tr) => {
         const v = (k) => tr.querySelector(`[data-k="${k}"]`);
         const num = (x) => (x === '' ? null : Number(x));
         return {
-          section_id: num(v('section_id').value), description: v('description').value.trim(),
+          section_id: v('section_id') ? num(v('section_id').value) : null, description: v('description').value.trim(),
           actor_id: num(v('actor_id').value), action_result: v('action_result').value.trim() || null,
           checker_ids: [...tr.querySelectorAll('[data-checker]:checked')].map((o) => Number(o.value)),
         };

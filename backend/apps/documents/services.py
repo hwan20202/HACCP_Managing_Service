@@ -119,8 +119,25 @@ def _requirement(record_key, refs):
     return "lot"
 
 
-def _target_summary(document, refs):
-    """목록의 대상 표시(S1 SC-01). 작성 요구 문서는 업무 대상, 아니면 subject."""
+def _item_names(document_ids):
+    """작성 요구 문서의 info.item_name(목록 대상 표시용, SQL 1개). 빈 목록이면 SQL 없음."""
+    if not document_ids:
+        return {}
+    names = {}
+    for document_id, values in DocSection.objects.filter(
+        document_id__in=document_ids, section_def="info"
+    ).values_list("document_id", "values_json"):
+        name = (values or {}).get("item_name")
+        if name:
+            names[document_id] = name
+    return names
+
+
+def _target_summary(document, refs, item_name=None):
+    """목록의 대상 표시(S1 SC-01). 작성 요구 문서는 업무 대상, 아니면 subject.
+
+    문서 단위 LOT이면 `LOT {label} · {품명}`(P6a-S2 2.4 — info.item_name이 있을 때).
+    """
     if not document.record_key or not refs:
         return document.subject
     doc_level = [r for r in refs if r["section_id"] is None]
@@ -130,7 +147,8 @@ def _target_summary(document, refs):
             tail = f" · {ref['process_code']}" if ref["process_code"] else ""
             return f"배치 {ref['label'] or ref['production_batch_id']}{tail}"
         if ref["lot_id"] is not None:
-            return f"LOT {ref['label'] or ref['lot_id']}"
+            head = f"LOT {ref['label'] or ref['lot_id']}"
+            return f"{head} · {item_name}" if item_name else head
         return ref["label"] or document.subject
     lots = [r for r in refs if r["lot_id"] is not None]
     return f"{_iso(document.work_date)} · LOT {len(lots)}건"
@@ -231,18 +249,26 @@ def _hints(document, rows, refs):
     """필드 hint 규칙 계산(FR-28).
 
     file_exists: 같은 LOT의 지정 양식(D01) 문서에 파일이 있으면 "유". 저장 값은 바꾸지 않는다.
+    LOT은 반복 섹션이면 그 행의 행 단위 참조,
+    반복 아닌 섹션이면 문서 단위 참조(P6a-S2 2.3 — D03 v2).
     """
     rules = []
     for section in document.template.schema_json["sections"]:
         for field in section["fields"]:
             hint = field.get("hint")
             if isinstance(hint, dict) and hint.get("kind") == "file_exists":
-                rules.append((section["key"], field["key"], hint))
+                rules.append((section["key"], field["key"], hint, section.get("repeat", False)))
     if not rules:
         return {}
-    lot_by_section = {r["section_id"]: r["lot_id"] for r in refs if r["section_id"] and r["lot_id"]}
+    row_lots = {r["section_id"]: r["lot_id"] for r in refs if r["section_id"] and r["lot_id"]}
+    doc_lot = next((r["lot_id"] for r in refs if r["section_id"] is None and r["lot_id"]), None)
     result = {}
-    for section_key, field_key, hint in rules:
+    for section_key, field_key, hint, repeat in rules:
+        lot_by_section = (
+            row_lots
+            if repeat
+            else {r.section_id: doc_lot for r in rows if r.section_def == section_key and doc_lot}
+        )
         lots = [lot_by_section.get(r.section_id) for r in rows if r.section_def == section_key]
         lots = [lot for lot in lots if lot is not None]
         with_files = set()
@@ -396,11 +422,14 @@ def list_documents(filters=None, page=1):
         )
     with step("DOC-LST-04", "DOC", "결과 조립"):
         refs = _refs_by_document([d.document_id for d in documents]) if documents else {}
+        names = _item_names([d.document_id for d in documents if d.record_key])
         items = []
         for d in documents:
             item = _document_head(d)
             item["requirement"] = _requirement(d.record_key, refs.get(d.document_id, []))
-            item["target_summary"] = _target_summary(d, refs.get(d.document_id, []))
+            item["target_summary"] = _target_summary(
+                d, refs.get(d.document_id, []), names.get(d.document_id)
+            )
             items.append(item)
         return {
             "items": items,

@@ -149,6 +149,33 @@ D03 = {
 }
 
 
+# P6a(D-084·D-088): 육안검사는 LOT마다 문서 1건.
+# 입고 정보(읽기 전용)는 info, 검사 항목은 inspection.
+# 필드 정의는 v1 `lots` 행과 같다(이름·값 그대로).
+D03_V2 = {
+    "requirement_only": True,
+    "guide": D03["guide"],
+    "sections": [
+        {
+            "key": "info",
+            "label": "기본정보",
+            "repeat": False,
+            "fields": [
+                _inspector(),
+                *[dict(f) for f in D03["sections"][1]["fields"] if f.get("readonly")],
+            ],
+        },
+        {
+            "key": "inspection",
+            "label": "검사",
+            "repeat": False,
+            "nonconforming": {"any": [{"field": "verdict", "eq": "FAIL"}]},
+            "fields": [dict(f) for f in D03["sections"][1]["fields"] if not f.get("readonly")],
+        },
+    ],
+}
+
+
 def _phase_order(field, time_field, first, last):
     return {"field": field, "time_field": time_field, "first": first, "last": last}
 
@@ -414,8 +441,9 @@ CCP_3P = {
 P4_TEMPLATES = [
     ("D01", 1, "시험성적서", D01, True),
     ("D02", 1, "원산지 증명/수입면장", D02, True),
-    ("D03", 1, "원료/부자재 육안검사일지", D03, True),
+    ("D03", 1, "원료/부자재 육안검사일지", D03, False),  # P6a: LOT 문서(v2)로 바뀜
     ("CCP-1P", 1, "CCP-1P 모니터링일지(쇳가루 제거)", CCP_1P, True),
     ("CCP-2B", 1, "CCP-2B 모니터링일지(건조)", CCP_2B, True),
     ("CCP-3P", 1, "CCP-3P 모니터링일지(금속검출)", CCP_3P, True),
+    ("D03", 2, "원료/부자재 육안검사일지", D03_V2, True),
 ]

@@ -9,7 +9,11 @@ from django.db import connection, transaction
 
 from apps.documents import services
 from apps.documents.models import Document, DocumentFile, File
-from apps.documents.seed import ensure_p4_templates, ensure_staff
+from apps.documents.seed import _ensure, ensure_p4_templates, ensure_staff
+from apps.documents.seed_forms import D03 as D03_V1
+
+# N2(행 단위 작성 요구) 시험용 양식 — D03 v1 정의를 빌려 씀(P6a: D03은 LOT 문서)
+ROWS = "TEST-LOT-ROWS"
 
 DAY = "2026-10-11"
 
@@ -17,6 +21,7 @@ DAY = "2026-10-11"
 def setup_p4():
     ensure_staff(5)
     templates = ensure_p4_templates()
+    templates[ROWS] = _ensure([(ROWS, 1, "행 단위 시험 양식", D03_V1, True)])[(ROWS, 1)]
     stub("items", id=1, name="유자")
     stub("items", id=2, name="유자차")
     for lot_id in (88, 89, 90):
@@ -66,8 +71,32 @@ def new_d01(lot_id=88):
     return goc("D01", f"D01|lot:{lot_id}", lot_ref(lot_id), {"info": {"item_name": "유자"}})
 
 
-def new_d03():
-    return goc("D03", f"D03|date:{DAY}", [])
+D03_INFO = {
+    "lot_number": "RM-1011-01",
+    "received_date": DAY,
+    "supplier_name": "고흥농협",
+    "material_kind": "원료",
+    "item_name": "유자",
+    "quantity": "500kg",
+}
+PASS_INSPECTION = {"appearance": "양호", "packaging": "양호", "labeling": "양호", "verdict": "PASS"}
+
+
+def new_d03(lot_id=88):
+    """D03 v2 — LOT마다 문서 1건(P6a, D-084)."""
+    info = {**D03_INFO, "lot_number": f"RM-1011-0{lot_id - 87}"}
+    return goc("D03", f"D03|lot:{lot_id}", lot_ref(lot_id), {"info": info})
+
+
+def inspect(document_id, values=None):
+    row = rows_of(document_id, "inspection")[0]
+    values = values or PASS_INSPECTION
+    return patch(document_id, {"update": [{"section_id": row["section_id"], "values": values}]})
+
+
+def new_rows_doc():
+    """N2 시험용 행 단위 문서(하루 1건)."""
+    return goc(ROWS, f"{ROWS}|date:{DAY}", [])
 
 
 def add_lot_row(document_id, lot_id, values=None):

@@ -18,7 +18,7 @@ from apps.doc_requirements import services
 from apps.documents.models import Document, DocumentRef
 from apps.documents.tests.test_concurrency import _file_db
 
-from .base import cleanup_refs, d03_rows, setup_req, touch_batch, touch_lot
+from .base import cleanup_refs, setup_req, touch_batch, touch_lot
 
 
 @unittest.skipUnless(
@@ -78,11 +78,11 @@ class ReqConcurrencyTests(TransactionTestCase):
         self.assertEqual([results[k][0] for k in ("first", "second")], ["ok", "ok"], results)
         self.assertEqual(
             [d["result"] for d in results["first"][1]["documents"]],
-            ["created", "created", "row_added"],
+            ["created"] * 3,
         )
         self.assertEqual(
             [d["result"] for d in results["second"][1]["documents"]],
-            ["existing", "existing", "row_existing"],
+            ["existing"] * 3,
         )
         self.assertEqual((Document.objects.count(), DocumentRef.objects.count()), (3, 3))
 
@@ -91,9 +91,10 @@ class ReqConcurrencyTests(TransactionTestCase):
         second = self.caller(touch_lot, 89, services.require_for_lot)
         results = self.run_pair(first, second)
         self.assertEqual([results[k][0] for k in ("first", "second")], ["ok", "ok"], results)
-        d03 = Document.objects.filter(record_key__startswith="D03|").values_list("pk", flat=True)
-        self.assertEqual(len(d03), 1)
-        self.assertEqual(sorted(d03_rows(d03[0])), [88, 89])
+        d03 = Document.objects.filter(record_key__startswith="D03|").values_list(
+            "record_key", flat=True
+        )
+        self.assertEqual(sorted(d03), ["D03|lot:88", "D03|lot:89"])  # P6a: LOT마다 D03
 
     def test_tc009_write_first_rule(self):
         # ① 두 번째가 자기 쓰기 없이(첫 SQL = 읽기) 부르면 즉시 database is locked

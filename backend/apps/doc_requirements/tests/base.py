@@ -102,14 +102,6 @@ def set_status(document_id, status):
     )
 
 
-def d03_rows(document_id):
-    return list(
-        DocumentRef.objects.filter(document_id=document_id, section_id__isnull=False)
-        .order_by("ref_id")
-        .values_list("lot_id", flat=True)
-    )
-
-
 def deactivate(type_code):
     DocumentTemplate.objects.filter(type_code=type_code).update(is_active=0)
 

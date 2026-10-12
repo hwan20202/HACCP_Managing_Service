@@ -33,10 +33,12 @@ from apps.documents.tests.p4 import (
     complete,
     filled_ccp1p,
     goc,
+    inspect,
     lot_ref,
     new_ccp,
     new_d01,
     new_d03,
+    new_rows_doc,
     patch,
     rows_of,
     set_info,
@@ -143,8 +145,10 @@ class GetOrCreateOutsideTransactionTests(TransactionTestCase):
 
 
 class AddRefRowTests(P4TestCase):
+    """N2는 일반 기능으로 남긴다(P6a-S2 Q2) — D03 대신 행 단위 시험 양식으로 확인."""
+
     def setUp(self):
-        self.d03 = new_d03()["document"]["document_id"]
+        self.d03 = new_rows_doc()["document"]["document_id"]
 
     def test_tc124_add_twice(self):
         first = add_lot_row(self.d03, 88)
@@ -206,13 +210,14 @@ class FindTests(P4TestCase):
     def test_tc127_find_by_ref(self):
         d01 = new_d01()["document"]["document_id"]
         d03 = new_d03()["document"]["document_id"]
-        section_id = add_lot_row(d03, 88)["section_id"]
+        rows = new_rows_doc()["document"]["document_id"]
+        section_id = add_lot_row(rows, 88)["section_id"]
         p1 = new_ccp()["document"]["document_id"]
         p2 = new_ccp("CCP-2B", "2B")["document"]["document_id"]
         by_lot = services.find_documents_by_ref(lot_id=88)
         self.assertEqual(
             [(r["document_id"], r["type_code"], r["section_id"]) for r in by_lot],
-            [(d01, "D01", None), (d03, "D03", section_id)],
+            [(d01, "D01", None), (d03, "D03", None), (rows, "TEST-LOT-ROWS", section_id)],
         )
         by_batch = services.find_documents_by_ref(production_batch_id=12)
         self.assertEqual({r["document_id"] for r in by_batch}, {p1, p2})
@@ -228,24 +233,7 @@ class FindTests(P4TestCase):
 class CompleteTests(P4TestCase):
     def filled_d03(self):
         d03 = new_d03()["document"]["document_id"]
-        add_lot_row(d03, 88)
-        row = rows_of(d03, "lots")[0]
-        patch(
-            d03,
-            {
-                "update": [
-                    {
-                        "section_id": row["section_id"],
-                        "values": {
-                            "appearance": "양호",
-                            "packaging": "양호",
-                            "labeling": "양호",
-                            "verdict": "PASS",
-                        },
-                    }
-                ]
-            },
-        )
+        inspect(d03)
         set_info(d03, {"inspector": 4})
         return d03
 
@@ -426,13 +414,15 @@ class CreateUpdateRuleTests(P4TestCase):
 
     def test_tc147_system_values(self):
         d03 = new_d03()["document"]["document_id"]
-        add_lot_row(d03, 88)
-        row = rows_of(d03, "lots")[0]
+        info = rows_of(d03, "info")[0]
+        rows_doc = new_rows_doc()["document"]["document_id"]
+        add_lot_row(rows_doc, 88)
+        row = rows_of(rows_doc, "lots")[0]
         ccp = new_ccp()["document"]["document_id"]
         cases = [
             (
                 d03,
-                {"update": [{"section_id": row["section_id"], "values": {"item_name": "x"}}]},
+                {"update": [{"section_id": info["section_id"], "values": {"item_name": "x"}}]},
                 None,
                 "readonly",
             ),
@@ -450,12 +440,12 @@ class CreateUpdateRuleTests(P4TestCase):
                 "readonly",
             ),
             (
-                d03,
+                rows_doc,
                 {"add": [{"section_def": "lots", "values": {"appearance": "양호"}}]},
                 None,
                 "system_rows",
             ),
-            (d03, {"delete": [row["section_id"]]}, None, "system_rows"),
+            (rows_doc, {"delete": [row["section_id"]]}, None, "system_rows"),
             (d03, None, {"work_date": "2026-10-12"}, "fixed"),
         ]
         for document_id, sections, document, code in cases:
@@ -652,36 +642,32 @@ class ReadTests(P4TestCase):
 
     def test_tc178_target_filter(self):
         d03 = new_d03()["document"]["document_id"]
-        add_lot_row(d03, 88)
         d01 = new_d01(89)["document"]["document_id"]
         new_ccp()
         found = services.list_documents({"target": "RM-1011"}, 1)
         self.assertEqual({i["document_id"] for i in found["items"]}, {d03, d01})
         summaries = {i["document_id"]: i["target_summary"] for i in found["items"]}
-        self.assertEqual(summaries[d01], "LOT RM-1011-02")
-        self.assertEqual(summaries[d03], f"{DAY} · LOT 1건")
+        self.assertEqual(summaries[d01], "LOT RM-1011-02 · 유자")  # P6a: 품명(D-088 Q3·Q6)
+        self.assertEqual(summaries[d03], "LOT RM-1011-01 · 유자")
         with self.assertRaises(errors.InvalidFilter):
             services.list_documents({"target": "x" * 51}, 1)
 
     def test_tc179_has_coa_hint(self):
-        d03 = new_d03()["document"]["document_id"]
-        add_lot_row(d03, 88)
-        add_lot_row(d03, 89)
+        d88 = new_d03(88)["document"]["document_id"]
+        d89 = new_d03(89)["document"]["document_id"]
         attach_file(new_d01(88)["document"]["document_id"])
         new_d01(89)
-        before = list(
-            DocSection.objects.filter(document_id=d03).values_list("values_json", flat=True)
-        )
-        detail = services.get_document(d03)
-        hints = [
-            s.get("hints", {}).get("has_coa")
-            for s in detail["sections"]
-            if s["section_def"] == "lots"
-        ]
+        before = list(DocSection.objects.order_by("pk").values_list("values_json", flat=True))
+        hints = []
+        for d03 in (d88, d89):  # P6a: D03은 LOT 문서, 힌트는 문서 단위 LOT 기준(2.3)
+            detail = services.get_document(d03)
+            hints += [
+                s.get("hints", {}).get("has_coa")
+                for s in detail["sections"]
+                if s["section_def"] == "inspection"
+            ]
         self.assertEqual(hints, ["유", "무"])
-        after = list(
-            DocSection.objects.filter(document_id=d03).values_list("values_json", flat=True)
-        )
+        after = list(DocSection.objects.order_by("pk").values_list("values_json", flat=True))
         self.assertEqual(before, after)
 
     def test_tc151_templates_flag(self):
@@ -726,7 +712,6 @@ class BoundaryTests(P4TestCase):
         with CaptureQueriesContext(connection) as ctx:
             d01 = new_d01()["document"]["document_id"]
             d03 = new_d03()["document"]["document_id"]
-            add_lot_row(d03, 88)
             services.find_documents_by_ref(lot_id=88)
             services.list_documents({"target": "RM"}, 1)
             services.get_document(d03)
@@ -735,3 +720,70 @@ class BoundaryTests(P4TestCase):
         pattern = re.compile(r'\b(FROM|JOIN)\s+"?(%s)"?\b' % "|".join(STOCK_TABLES), re.I)
         offenders = [q["sql"] for q in ctx.captured_queries if pattern.search(q["sql"])]
         self.assertEqual(offenders, [])
+
+
+# ---------------------------------------------------------------- P6a D03 v2(LOT 문서, D-084·D-088)
+
+
+FULL = {"appearance": "양호", "packaging": "양호", "labeling": "양호", "verdict": "PASS"}
+
+
+class P6aD03Tests(P4TestCase):
+    def test_p6a_tc012_list_query_count(self):
+        """D03이 든 목록: 개수 + 목록 + 대상 요약 + info 품명 = SQL 4개(NFR-03 상한 4)."""
+        new_d03()
+        new_d03(lot_id=89)
+        with self.assertNumQueries(4):
+            result = services.list_documents({"from": DAY, "to": DAY}, 1)
+        summaries = {i["target_summary"] for i in result["items"] if i["record_key"]}
+        self.assertIn("LOT RM-1011-01 · 유자", summaries)
+
+    def test_p6a_tc010_completion_rules(self):
+        """작성완료 검사: 점검자·판정 필수, 부적합이면 개선조치 1건 이상(비반복 섹션에서도)."""
+        cases = [
+            ({}, FULL, {"required"}),
+            ({"inspector": 4}, {}, {"required"}),
+            ({"inspector": 4}, {**FULL, "verdict": "FAIL"}, {"deviation_required"}),
+        ]
+        for info, inspection, expected in cases:
+            with self.subTest(info=info, inspection=inspection), transaction.atomic():
+                sid = transaction.savepoint()
+                d03 = new_d03()["document"]["document_id"]
+                if info:
+                    set_info(d03, info)
+                if inspection:
+                    inspect(d03, inspection)
+                with self.assertRaises(errors.CompletionIncomplete) as ctx:
+                    complete(d03)
+                self.assertTrue(expected <= codes(ctx), codes(ctx))
+                transaction.savepoint_rollback(sid)
+        d03 = new_d03()["document"]["document_id"]
+        set_info(d03, {"inspector": 4})
+        inspect(d03, {**FULL, "verdict": "FAIL"})
+        body = {"description": "포장 파손", "action_result": "반품"}
+        dev = services.create_deviation(4, d03, body)
+        self.assertEqual(complete(d03)["status"], "completed")
+        # P6a-TC-014: D03 개선조치에는 관련 행이 없다
+        self.assertIsNone(DeviationAction.objects.get(pk=dev["deviation_id"]).section_id)
+
+    def test_p6a_tc013_single_row_sections(self):
+        d03 = new_d03()["document"]["document_id"]
+        for section in ("inspection", "info"):
+            with self.subTest(section=section):
+                version = version_of(d03)
+                with self.assertRaises(errors.ValidationFailed):
+                    patch(d03, {"add": [{"section_def": section, "values": {}}]})
+                self.assertEqual(version_of(d03), version)
+
+    def test_p6a_tc030_template_versions(self):
+        rows = dict(
+            DocumentTemplate.objects.filter(type_code="D03").values_list("version", "is_active")
+        )
+        self.assertEqual(rows, {1: False, 2: True})
+        self.assertEqual(self.t["D03"].version, 2)
+        d03 = new_d03()["document"]["document_id"]
+        self.assertEqual(Document.objects.get(pk=d03).template.version, 2)
+        self.assertEqual(
+            [s["section_def"] for s in services.get_document(d03)["sections"]],
+            ["info", "inspection"],
+        )

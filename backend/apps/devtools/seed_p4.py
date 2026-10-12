@@ -75,10 +75,7 @@ def ensure_stock(today):
 
 def _count(made, results):
     for item in results:
-        made["documents"] += int(
-            item["result"] == "created" or item.get("document_result") == "created"
-        )
-        made["lot_rows"] += int(item["result"] == "row_added")
+        made["documents"] += int(item["result"] == "created")
 
 
 def _assign(actor, results, assignee_id=2):
@@ -86,7 +83,7 @@ def _assign(actor, results, assignee_id=2):
     for item in results:
         if item["type_code"] in ("D01", "D02"):
             continue  # P4 시드도 D01·D02는 담당자 없음
-        if item["result"] == "created" or item.get("document_result") == "created":
+        if item["result"] == "created":
             document_id = item["document_id"]
             version = doc.get_document(document_id)["version"]
             patch = {"expected_version": version, "document": {"assignee_id": assignee_id}}
@@ -149,6 +146,21 @@ def _set_info(actor, document_id, values):
     )
 
 
+def _inspect(actor, document_id, verdict):
+    """D03 v2 검사 섹션(1행)을 채운다."""
+    detail = doc.get_document(document_id)
+    row = next(s for s in detail["sections"] if s["section_def"] == "inspection")
+    values = {"appearance": "양호", "packaging": "양호", "labeling": "양호", "verdict": verdict}
+    return doc.update_document(
+        actor,
+        document_id,
+        {
+            "expected_version": detail["version"],
+            "sections": {"update": [{"section_id": row["section_id"], "values": values}]},
+        },
+    )
+
+
 def _complete(actor, document_id):
     version = doc.get_document(document_id)["version"]
     return doc.complete_document(actor, document_id, version)
@@ -161,18 +173,18 @@ def _submit(actor, document_id):
 
 
 def seed_p4(today=None):
-    """시드를 만든다. 같은 날짜로 다시 부르면 이미 있는 문서는 그대로 둔다(N1·N2 멱등)."""
+    """시드를 만든다. 같은 날짜로 다시 부르면 이미 있는 문서는 그대로 둔다(N1 멱등)."""
     today = today or timezone.localdate()
     if isinstance(today, str):
         today = date.fromisoformat(today)
     ensure_staff()
     ensure_p4_templates()
     lots, batches = ensure_stock(today)
-    made = {"documents": 0, "lot_rows": 0}
+    made = {"documents": 0}
     actor = 3
 
     with transaction.atomic():
-        # 입고 LOT마다 F01: D01·D02 + 입고일 D03 LOT 행. 오늘 3개, 전날 2개(DOC-PS-16·17·22).
+        # 입고 LOT마다 F01: D01·D02·D03(LOT마다 1건, P6a). 오늘 3개, 전날 2개(DOC-PS-16·17·27).
         # 시드는 수불 자리라 호출 전에 자기 쓰기(touched_at)를 먼저 한다(REQ-S2-Q13).
         lot_out = []
         for lot, *_ in lots:
@@ -181,9 +193,11 @@ def seed_p4(today=None):
             _count(made, out["documents"])
             _assign(actor, out["documents"])
             lot_out.append(out)
-        today_d03 = next(d for d in lot_out[0]["documents"] if d["type_code"] == "D03")
-        d03 = {"created": today_d03["document_result"] == "created"}
-        d03_id = today_d03["document_id"]
+        today_d03 = [
+            next(d for d in out["documents"] if d["type_code"] == "D03") for out in lot_out[:3]
+        ]
+        d03 = {"created": today_d03[0]["result"] == "created"}
+        d03_id = today_d03[0]["document_id"]
 
         # 생산 배치마다 F02: 제조 배치라 CCP-1P·2B·3P. 배치 2는 1P 반려(S6), 3P 부적합(DOC-PS-18),
         # 2B 측정 행 없음(S6-25)
@@ -207,23 +221,12 @@ def seed_p4(today=None):
         # 상태 만들기는 건너뛴다
         return made
 
-    # 상태: D03 승인, CCP-1P 작성완료, CCP-2B 결재중, CCP-3P 작성중(부적합+개선조치),
-    # 배치 2 CCP-1P 반려
-    detail = doc.get_document(d03_id)
-    updates = [
-        {
-            "section_id": s["section_id"],
-            "values": {"appearance": "양호", "packaging": "양호", "labeling": "양호",
-                       "verdict": "PASS"},
-        }
-        for s in detail["sections"]
-        if s["section_def"] == "lots"
-    ]  # fmt: skip
-    doc.update_document(
-        actor, d03_id, {"expected_version": detail["version"], "sections": {"update": updates}}
-    )
-    _set_info(actor, d03_id, {"inspector": 4})
-    _complete(actor, d03_id)
+    # 상태: 오늘 LOT 1 D03 승인, LOT 2 D03 작성완료, LOT 3 D03 작성중(P6a — LOT마다 문서),
+    # CCP-1P 작성완료, CCP-2B 결재중, CCP-3P 작성중(부적합+개선조치), 배치 2 CCP-1P 반려
+    for item in today_d03[:2]:
+        _inspect(actor, item["document_id"], "PASS")
+        _set_info(actor, item["document_id"], {"inspector": 4})
+        _complete(actor, item["document_id"])
     ids = _submit(actor, d03_id)
     wf.decide(3, ids[1], "approved")
     wf.decide(1, ids[2], "approved")

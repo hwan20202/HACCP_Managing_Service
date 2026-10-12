@@ -2,10 +2,10 @@
 
 REQ 흐름은 DOC 단계(GOC·ARR·FND)를 안에 품고, 번호(#n)·공정 반복이 있다. 그래서 비교는
 "이 흐름의 단계만 골라, 연속 반복을 하나로 줄인 순서가 같은지"로 본다(matches). 건너뛴 단계는
-skip 결과로 trace에 남긴다(예: 이미 있는 D03 행이면 REQ-LOT-05 skip).
+skip 결과로 trace에 남긴다. P6a(D-088): D03도 LOT마다 문서라 REQ-LOT-05(번호 반복)는 없다.
 """
 
-LOT = [f"REQ-LOT-0{n}" for n in range(0, 7)]
+LOT = [f"REQ-LOT-0{n}" for n in (0, 1, 2, 3, 4, 6)]
 BAT = [f"REQ-BAT-0{n}" for n in range(0, 5)]
 
 FLOWS = {
