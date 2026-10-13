@@ -12,7 +12,7 @@ urlpatterns = [
 
 # P5 작성 요구 테스트(REQ-D01~D07): devstock(개발용 수불 임시 테이블)이 있을 때만
 if apps.is_installed("apps.devstock"):
-    from . import req_api
+    from . import fixtures, req_api
 
     urlpatterns += [
         path("req/lots", req_api.lot_collection, name="dev-req-lots"),
@@ -24,4 +24,6 @@ if apps.is_installed("apps.devstock"):
             req_api.batch_require,
             name="dev-req-batch-require",
         ),
+        # P6 S5: 프리셋 사전 조건(ISS-019)
+        path("fixtures/d03", fixtures.d03_fixture, name="dev-fixture-d03"),
     ]

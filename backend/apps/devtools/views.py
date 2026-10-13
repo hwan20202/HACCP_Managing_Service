@@ -184,23 +184,31 @@ def snapshot(request):
             if row[k]
         }
     )
+    tables = {
+        "document": documents,
+        "doc_section": sections,
+        "document_template": template,
+        "staff": [{"staff_id": i} for i in staff_ids],
+        "approval_request": requests,
+        "approval": slots,
+        "document_ref": refs,
+        "deviation_action": deviations,
+        "deviation_checker": checkers,
+        "document_correction": corrections,
+    }
+    # P6 S5: 참조 LOT의 상태(판정 전달 EFF 결과 확인) — 개발용 수불 테이블이 있을 때만
+    from django.apps import apps as django_apps
+
+    lot_ids = sorted({row["lot_id"] for row in refs if row["lot_id"]})
+    if django_apps.is_installed("apps.devstock") and lot_ids:
+        marks = ", ".join(["%s"] * len(lot_ids))
+        tables["lots"] = _sql_rows(f"SELECT * FROM lots WHERE id IN ({marks})", lot_ids)
     return _json(
         {
             "document_id": document_id,
             "exists": True,
             "deleted": document["deleted_at"] is not None,
-            "tables": {
-                "document": documents,
-                "doc_section": sections,
-                "document_template": template,
-                "staff": [{"staff_id": i} for i in staff_ids],
-                "approval_request": requests,
-                "approval": slots,
-                "document_ref": refs,
-                "deviation_action": deviations,
-                "deviation_checker": checkers,
-                "document_correction": corrections,
-            },
+            "tables": tables,
         }
     )
 

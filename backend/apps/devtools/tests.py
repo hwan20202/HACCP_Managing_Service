@@ -92,3 +92,75 @@ class SeedP4Tests(TestCase):
             ),
             {2},
         )
+
+
+@override_settings(ROOT_URLCONF="apps.devtools.test_urls")
+class D03FixtureTests(TestCase):
+    """P6 S5 프리셋 사전 조건(ISS-019): 새 LOT·D03을 실제 함수로 원하는 상태까지 만든다."""
+
+    def setUp(self):
+        from apps.doc_requirements.tests.base import setup_req
+
+        setup_req()
+
+    def tearDown(self):
+        from apps.document_workflow.tests.base import invariant_violations
+
+        self.assertEqual(invariant_violations(), [])
+
+    def post(self, body):
+        import json
+
+        return self.client.post(
+            "/api/dev/fixtures/d03", data=json.dumps(body), content_type="application/json"
+        )
+
+    def test_states(self):
+        from apps.devstock.models import Lot
+        from apps.documents import services as doc
+
+        expected = {
+            "draft": "draft",
+            "completed": "completed",
+            "submitted": "submitted",
+            "approved": "approved",
+            "correcting": "correcting",
+            "correction_completed": "completed",
+            "correction_submitted": "submitted",
+        }
+        lots = set()
+        for state, status in expected.items():
+            with self.subTest(state=state):
+                res = self.post({"state": state})
+                self.assertEqual(res.status_code, 201, res.content)
+                body = res.json()
+                self.assertEqual(body["status"], status)
+                self.assertEqual(doc.get_document(body["document_id"])["version"], body["version"])
+                lots.add(body["lot_id"])
+        self.assertEqual(len(lots), len(expected))  # 매번 새 LOT
+        # 승인(적합)이면 판정이 전달돼 LOT이 사용 가능
+        approved = self.post({"state": "approved"}).json()
+        self.assertEqual(Lot.objects.get(pk=approved["lot_id"]).status, "AVAILABLE")
+
+    def test_options(self):
+        from apps.devstock.models import Lot
+        from apps.documents import services as doc
+
+        fail = self.post({"state": "completed", "verdict": "FAIL"}).json()
+        self.assertEqual(len(doc.get_document(fail["document_id"])["deviations"]), 1)
+        used = self.post({"state": "correcting", "used": True, "change_to": "FAIL"}).json()
+        self.assertEqual(Lot.objects.get(pk=used["lot_id"]).status, "CONSUMED")
+        self.assertEqual(used["correction"]["reason"], "콘솔 준비: 판정 재확인")
+        edited = self.post({"state": "correcting", "edited": True}).json()
+        self.assertEqual(doc.get_document(edited["document_id"])["assignee_id"], 2)
+        for body in ({"state": "x"}, {"verdict": "OK"}, {"change_to": "?"}):
+            with self.subTest(body=body):
+                self.assertEqual(self.post(body).status_code, 400)
+
+    def test_snapshot_lots(self):
+        made = self.post({"state": "approved"}).json()
+        snap = self.client.get(f"/api/dev/snapshot?document_id={made['document_id']}").json()
+        self.assertEqual(
+            [(r["id"], r["status"]) for r in snap["tables"]["lots"]],
+            [(made["lot_id"], "AVAILABLE")],
+        )
