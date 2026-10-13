@@ -42,6 +42,12 @@
 
 | 항목 | 현재 동작 | 바꿀 곳 |
 |---|---|---|
+| 배치 번호 | `B-{품목코드}-{제조일 yyMMdd}{A,B..}` (10/11 미팅 A4 제안) | `production._next_batch_number` |
+| 산출 LOT 상태 | 바로 AVAILABLE (완제품 실험·출하 검사 흐름은 아직 없음) | `production.add_output` |
+| 산출 LOT 소비기한 | 입력값, 없으면 배치 제조일 + `items.shelf_life_days` | `production.add_output` |
+| 투입 가능 LOT | AVAILABLE·보류 없음·투입일 기준 소비기한 안 지남·산출 품목과 다른 품목. 소급 투입은 그 시점 이후 잔량 검사 | `production.add_usage` |
+| 배치 완료 | 산출(정정 반영) 1건 이상 필요. 계획 상태에서 바로 완료 가능(사후 입력) | `production.complete_batch` |
+| 배치 취소 | 계획·진행 중이고 투입·산출이 정정으로 모두 0일 때만. 완료된 배치는 정정으로 처리 | `production.cancel_batch` |
 | 입고 가능 품목 유형 | 원료(RAW)·포장재(PACKAGING) | `receiving.RECEIVABLE_ITEM_TYPES` |
 | 지난 날짜 입고 | 그날 00:00:00 으로 기록 (그날 다른 이동보다 앞에 오도록) | `receiving._occurred_at` |
 | 입고 취소 | 입고 후 사용·조정이 없을 때만. 전량 CORRECTION_OUT, LOT 상태는 그대로 | `receiving.cancel_receipt` |

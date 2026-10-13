@@ -2,6 +2,7 @@
 
 The document app reads the data itself, so these hooks pass identifiers, not payloads:
     incoming LOT     -> v_doc_incoming_lot by lot_id
+    production batch -> v_doc_batch by production_batch_id
     stock ledger     -> apps.inventory.ledger.stock_ledger(...) by item + period
 
 The hooks run inside the inventory transaction: if the document side raises, the inventory
@@ -22,3 +23,8 @@ def incoming_received(*, lot_id):
 
 def incoming_receipt_cancelled(*, lot_id, reason, staff_id):
     """A receipt was cancelled. Document side decides what happens to the inspection record."""
+
+
+def batch_started(*, batch_id, staff_id):
+    """A production batch started (IN_PROGRESS). Document side: require_for_batch(...) creates
+    the CCP 일지 for a manufacturing batch (ERD v7 ③). Connected after the document app merges."""

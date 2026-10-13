@@ -81,6 +81,7 @@
 | `batch_number`, `process_type`, `status` | 배치 번호, MANUFACTURE / PACKAGING, 상태 |
 | `shift` | 근무조 A 주간 / B 야간 / C 오후 (NULL 가능) |
 | `item_id`, `item_code`, `item_name`, `item_type`, `base_unit` | 산출 품목 |
+| `unit_weight_mg` | 기준단위 1개 무게(mg, NULL 가능). kg 환산: 개수 × `unit_weight_mg` ÷ 1,000,000 (예: 환 10,000개 × 4,000mg = 40kg). 문서 요청 V1 |
 | `bom_id`, `bom_version` | 기준 BOM (없으면 NULL) |
 | `planned_date`, `planned_quantity_e6` | 계획 (NULL 가능 — 사후 입력) |
 | `manufactured_date`, `started_at`, `completed_at` | 제조일, 시작·완료 시각 |
@@ -89,7 +90,7 @@
 | `staff_name` | 작업 책임자 |
 | `subject_label` | `품목코드 품명 / 배치번호 / 제조일` 표시용 |
 
-문서 쪽 요청 대비: `quantity_kg` 대신 `output_quantity_e6` + `base_unit` (완제품은 단위가 `개`)
+문서 쪽 요청 대비: `quantity_kg` 대신 `output_quantity_e6` + `base_unit` (완제품은 단위가 `개`). kg 가 필요하면 `unit_weight_mg` 로 환산
 
 ## 4. 수불이 제공하는 함수 (문서 → 수불 호출)
 
@@ -141,6 +142,7 @@ apply_incoming_judgment(
 | 입고 등록 | `incoming_received(lot_id=...)` | `create_incoming_inspection(lot_id, answers, staff_id)` — 그날 육안검사일지에 LOT 행 추가 (작성완료·결재중이면 새 일지?) |
 | 입고 취소 | `incoming_receipt_cancelled(lot_id=..., reason=..., staff_id=...)` | 육안검사일지의 해당 LOT 행 처리 방식 |
 | HOLD 근거 문서 | `lot_holds.source_document_id` 에 `document_id` 저장 | 최신 내용·최신 승인본 조회 메소드 이름·반환 형태 |
+| 생산 시작 (계획 없이 바로 완료한 경우는 완료 때) | `batch_started(batch_id=..., staff_id=...)` | `require_for_batch(batch_id, staff_id)` — CCP 일지 작성 요구 (ERD v7 ③) |
 
 ## 6. 직접 확인하기
 
