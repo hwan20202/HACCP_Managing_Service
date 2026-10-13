@@ -18,8 +18,37 @@
   const today = () => new Date().toLocaleDateString('sv-SE');
   const mmdd = (iso) => (iso || '').slice(5, 10).replace('-', '');
 
-  // SC-04 결과 문구: D03도 D01·D02와 같은 "새로 만듦 / 이미 있음"(P6a-S1 REQ-SC-04)
-  const resultText = (item) => RESULT[item.result] || item.result;
+  // SC-04 결과 문구: D03도 D01·D02와 같은 "새로 만듦 / 이미 있음"(P6a-S1 REQ-SC-04).
+  // 육안검사를 함께 보냈으면(inspection_applied 있음) 검사 값 채움 여부를 붙인다(P6a-S1 3.3)
+  const resultText = (item) => {
+    if (item.type_code === 'D03' && typeof item.inspection_applied === 'boolean') {
+      return item.inspection_applied ? 'D03 새로 만듦 · 검사 값 채움' : 'D03 이미 있음 — 검사 값 채우지 않음';
+    }
+    return RESULT[item.result] || item.result;
+  };
+
+  // D03 최신 양식의 검사 섹션(P6 D-080: 형식은 문서 쪽이 정함 — 항목·선택지를 양식에서 읽는다)
+  let inspectionSection;
+  async function loadInspectionSection() {
+    if (inspectionSection !== undefined) return inspectionSection;
+    inspectionSection = null;
+    const list = await api.get('templates');
+    const d03 = (list.ok ? list.data.items : []).filter((t) => t.type_code === 'D03').sort((a, b) => b.version - a.version)[0];
+    if (!d03) return null;
+    const t = await api.get(`templates/${d03.template_id}`);
+    inspectionSection = (t.ok && t.data.schema.sections.find((x) => x.key === 'inspection')) || null;
+    return inspectionSection;
+  }
+  const inspectionFields = (section) => section.fields.filter((fd) => !fd.readonly && !fd.computed);
+  function inspectionHtml(section) {
+    if (!section) return '<p class="te-hint">D03 양식에 검사 섹션이 없어 육안검사를 함께 입력할 수 없습니다.</p>';
+    const input = (fd) => (fd.options
+      ? `<select class="form-control" name="insp_${fd.key}"><option value="">-</option>${fd.options.map((o) => `<option value="${esc(o)}">${esc((fd.option_labels && fd.option_labels[o]) || o)}</option>`).join('')}</select>`
+      : `<input class="form-control" name="insp_${fd.key}" ${fd.max_length ? `maxlength="${fd.max_length}"` : ''}>`);
+    return `<label class="te-check"><input type="checkbox" name="with_inspection" id="reqWithInspection"> 육안검사 함께 입력</label>
+      <div class="te-form-grid" id="reqInspection" hidden>${inspectionFields(section).map((fd) => `
+        <div class="te-field"><label>${esc(fd.label)}${fd.required ? ' *' : ''}</label>${input(fd)}</div>`).join('')}</div>`;
+  }
 
   // 양식 이름(type_code → name). /api/v1/templates 에서 한 번 읽는다
   let templateNames = null;
@@ -66,7 +95,8 @@
     wrap.querySelectorAll('.is-invalid').forEach((el) => el.classList.remove('is-invalid'));
     const details = (record.data && record.data.details) || [];
     details.forEach((d) => {
-      const field = wrap.querySelector(`[name="${d.path}"]`);
+      const name = (d.path || '').startsWith('inspection.') ? `insp_${d.path.slice(11)}` : d.path; // P6 육안검사 칸
+      const field = wrap.querySelector(`[name="${name}"]`);
       if (!field) return;
       field.classList.add('is-invalid');
       const msg = document.createElement('div');
@@ -233,7 +263,8 @@
       const items = await api.get(`${DEV}/items`);
       const options = (items.ok ? items.data.items : []).map((i) => `<option value="${i.id}">${esc(i.name)}</option>`).join('');
       const day = this.day || today();
-      formModal({
+      const section = await loadInspectionSection();
+      const modal = formModal({
         title: '테스트 입고 (LOT 생성)',
         okLabel: '입고 + 작성 요구',
         body: `
@@ -251,6 +282,7 @@
             <div class="te-field"><label>원산지 <span class="te-hint">(선택)</span></label><select class="form-control" name="origin"><option value="">-</option><option>국내</option><option>수입</option></select></div>
             <div class="te-field"><label>LOT 번호</label><div class="te-ro-block" id="reqLotNumber">RM-${mmdd(day)}-nn (자동)</div></div>
           </div>
+          ${inspectionHtml(section)}
           <label class="te-check te-fail-after"><input type="checkbox" name="fail_after"> 작성 요구 중 오류 내기(롤백 확인용)</label>`,
         onSubmit: async (wrap) => {
           const v = (name) => wrap.querySelector(`[name="${name}"]`);
@@ -263,14 +295,23 @@
           if (v('expiration_date').value) body.expiration_date = v('expiration_date').value;
           if (v('origin').value) body.origin = v('origin').value;
           if (v('fail_after').checked) body.fail_after = true;
+          if (section && v('with_inspection').checked) {
+            // 빈 값은 보내지 않는다(필수 누락은 서버 REQ-LOT-00b가 inspection.<키>로 알려 준다)
+            body.inspection = {};
+            inspectionFields(section).forEach((fd) => { if (v(`insp_${fd.key}`).value) body.inspection[fd.key] = v(`insp_${fd.key}`).value; });
+          }
           const record = await api.post(`${DEV}/lots`, body);
           if (record.status === 400) { showFieldErrors(wrap, record); return true; }
-          await this.remember(`require_for_lot(staff ${api.staffId}, lot ${record.ok ? record.data.lot.lot_id : '?'})`, record,
+          await this.remember(`require_for_lot(staff ${api.staffId}, lot ${record.ok ? record.data.lot.lot_id : '?'}${body.inspection ? ', inspection' : ''})`, record,
             'LOT·문서 모두 만들어지지 않았습니다(롤백).');
           return false;
         },
-      }).querySelector('[name=received_date]').addEventListener('change', (e) => {
+      });
+      modal.querySelector('[name=received_date]').addEventListener('change', (e) => {
         document.getElementById('reqLotNumber').textContent = `RM-${mmdd(e.target.value)}-nn (자동)`;
+      });
+      modal.querySelector('#reqWithInspection')?.addEventListener('change', (e) => {
+        modal.querySelector('#reqInspection').hidden = !e.target.checked;
       });
     },
 
@@ -342,9 +383,9 @@
       const rows = documents.map((d) => `
         <tr data-doc="${d.document_id}">
           <td>#${d.document_id}</td><td>${formName(d.type_code)}</td>
-          <td>${T.statusBadge(d.status)}</td>
+          <td>${T.statusBadge(d.status)}${d.correcting && d.status !== 'correcting' ? ' <span class="badge te-chip-fix">정정</span>' : ''}</td>
           <td class="${d.verdict === 'FAIL' ? 'te-judge-ng' : d.verdict === 'PASS' ? 'te-judge-ok' : ''}">${d.verdict ? esc(VERDICT[d.verdict] || d.verdict) : '<span class="te-hint">–</span>'}</td>
-          <td>${d.correcting ? '정정 중' : '<span class="te-hint">–</span>'}</td>
+          <td>${d.correcting ? `정정 중${d.correction_reason ? ` <span class="te-hint te-ellipsis" title="${esc(d.correction_reason)}">(${esc(d.correction_reason.length > 20 ? `${d.correction_reason.slice(0, 20)}…` : d.correction_reason)})</span>` : ''}` : '<span class="te-hint">–</span>'}</td>
           <td><button class="btn btn-secondary btn-sm" data-open-doc="${d.document_id}">문서 열기</button></td>
         </tr>`).join('');
       this.root.innerHTML = `

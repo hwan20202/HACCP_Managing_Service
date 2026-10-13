@@ -124,3 +124,21 @@
 .form-control.is-invalid { border-color: var(--color-danger); }
 .te-fail-after { margin-top: 0.9rem; }
 .te-lot-link { color: var(--brand-primary); text-decoration: underline; }
+
+/* P6 정정·판정 전달 (p6-s1-screens DOC-SC-04·09, WF-SC-01·03·04·08·10) */
+.te-chip-fix { background: #fff4e5; color: #8a4b00; border: 1px solid #ffd8a8; font-weight: 600; margin-left: 0.25rem; }
+.te-chip-effective { background: transparent; color: var(--color-success); border: 1px solid var(--color-success); font-weight: 600; margin-left: 0.25rem; }
+.te-chip-superseded { background: #f1f3f5; color: var(--text-secondary); border: 1px solid var(--border-strong); margin-left: 0.25rem; }
+.te-fix-banner { border: 1px solid #ffd8a8; background: #fff8ef; border-radius: var(--radius-md); padding: 0.7rem 1rem; margin-bottom: 1rem; font-size: 0.84rem; }
+.te-fix-banner .te-fix-head { font-weight: 700; color: #8a4b00; margin-bottom: 0.25rem; }
+.te-fix-banner .te-fix-actions { display: flex; justify-content: flex-end; gap: 0.4rem; margin-top: 0.4rem; }
+.te-fix-line { color: var(--text-secondary); font-size: 0.8rem; margin: 0.15rem 0 0.35rem 1.2rem; list-style: none; }
+.te-counter { font-size: 0.72rem; color: var(--text-muted); text-align: right; }
+.te-inv-reject { border: 1px solid rgba(239,68,68,0.45); background: rgba(239,68,68,0.08); color: var(--color-danger); border-radius: var(--radius-md); padding: 0.6rem 0.8rem; margin-bottom: 0.8rem; font-size: 0.82rem; }
+.te-inv-reject ul { margin: 0.3rem 0 0.3rem 1.1rem; }
+.te-inv-reject .te-hint { color: var(--text-secondary); }
+.btn-warning { background: rgba(245,158,11,0.14); border: 1px solid rgba(245,158,11,0.45); color: #8a4b00; }
+.btn-warning:hover { background: rgba(245,158,11,0.24); }
+.btn-warning:disabled { opacity: 0.55; }
+.te-fix-lines { margin: 0.2rem 0 0 0; padding: 0; }
+#reqInspection[hidden] { display: none; }

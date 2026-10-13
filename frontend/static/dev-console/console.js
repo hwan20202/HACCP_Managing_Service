@@ -36,10 +36,15 @@
     reopen: { label: '작성 재개 (F13·A10)', method: 'POST', flow: 'DOC-ROP', uses: ['id', 'body'], path: (s) => `documents/${s.id}/reopen`, doc: (s) => s.id },
     devCreate: { label: '개선조치 쓰기 (F19·A15)', method: 'POST', flow: 'DOC-DVC', uses: ['id', 'body'], path: (s) => `documents/${s.id}/deviations`, doc: (s) => s.id },
     devUpdate: { label: '개선조치 수정 (F20·A16)', method: 'PATCH', flow: 'DOC-DVU', uses: ['id', 'body', 'docId'], path: (s) => `deviations/${s.id}`, doc: (s) => s.docId },
+    // ---- P6 정정 — document-workflow/p6-s2-spec.md (DOC-A18·A19). 작성완료(A09)는 note(판정 변경 사유)도 받는다
+    correction: { label: '정정 시작 (F22·A18)', method: 'POST', flow: 'DOC-COR', uses: ['id', 'body'], path: (s) => `documents/${s.id}/correction`, doc: (s) => s.id },
+    correctionCancel: { label: '정정 취소 (F24·A19)', method: 'POST', flow: 'DOC-CCN', uses: ['id', 'body'], path: (s) => `documents/${s.id}/correction/cancel`, doc: (s) => s.id },
     devDelete: { label: '개선조치 삭제 (F21·A17)', method: 'DELETE', flow: 'DOC-DVD', uses: ['id', 'query', 'docId'], path: (s) => `deviations/${s.id}${s.query ? `?${s.query}` : ''}`, doc: (s) => s.docId },
     // ---- P5 REQ 작성 요구 — doc-requirements/s2-spec.md 2.2. ④는 LOT·배치 단위 스냅샷(scope)
     // 새 LOT·배치를 만드는 호출은 실행 전 id가 없다 → 그날(입고일·생산일) 범위로 실행 전/후 비교(S6-39 K1)
-    reqLot: { label: 'REQ 테스트 입고 + 작성 요구 (D04→F01)', method: 'POST', flow: 'REQ-DEV-LOT', uses: ['body'], path: () => '/api/dev/req/lots',
+    // P6: 본문에 inspection이 있으면 육안검사 함께 입력 흐름(REQ-DEV-LOT-INSP, D-080)
+    reqLot: { label: 'REQ 테스트 입고 + 작성 요구 (D04→F01)', method: 'POST', uses: ['body'], path: () => '/api/dev/req/lots',
+      flow: (record) => (/"inspection"/.test((record && record.request && record.request.body) || '') ? 'REQ-DEV-LOT-INSP' : 'REQ-DEV-LOT'),
       creates: 'lot', scope: (s) => dayScope(s, 'received_date') },
     reqLotRe: { label: 'REQ 같은 LOT 다시 호출 (D06→F01)', method: 'POST', flow: 'REQ-DEV-RE-LOT', uses: ['id'], path: (s) => `/api/dev/req/lots/${s.id}/require`,
       scope: (s) => `lot_id=${s.id}` },
@@ -66,6 +71,13 @@
     return r.ok ? r.json() : null;
   }
   const snapshot = (id) => (id ? devGet(`/api/dev/snapshot?document_id=${id}`) : Promise.resolve(null));
+  // P6 S5 프리셋 사전 조건(ISS-019): 기록하지 않는 개발 API 쓰기 — /api/dev/fixtures/*
+  async function devPost(path, body) {
+    const r = await fetch(path, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) throw new Error(`사전 조건을 만들지 못했습니다: ${(data && (data.message || data.code)) || r.status}${r.status === 404 ? ' (devstock이 없는 설정)' : ''}`);
+    return data;
+  }
   async function quietGet(path) {
     const r = await fetch(`/api/v1/${path}`, { headers: { Accept: 'application/json' } });
     return r.ok ? r.json() : null;
@@ -185,7 +197,9 @@
     const nested = inner.length > 0;
     steps.filter((s) => own(s) && !expected.includes(s.step_id))
       .forEach((s) => chips.push({ id: s.step_id, cls: s.result === 'fail' ? 'fail extra' : 'extra' }));
-    let mainRun = steps.filter(own).map((s) => s.step_id).filter((id) => (reqFlow ? expected.includes(id) : !id.endsWith('a')));
+    // 실패 분기 단계(…-02a, P6 …-02b 등 숫자 뒤 글자)는 도식에 없으면 순서 비교에서 뺀다
+    const branch = (id) => /\d[a-z]$/.test(id) && !expected.includes(id);
+    let mainRun = steps.filter(own).map((s) => s.step_id).filter((id) => (reqFlow ? expected.includes(id) : !branch(id)));
     if (reqFlow) mainRun = mainRun.filter((id, i) => i === 0 || mainRun[i - 1] !== id);
     const inOrder = mainRun.every((id, i) => expected[i] === id);
     const failed = steps.find((s) => s.result === 'fail' && own(s));
@@ -331,7 +345,8 @@
     const b = (before && before.tables) || {};
     const a = (after && after.tables) || {};
     $('#dcDbTitle').innerHTML = `document_id = ${esc(docId)} ${after && after.deleted ? '<span class="dc-deleted-flag">· 논리 삭제됨 (업무 API는 404)</span>' : ''} ${!before || !before.exists ? '<span class="te-hint">· 실행 전 없음</span>' : ''}`;
-    $('#dcDbBody').innerHTML = ['document', 'doc_section', 'document_ref', 'deviation_action', 'deviation_checker', 'approval_request', 'approval', 'document_template', 'staff'].map((t) => diffTable(t, b[t], a[t], onlyChanged)).join('');
+    $('#dcDbBody').innerHTML = ['document', 'doc_section', 'document_ref', 'deviation_action', 'deviation_checker', 'approval_request', 'approval', 'document_correction', 'lots', 'document_template', 'staff']
+      .filter((t) => t in a || t in b).map((t) => diffTable(t, b[t], a[t], onlyChanged)).join('');
   }
 
   function scopeTables(before, after, onlyChanged) {
@@ -800,10 +815,115 @@
   );
 
 
+  // ---------------------------------------------------------------- 프리셋 WF-PS-14~22 · EFF-PS-01~05 · REQ-PS-11 (document-workflow/p6-s1-screens.md 6장, P6a 6장)
+  // 사전 조건은 시드에 기대지 않고 프리셋을 불러올 때 새 LOT·D03을 만든다(ISS-019, POST /api/dev/fixtures/d03).
+  // 그래서 같은 프리셋을 여러 번 실행할 수 있다. 결재선은 2칸(staff 3·1).
+  // 불러오기 때 만든 준비 데이터(설명란에 표시 — P6 S5 검토 A4)
+  let prepared = [];
+  const fixture = async (body) => {
+    const made = await devPost('/api/dev/fixtures/d03', body);
+    prepared.push(made);
+    return made;
+  };
+  const FIX_SLOTS = [{ slot_no: 1, label: '담당', approver_id: 3 }, { slot_no: 2, label: 'HACCP팀장', approver_id: 1 }];
+  const FIX_REASON = '판정 오기 정정(콘솔)';
+  const p6 = (preset) => ({ unit: 'P6', ...preset });
+  async function fixtureDoc(body) {
+    const made = await fixture(body);
+    return { made, d: await quietGet(`documents/${made.document_id}`) };
+  }
+  // 대기 칸을 결재자로 차례로 처리(마지막 칸만 result)
+  async function decideAll(exec, documentId, last) {
+    const req = await latestRequest(documentId);
+    const pending = req ? req.slots.filter((x) => x.state === 'pending') : [];
+    for (let i = 0; i < pending.length; i += 1) {
+      const result = i === pending.length - 1 ? last : { result: 'approved' };
+      await exec(decideSpec(pending[i], pending[i].approver_id, result, documentId));
+    }
+  }
+
+  PRESETS.push(
+    p6({ id: 'WF-PS-14', label: '정정 시작', expect: '200 · DOC-COR 도식 일치(01 입력 → 02 정정 기록 INSERT…SELECT → 03 조건부 UPDATE approved → 04 → SIG-01 → 05) · document approved→correcting·version+1, document_correction +1(사유, closed_at 비움)',
+      prepare: async () => { const { d } = await fixtureDoc({ state: 'approved' }); return { func: 'correction', id: String(d.document_id), body: J({ expected_version: d.version, reason: FIX_REASON }) }; } }),
+    p6({ id: 'WF-PS-15', label: '정정 사유 없음', expect: '400 VALIDATION_ERROR(reason) · DOC-COR-01 입력 확인에서 실패 · DB 변화 없음',
+      prepare: async () => { const { d } = await fixtureDoc({ state: 'approved' }); return { func: 'correction', id: String(d.document_id), body: J({ expected_version: d.version, reason: '   ' }) }; } }),
+    p6({ id: 'WF-PS-16', label: '승인 아닌 문서 정정', expect: '409 INVALID_TRANSITION · 결재중 문서 · DOC-COR 조건부 단계 0행 → 실패 단계 · 롤백으로 DB 변화 없음(정정 기록도 없음)',
+      prepare: async () => { const { d } = await fixtureDoc({ state: 'submitted' }); return { func: 'correction', id: String(d.document_id), body: J({ expected_version: d.version, reason: FIX_REASON }) }; } }),
+    p6({ id: 'WF-PS-17', label: '정정 중 작성완료', expect: '200 · DOC-CMP 도식 일치(SIG-01 안쪽 EFF-JDG: 같은 판정 → 변화 없음) · document correcting→completed·version+1, 정정 기록 열린 채 유지(closed_at 비움)',
+      prepare: async () => { const { d } = await fixtureDoc({ state: 'correcting', edited: true }); return { func: 'complete', id: String(d.document_id), body: J({ expected_version: d.version }) }; } }),
+    p6({ id: 'WF-PS-18', label: '정정 재상신 → 승인', expect: '상신 201 → 승인 200 ×2(마지막 WF-DEC-APPROVED, DOC-APV + SIG-01) · approval_request +1(2회차, 정정 상신), document approved, 정정 기록 closed·approved · 회차 이력(F: APR 문서별 회차)에서 1회차 superseded_by 2',
+      prepare: async () => {
+        const { d } = await fixtureDoc({ state: 'correction_completed', edited: true });
+        const sub = { func: 'submit', id: String(d.document_id), body: J({ expected_version: d.version, slots: FIX_SLOTS }) };
+        return { ...sub, script: async (exec) => {
+          const first = await exec({ ...sub, staff: '3' });
+          if (!first.record.ok) return;
+          await decideAll(exec, d.document_id, { result: 'approved', comment: '정정 승인(콘솔)' });
+          await exec({ func: 'history', id: String(d.document_id), staff: '3' });
+        } };
+      } }),
+    p6({ id: 'WF-PS-19', label: '정정 회차 반려', expect: '200 · WF-DEC-REJECTED(DOC-RJT CASE: 열린 정정 → correcting) · document submitted→correcting(rejected 아님), completed_at/by 비움 · 회차 rejected · 유효 승인본(1회차) 그대로',
+      prepare: async () => {
+        const { d } = await fixtureDoc({ state: 'correction_submitted', edited: true });
+        const req = await latestRequest(d.document_id);
+        const slot = req.slots.find((x) => x.state === 'pending');
+        return decideSpec(slot, slot.approver_id, { result: 'rejected', comment: '정정 내용 확인 필요(콘솔)' }, d.document_id);
+      } }),
+    p6({ id: 'WF-PS-20', label: '유효 승인본 조회(A8)', expect: '200 · REQ-FND(안쪽 APR-LAT-01 = A8) · 정정 중 D03(판정 FAIL로 고침)이어도 승인본 기준 판정 PASS, 정정 중 열에 사유 · DB 변화 없음',
+      prepare: async () => { const { made } = await fixtureDoc({ state: 'correcting', change_to: 'FAIL' }); return { func: 'lotDocs', id: String(made.lot_id) }; } }),
+    p6({ id: 'WF-PS-21', label: '정정 취소(수정 전)', expect: '200 · DOC-CCN 도식 일치(02 조건부 UPDATE correcting·버전·수정 없음 → 03 정정 기록 닫기) · document correcting→approved·version+1, 작성완료 기록 복원 · document_correction closed_at·outcome cancelled',
+      prepare: async () => { const { d } = await fixtureDoc({ state: 'correcting' }); return { func: 'correctionCancel', id: String(d.document_id), body: J({ expected_version: d.version }) }; } }),
+    p6({ id: 'WF-PS-22', label: '수정 뒤 정정 취소', expect: '409 CORRECTION_HAS_CHANGES · DOC-CCN-02 영향 0행 → 실패 단계 DOC-CCN-02b · DB 변화 없음',
+      prepare: async () => { const { d } = await fixtureDoc({ state: 'correcting', edited: true }); return { func: 'correctionCancel', id: String(d.document_id), body: J({ expected_version: d.version }) }; } }),
+    // ---- 판정 연동(EFF, D-079·D-080). LOT 상태는 ④의 lots 표(문서가 참조하는 개발 LOT)
+    p6({ id: 'EFF-PS-01', label: 'D03 작성완료 → 판정 전달 (적합·부적합 2건)', expect: '[호출 1·2] 200 · DOC-CMP 안쪽 DOC-SIG-01 → EFF-JDG 01~04 · document completed · lots QUARANTINE→AVAILABLE(적합) / →REJECTED(부적합)',
+      prepare: async () => {
+        const pass = (await fixtureDoc({ state: 'draft', verdict: 'PASS' })).d;
+        const fail = (await fixtureDoc({ state: 'draft', verdict: 'FAIL' })).d;
+        const a = { func: 'complete', id: String(pass.document_id), body: J({ expected_version: pass.version }) };
+        return { ...a, script: async (exec) => {
+          await exec({ ...a, staff: '3' });
+          await exec({ func: 'complete', id: String(fail.document_id), body: J({ expected_version: fail.version }), staff: '3' });
+        } };
+      } }),
+    p6({ id: 'EFF-PS-02', label: '같은 판정으로 다시 작성완료', expect: '작성 재개 200 → 작성완료 200 · EFF-JDG 통과(같은 판정 = 변화 없음) · lots 그대로(AVAILABLE)',
+      prepare: async () => {
+        const { d } = await fixtureDoc({ state: 'completed', verdict: 'PASS' });
+        const re = { func: 'reopen', id: String(d.document_id), body: J({ expected_version: d.version }) };
+        return { ...re, script: async (exec) => {
+          const first = await exec({ ...re, staff: '3' });
+          if (!first.record.ok) return;
+          await exec({ func: 'complete', id: String(d.document_id), body: J({ expected_version: first.record.data.version }), staff: '3' });
+        } };
+      } }),
+    p6({ id: 'EFF-PS-03', label: '사유 없이 판정 변경', expect: '작성 재개·수정(PASS→FAIL)·개선조치 200 → 작성완료 409 INVENTORY_REJECTED(details 1건: 판정 변경에는 사유) · EFF-JDG-02 거부 → 롤백 · 문서 작성중 그대로, lots AVAILABLE 그대로',
+      prepare: async () => {
+        const { d } = await fixtureDoc({ state: 'completed', verdict: 'PASS' });
+        const re = { func: 'reopen', id: String(d.document_id), body: J({ expected_version: d.version }) };
+        const insp = d.sections.find((x) => x.section_def === 'inspection');
+        return { ...re, script: async (exec) => {
+          const first = await exec({ ...re, staff: '3' });
+          if (!first.record.ok) return;
+          const upd = await exec({ func: 'update', id: String(d.document_id), staff: '3',
+            body: J({ expected_version: first.record.data.version, sections: { update: [{ section_id: insp.section_id, values: { packaging: '불량', verdict: 'FAIL' } }] } }) });
+          if (!upd.record.ok) return;
+          await exec({ func: 'devCreate', id: String(d.document_id), staff: '4', body: J({ description: '외포장 파손(콘솔)', actor_id: 4, checker_ids: [2] }) });
+          await exec({ func: 'complete', id: String(d.document_id), body: J({ expected_version: upd.record.data.version }), staff: '3' });
+        } };
+      } }),
+    p6({ id: 'EFF-PS-04', label: '정정 사유로 판정 변경', expect: '200 · DOC-CMP → SIG-01 → EFF-JDG(note 없음 → 정정 사유가 reason) · document correcting→completed(정정 열린 채) · lots AVAILABLE→REJECTED',
+      prepare: async () => { const { d } = await fixtureDoc({ state: 'correcting', change_to: 'FAIL' }); return { func: 'complete', id: String(d.document_id), body: J({ expected_version: d.version }) }; } }),
+    p6({ id: 'EFF-PS-05', label: '사용된 LOT 판정 변경', expect: '409 INVENTORY_REJECTED(사용된 LOT) · EFF-JDG 거부 → 롤백 · 문서 정정 중 그대로, lots CONSUMED 그대로',
+      prepare: async () => { const { d } = await fixtureDoc({ state: 'correcting', change_to: 'FAIL', used: true }); return { func: 'complete', id: String(d.document_id), body: J({ expected_version: d.version, note: '사용 뒤 판정 변경 시도(콘솔)' }) }; } }),
+    p6({ id: 'REQ-PS-11', label: '입고 + 육안검사 함께', expect: '201 · REQ-DEV-LOT-INSP 도식 일치(REQ-LOT-00b 형식 검사 → … → REQ-DEV-02b 임시 판정 함수) · D03 inspection 값 채움(작성중), 결과 inspection_applied true · lots AVAILABLE',
+      prepare: async () => ({ func: 'reqLot', body: J(await lotBody(await freeDay(), { inspection: { appearance: '양호', packaging: '양호', labeling: '양호', verdict: 'PASS' } })) }) }),
+  );
+
   async function loadPreset() {
     const p = PRESETS.find((x) => x.id === $('#dcPreset').value);
     if (!p) { state.preset = null; $('#dcPresetDesc').textContent = '기능을 고르고 실행하세요. 프리셋을 불러오면 입력이 채워집니다.'; return; }
     $('#dcPresetDesc').textContent = `${p.id} 준비 중…`;
+    prepared = [];
     try {
       const spec = await p.prepare();
       $('#dcFunc').value = spec.func;
@@ -815,7 +935,7 @@
       else if (!api.staffId || api.staffId === '999') { api.setStaff('3'); $('#dcStaff').value = '3'; }
       state.preset = { id: p.id, script: spec.script, groupScope: spec.groupScope, concurrent: spec.concurrent };
       toggleInputs();
-      $('#dcPresetDesc').innerHTML = `<b>${esc(p.id)} ${esc(p.label)}</b><br>기대: ${esc(p.expect)}${spec.script ? '<br><span class="te-hint">여러 호출을 순서/동시에 실행하는 프리셋입니다. [실행]을 누르세요.</span>' : ''}`;
+      $('#dcPresetDesc').innerHTML = `<b>${esc(p.id)} ${esc(p.label)}</b><br>기대: ${esc(p.expect)}${spec.script ? '<br><span class="te-hint">여러 호출을 순서/동시에 실행하는 프리셋입니다. [실행]을 누르세요.</span>' : ''}${prepared.length ? `<br><span class="te-hint" id="dcPrepared">준비(불러오기 때 만듦): ${prepared.map((m) => `새 LOT ${esc(m.lot_number)} · D03 문서 #${esc(m.document_id)}(${esc(m.status)}${m.correction ? ' · 정정' : ''})`).join(', ')}</span>` : ''}`;
     } catch (error) {
       state.preset = null;
       $('#dcPresetDesc').textContent = `${p.id}: ${error.message}`;
@@ -862,7 +982,7 @@
     $('#dcStaff').addEventListener('change', (e) => api.setStaff(e.target.value));
     $('#dcFunc').innerHTML = Object.entries(FUNCS).map(([k, f]) => `<option value="${k}">${esc(f.label)}</option>`).join('');
     const group = (unit, label) => `<optgroup label="${label}">${PRESETS.filter((p) => (p.unit || p.id.split('-')[0]) === unit).map((p) => `<option value="${p.id}">${p.id} ${esc(p.label)}</option>`).join('')}</optgroup>`;
-    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)');
+    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)');
     $('#dcFunc').addEventListener('change', () => { state.preset = null; toggleInputs(); });
     ['#dcId', '#dcQuery', '#dcBody', '#dcDocId'].forEach((sel) => $(sel).addEventListener('input', () => { if (state.preset && state.preset.script) state.preset = null; }));
     $('#dcLoadPreset').addEventListener('click', loadPreset);

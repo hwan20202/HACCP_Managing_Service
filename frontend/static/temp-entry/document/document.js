@@ -2,15 +2,18 @@
 // 개발 검증 › 문서 작성 (P1 DOC 사용 화면 + P4 확장)
 // 화면: DOC-SC-01 목록 · 02 양식 선택 · 03 작성/수정 폼 · 04 상세(+ P3 결재 영역) · 05 삭제 확인
 //       P4: 09 작성완료 확인·검사 결과, 이탈·개선조치 영역, 작성 요구 문서 표시
-// 설계: dev-notes/document/s1-screens.md, p4-s1-screens.md, API: s2-spec.md 4장, p4-s2-spec.md
+//       P6: 정정 시작(WF-SC-08)·정정 배너·정정 취소(WF-SC-10), D03 작성완료의 판정 전달(DOC-SC-09)
+// 설계: dev-notes/document/s1-screens.md, p4-s1-screens.md, document-workflow/p6-s1-screens.md(+ p6a 3.2)
+//       API: s2-spec.md 4장, p4-s2-spec.md, p6-s2-spec.md
 // 파일 영역(SC-07·08)은 스프린트 3(D-058)
 // =============================================
 (function () {
   const T = window.TempEntry;
   const api = window.HaccpApi;
   const esc = (v) => T.esc(v);
-  const EDITABLE = ['draft', 'rejected'];
-  const COMPLETABLE = ['draft', 'rejected'];
+  const EDITABLE = ['draft', 'rejected', 'correcting'];  // P6: 정정 중도 수정·작성완료
+  const COMPLETABLE = ['draft', 'rejected', 'correcting'];
+  const REASON_MAX = 200;
   const REQUIREMENT = { lot: '⚙ 입고', batch: '⚙ 생산' };
 
   function today(offset = 0) {
@@ -107,13 +110,16 @@
     const label = d.template && d.template.type_code === 'CCP-2B' ? '건조 기간' : '측정 기간';
     return `<span id="tePeriod">${label} <b>${esc(d.work_date)} ~ ${esc(last && last > d.work_date ? last : d.work_date)}</b> <span class="te-hint">(마지막 측정일 기준)</span></span>`;
   }
+  // 정정 진행 중이면 배지 옆 `정정` 꼬리표(정정 중 상태는 배지 자체가 "정정 중", DOC-SC-01·04)
+  const correctionTag = (status, correcting) => (correcting && status !== 'correcting' ? ' <span class="badge te-chip-fix">정정</span>' : '');
+  const statusCell = (status, correcting) => `${T.statusBadge(status)}${correctionTag(status, correcting)}`;
   const requirementChip = (d) => (d.requirement ? `<span class="badge te-chip-req">${REQUIREMENT[d.requirement]} 작성 요구</span>` : '');
 
   const Doc = {
     title: '문서 작성',
     root: null,
     templates: null,
-    filters: { from: today(-6), to: today(0), template_id: '', status: '', target: '', mine: false, assigned: false, page: 1 },
+    filters: { from: today(-6), to: today(0), template_id: '', status: '', target: '', mine: false, assigned: false, correcting: false, page: 1 },
     form: null,
     devDrafts: [],
 
@@ -140,7 +146,7 @@
     async showList() {
       const f = this.filters;
       const templates = await this.loadTemplates();
-      const statusOptions = ['', 'draft', 'completed', 'submitted', 'approved', 'rejected']
+      const statusOptions = ['', 'draft', 'completed', 'submitted', 'approved', 'rejected', 'correcting']
         .map((s) => `<option value="${s}" ${f.status === s ? 'selected' : ''}>${s ? T.STATUS[s].label : '전체'}</option>`).join('');
       const templateOptions = ['<option value="">전체</option>']
         .concat(templates.map((t) => `<option value="${t.template_id}" ${String(f.template_id) === String(t.template_id) ? 'selected' : ''}>${esc(t.name)} v${t.version}</option>`))
@@ -159,6 +165,7 @@
               <div class="form-group"><label class="form-label">대상</label><input class="form-control" id="fTarget" maxlength="50" placeholder="LOT·배치 번호" value="${esc(f.target)}"></div>
               <label class="te-check"><input type="checkbox" id="fMine" ${f.mine ? 'checked' : ''}> 내가 작성</label>
               <label class="te-check"><input type="checkbox" id="fAssigned" ${f.assigned ? 'checked' : ''}> 내 담당</label>
+              <label class="te-check" title="정정 중 + 정정 꼬리표가 붙은 작성완료·결재중"><input type="checkbox" id="fCorrecting" ${f.correcting ? 'checked' : ''}> 정정 진행 중 전체</label>
               <button class="btn btn-secondary" id="fSearch">조회</button>
               ${d03 ? '<button class="btn btn-secondary" id="fD03Today" title="작업일 = 오늘 · 양식 = 육안검사(D03)">육안검사 오늘</button>' : ''}
               <span style="flex:1"></span>
@@ -173,14 +180,14 @@
         Object.assign(f, {
           from: $('#fFrom').value, to: $('#fTo').value, template_id: $('#fTemplate').value,
           status: $('#fStatus').value, target: $('#fTarget').value.trim(),
-          mine: $('#fMine').checked, assigned: $('#fAssigned').checked, page: 1,
+          mine: $('#fMine').checked, assigned: $('#fAssigned').checked, correcting: $('#fCorrecting').checked, page: 1,
         });
         this.loadList();
       };
       $('#fSearch').addEventListener('click', search);
       if (d03) {
         $('#fD03Today').addEventListener('click', () => {
-          Object.assign(f, { from: today(0), to: today(0), template_id: String(d03.template_id), status: '', target: '', mine: false, assigned: false, page: 1 });
+          Object.assign(f, { from: today(0), to: today(0), template_id: String(d03.template_id), status: '', target: '', mine: false, assigned: false, correcting: false, page: 1 });
           this.showList();
         });
       }
@@ -210,6 +217,7 @@
       if (f.target) q.set('target', f.target);
       if (f.mine) q.set('author_id', api.staffId);
       if (f.assigned) q.set('assignee_id', api.staffId);
+      if (f.correcting) q.set('correcting', 'true');
       q.set('page', f.page);
       const r = await api.get(`documents?${q}`);
       if (!r.ok) {
@@ -234,7 +242,7 @@
               <td>${esc(d.target_summary || d.subject || '-')}</td>
               <td>${d.work_date}</td>
               <td>staff ${d.created_by} / ${d.assignee_id ? `staff ${d.assignee_id}` : '-'}</td>
-              <td>${T.statusBadge(d.status)}</td>
+              <td>${statusCell(d.status, d.correcting)}</td>
               <td>${d.requirement ? `<span class="te-req">${REQUIREMENT[d.requirement]}</span>` : '<span class="te-hint">–</span>'}</td>
               <td>${T.fmtDateTime(d.created_at)}</td>
             </tr>`).join('')}</tbody>
@@ -740,13 +748,24 @@
       const canEdit = EDITABLE.includes(d.status);
       const canComplete = COMPLETABLE.includes(d.status);
       const canReopen = d.status === 'completed';
-      const canDelete = d.status === 'draft' && !d.submitted_at && !d.record_key;
+      const fixing = d.correction || null; // 정정 진행 중(정정 중·작성완료·결재중)
+      const canCorrect = d.status === 'approved' && !fixing;
+      const canDelete = d.status === 'draft' && !d.submitted_at && !d.record_key && !fixing; // 정정 중 숨김
+      // 유효 승인본(가장 큰 attempt의 승인 회차, APR A5 effective) — 정정 배너용
+      let effective = null;
+      if (fixing) {
+        const h = await api.get(`documents/${d.document_id}/approval-requests`);
+        effective = h.ok ? h.data.items.find((x) => x.effective) || null : null;
+      }
       const notes = {
         completed: '작성완료된 문서입니다. 수정하려면 [작성 재개]를 누르세요. 상신은 아래 결재 영역에서 합니다.',
         submitted: '결재 진행 중인 문서는 수정할 수 없습니다.',
         approved: '승인된 문서는 수정할 수 없습니다.',
         rejected: '반려된 문서입니다. 수정한 뒤 작성완료하면 재상신할 수 있습니다(삭제는 불가 — 상신 이력 보존).',
+        correcting: '정정 중입니다. 수정한 뒤 작성완료하고 다시 상신하세요.',
       };
+      if (fixing && d.status === 'completed') notes.completed = '정정 내용을 작성완료했습니다. 아래 결재 영역에서 상신하세요. 고치려면 [작성 재개](정정 중으로 돌아감).';
+      if (d.status === 'approved') notes.approved = '승인된 문서는 수정할 수 없습니다. 고쳐야 하면 [정정 시작]을 누르세요.';
       if (d.status === 'draft' && d.submitted_at) notes.draft = '상신 이력이 있어 삭제할 수 없습니다.';
       if (d.status === 'draft' && d.record_key) notes.draft = '작성 요구로 만들어진 문서입니다. 삭제할 수 없습니다.';
       const info = d.sections.find((s) => s.section_def === 'info');
@@ -757,15 +776,17 @@
           ${T.topBar(`문서 #${d.document_id} · ${d.template.name} v${d.template.version}`, '문서 상세', d.document_id)}
           <div class="card">
             <div class="card-header">
-              <div class="card-title">${T.statusBadge(d.status)} ${requirementChip(d)}</div>
+              <div class="card-title">${statusCell(d.status, !!fixing)} ${requirementChip(d)}</div>
               <div class="page-actions">
                 <button class="btn btn-secondary btn-sm" id="btnList">목록</button>
                 ${canEdit ? `<button class="btn btn-primary btn-sm" id="btnEdit" ${api.staffId ? '' : 'disabled'}>수정</button>` : ''}
                 ${canComplete ? `<button class="btn btn-primary te-btn-complete btn-sm" id="btnComplete" ${api.staffId ? '' : 'disabled'}>작성완료</button>` : ''}
                 ${canReopen ? `<button class="btn btn-secondary btn-sm" id="btnReopen" ${api.staffId ? '' : 'disabled'}>작성 재개</button>` : ''}
+                ${canCorrect ? `<button class="btn btn-warning btn-sm" id="btnCorrect" ${api.staffId ? '' : 'disabled title="현재 사용자를 선택하세요"'}>정정 시작</button>` : ''}
                 ${canDelete ? `<button class="btn btn-danger btn-sm" id="btnDelete" ${api.staffId ? '' : 'disabled'}>삭제</button>` : ''}
               </div>
             </div>
+            ${fixing ? this.correctionBanner(d, fixing, effective) : ''}
             ${notes[d.status] ? `<div class="te-status-note">${notes[d.status]}</div>` : ''}
             <div class="te-meta">
               <span>대상 <b id="teTarget">${targetHtml(d)}</b></span><span>작업일 <b>${d.work_date}</b></span>
@@ -791,6 +812,11 @@
       $('#btnDelete')?.addEventListener('click', () => this.confirmDelete(d));
       $('#btnComplete')?.addEventListener('click', () => this.confirmComplete(d, schema));
       $('#btnReopen')?.addEventListener('click', () => this.reopen(d));
+      $('#btnCorrect')?.addEventListener('click', () => this.openCorrection(d, effective));
+      $('#btnFixCancel')?.addEventListener('click', () => this.cancelCorrection(d, effective));
+      $('#btnEffective')?.addEventListener('click', () => {
+        if (window.TempEntryApproval) window.TempEntryApproval.showRequest(Number($('#btnEffective').dataset.request), { from: 'doc', documentId: d.document_id });
+      });
       this.root.querySelectorAll('#teTarget [data-lot]').forEach((a) => a.addEventListener('click', (e) => {
         e.preventDefault();
         T.open('temp-lot-docs', { lotId: Number(a.dataset.lot), back: { page: 'temp-doc', documentId: d.document_id } });
@@ -954,10 +980,16 @@
 
     // ================================================= DOC-SC-09 작성완료 확인·검사 결과
     async confirmComplete(d, schema) {
-      const ok = await T.confirm('작성완료', `문서 #${d.document_id}을(를) 작성완료합니다.<br>작성완료 후에는 [작성 재개]를 눌러야 수정할 수 있습니다.`, '작성완료', 'btn-primary te-btn-complete');
-      if (!ok) return;
-      const r = await api.post(`documents/${d.document_id}/complete`, { expected_version: d.version });
-      if (r.ok) { T.toast('작성완료했습니다.', 'success'); this.showDetail(d.document_id); return; }
+      let r;
+      if (d.template.type_code === 'D03') {
+        r = await this.completeD03(d, schema);
+        if (!r) return; // 취소
+      } else {
+        const ok = await T.confirm('작성완료', `문서 #${d.document_id}을(를) 작성완료합니다.<br>작성완료 후에는 [작성 재개]를 눌러야 수정할 수 있습니다.`, '작성완료', 'btn-primary te-btn-complete');
+        if (!ok) return;
+        r = await api.post(`documents/${d.document_id}/complete`, { expected_version: d.version });
+      }
+      if (r.ok) { T.toast(d.template.type_code === 'D03' ? '작성완료 · 판정 전달' : '작성완료했습니다.', 'success'); this.showDetail(d.document_id); return; }
       const data = r.data || {};
       if (data.code === 'COMPLETION_INCOMPLETE') {
         const details = data.details || [];
@@ -987,6 +1019,66 @@
       this.showDetail(d.document_id);
     },
 
+    // DOC-SC-09 (D03, P6 + P6a 3.2): LOT 1건의 판정 + 판정 변경 사유(note, 저장하지 않음 — 수불에 전달만).
+    // 수불 거부(409 INVENTORY_REJECTED)·연동 없음(503)은 모달을 닫지 않고 위에 빨간 영역. 그 밖의 응답은 호출자로 넘긴다.
+    completeD03(d, schema) {
+      const section = schema.sections.find((x) => x.key === 'inspection');
+      const field = section && section.fields.find((fd) => fd.key === 'verdict');
+      const row = d.sections.find((x) => x.section_def === 'inspection');
+      const verdict = row && row.values.verdict;
+      const lot = (d.refs || []).find((x) => x.lot_id !== null);
+      const lotName = lot ? (lot.label || lot.lot_id) : '-';
+      const verdictText = verdict ? `${field ? optionLabel(field, verdict) : verdict}(${verdict})` : '(판정 없음)';
+      const prefill = d.correction ? d.correction.reason : '';
+      return new Promise((resolve) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'te-modal-wrap';
+        wrap.innerHTML = `
+          <div class="te-modal" role="dialog" aria-modal="true" id="teD03Complete">
+            <div class="modal-header"><div class="modal-title">작성완료 — ${esc(d.template.name)} #${d.document_id} · LOT ${esc(lotName)}</div></div>
+            <div class="te-modal-body">
+              <div id="d03Reject"></div>
+              <p>작성완료하면 판정 <b class="${verdict === 'FAIL' ? 'te-judge-ng' : 'te-judge-ok'}">${esc(verdictText)}</b>이 수불에 전달됩니다.</p>
+              <label class="form-label" for="d03Note" style="margin-top:.6rem">판정 변경 사유 (선택, ${REASON_MAX}자)</label>
+              <input class="form-control" id="d03Note" maxlength="${REASON_MAX}" value="${esc(prefill)}">
+              <div class="te-counter" id="d03Count">${prefill.length}/${REASON_MAX}</div>
+              <p class="te-hint">ⓘ 이미 판정된 LOT의 판정을 바꾸면 사유가 필요합니다.${d.correction ? ' 정정 사유를 미리 채웠습니다(지우면 정정 사유가 그대로 쓰입니다).' : ''}</p>
+            </div>
+            <div class="te-modal-footer">
+              <button class="btn btn-secondary" id="d03Close">취소</button>
+              <button class="btn btn-primary te-btn-complete" id="d03Go">작성완료</button>
+            </div>
+          </div>`;
+        document.body.appendChild(wrap);
+        const $ = (sel) => wrap.querySelector(sel);
+        const done = (value) => { wrap.remove(); resolve(value); };
+        const note = $('#d03Note');
+        note.addEventListener('input', () => { $('#d03Count').textContent = `${note.value.trim().length}/${REASON_MAX}`; });
+        $('#d03Close').addEventListener('click', () => done(null));
+        $('#d03Go').addEventListener('click', async () => {
+          $('#d03Go').disabled = true;
+          $('#d03Go').textContent = '처리 중…';
+          const body = { expected_version: d.version };
+          if (note.value.trim()) body.note = note.value.trim();
+          const r = await api.post(`documents/${d.document_id}/complete`, body);
+          const code = r.data && r.data.code;
+          if (code === 'INVENTORY_REJECTED' || code === 'INVENTORY_NOT_CONFIGURED') {
+            const items = (r.data.details || []).map((x) => `<li><b>${esc(x.lot_number || x.lot_id || '')}</b> ${esc(x.message)}</li>`).join('');
+            $('#d03Reject').innerHTML = `<div class="te-inv-reject" id="teInvReject">
+              <b>⚠ ${code === 'INVENTORY_REJECTED' ? '수불이 판정을 받지 않았습니다' : esc(r.data.message)} — 작성완료하지 않았습니다</b>
+              ${items ? `<ul>${items}</ul>` : ''}
+              <div class="te-hint">${code === 'INVENTORY_REJECTED' ? '메시지는 수불이 보낸 문구입니다. 사유를 적거나 수불 담당자와 확인하세요.' : '서버 설정(HACCP_INVENTORY_JUDGMENT)을 확인하세요.'}</div></div>`;
+            $('#d03Go').disabled = false;
+            $('#d03Go').textContent = '작성완료';
+            note.focus();
+            return;
+          }
+          done(r);
+        });
+        note.focus();
+      });
+    },
+
     // 개선조치 입력 위치로 이동: 첫 부적합 행을 관련 행으로 한 새 입력 행을 연다
     goToDeviation(d, schema) {
       if (!this.devDrafts.length) {
@@ -1005,9 +1097,109 @@
     async reopen(d) {
       // 확인 없이 작성중으로 돌아간다(P4-S1-Q4)
       const r = await api.post(`documents/${d.document_id}/reopen`, { expected_version: d.version });
-      if (r.ok) T.toast('작성을 재개했습니다. 이제 수정할 수 있습니다.', 'success');
+      if (r.ok) T.toast(r.data.status === 'correcting' ? '작성을 재개했습니다. 정정 중으로 돌아갔습니다.' : '작성을 재개했습니다. 이제 수정할 수 있습니다.', 'success');
       else T.toast(T.errorText(r), 'error');
       this.showDetail(d.document_id);
+    },
+
+    // ================================================= P6 정정 배너 (DOC-SC-04)
+    correctionBanner(d, c, effective) {
+      const eff = effective
+        ? `새로 승인될 때까지 유효한 승인본은 <b>${effective.attempt}회차</b>(${T.fmtDateTime(effective.closed_at)} 승인)입니다.
+           <button class="btn btn-secondary btn-sm" id="btnEffective" data-request="${effective.request_id}">유효 승인본 보기</button>`
+        : '<span class="te-hint">유효 승인본을 읽지 못했습니다.</span>';
+      const cancel = d.status === 'correcting'
+        ? `<button class="btn btn-secondary btn-sm" id="btnFixCancel" ${api.staffId && c.cancellable ? '' : 'disabled'}
+             title="${c.cancellable ? (api.staffId ? '정정을 취소하고 승인 상태로 되돌립니다' : '현재 사용자를 선택하세요') : '수정한 내용이 있어 취소할 수 없습니다. 작성완료 후 재상신하세요'}">정정 취소</button>`
+        : '';
+      return `<div class="te-fix-banner" id="teFixBanner">
+        <div class="te-fix-head">⚠ 정정 중입니다</div>
+        <div>${T.fmtDateTime(c.started_at)} staff ${esc(c.started_by)} · 사유: ${esc(c.reason)}</div>
+        <div>${eff}</div>
+        ${cancel ? `<div class="te-fix-actions">${c.cancellable ? '' : '<span class="te-hint">수정한 내용이 있어 취소할 수 없습니다 — 작성완료 후 재상신하세요</span>'}${cancel}</div>` : ''}
+      </div>`;
+    },
+
+    // 정정 시작·취소 오류 공통: 다시 열기 안내(DOC-SC-06과 같은 방식)
+    async reopenAfter(title, message, d) {
+      const again = await T.modal({ title, body: `<p>${message}</p>`, buttons: [{ label: '닫기', value: false }, { label: '최신 내용으로 다시 열기', value: true, cls: 'btn-primary' }] });
+      if (again) this.showDetail(d.document_id);
+    },
+
+    // ================================================= WF-SC-08 정정 시작 모달
+    openCorrection(d, effective) {
+      const wrap = document.createElement('div');
+      wrap.className = 'te-modal-wrap';
+      wrap.innerHTML = `
+        <div class="te-modal" role="dialog" aria-modal="true" id="teFixModal">
+          <div class="modal-header"><div class="modal-title">정정 시작 · 문서 #${d.document_id} (v${d.version})</div></div>
+          <div class="te-modal-body">
+            <p>승인된 문서를 다시 열어 고칩니다.</p>
+            <ul class="te-pending">
+              <li>새로 승인될 때까지 지금 승인본${effective ? `(${effective.attempt}회차)` : ''}이 유효합니다.</li>
+              <li>고친 뒤 작성완료 → 결재 상신을 다시 해야 합니다.</li>
+            </ul>
+            <div id="fixTop"></div>
+            <label class="form-label" for="fixReason" style="margin-top:.6rem">정정 사유 *</label>
+            <input class="form-control" id="fixReason" maxlength="${REASON_MAX + 50}" placeholder="예: 외포장 판정 오기(부적합 → 적합)">
+            <div class="te-counter" id="fixCount">0/${REASON_MAX}</div>
+            <div class="te-error-text" id="fixError"></div>
+          </div>
+          <div class="te-modal-footer">
+            <button class="btn btn-secondary" id="fixClose">취소</button>
+            <button class="btn btn-warning" id="fixGo" disabled>정정 시작</button>
+          </div>
+        </div>`;
+      document.body.appendChild(wrap);
+      const $ = (sel) => wrap.querySelector(sel);
+      const close = () => wrap.remove();
+      const input = $('#fixReason');
+      const check = () => {
+        const n = input.value.trim().length;
+        $('#fixCount').textContent = `${n}/${REASON_MAX}`;
+        $('#fixCount').classList.toggle('te-error-text', n > REASON_MAX);
+        $('#fixError').textContent = n === 0 ? '정정 사유를 입력하세요' : (n > REASON_MAX ? `${REASON_MAX}자 이하로 입력하세요` : '');
+        $('#fixGo').disabled = !api.staffId || n === 0 || n > REASON_MAX;
+      };
+      input.addEventListener('input', check);
+      $('#fixClose').addEventListener('click', close);
+      $('#fixGo').addEventListener('click', async () => {
+        $('#fixGo').disabled = true;
+        $('#fixGo').textContent = '처리 중…';
+        const r = await api.post(`documents/${d.document_id}/correction`, { expected_version: d.version, reason: input.value.trim() });
+        if (r.ok) { close(); T.toast('정정을 시작했습니다. 이제 수정할 수 있습니다.', 'success'); this.showDetail(d.document_id); return; }
+        $('#fixGo').textContent = '정정 시작';
+        const data = r.data || {};
+        if (data.code === 'VALIDATION_ERROR') {
+          $('#fixError').textContent = (data.details || [])[0]?.message || data.message;
+          check();
+          $('#fixGo').disabled = false;
+          return;
+        }
+        // 409(다른 사람이 먼저 정정 시작·승인 아님·버전) → 모달 안 [코드] 메시지 + [다시 열기]
+        $('#fixTop').innerHTML = `<div class="te-error-box">${esc(T.errorText(r))} <button class="btn btn-secondary btn-sm" id="fixReload">다시 열기</button></div>`;
+        $('#fixReload').addEventListener('click', () => { close(); this.showDetail(d.document_id); });
+      });
+      input.focus();
+    },
+
+    // ================================================= WF-SC-10 정정 취소 확인 (D-075)
+    async cancelCorrection(d, effective) {
+      const ok = await T.modal({
+        title: `정정 취소 · 문서 #${d.document_id} (v${d.version})`,
+        body: `<p>정정을 취소하고 승인 상태로 되돌립니다.</p>
+          <ul class="te-pending"><li>정정 시작 뒤 고친 내용이 없어 지금 승인본${effective ? `(${effective.attempt}회차)` : ''}이 그대로 유효합니다.</li>
+          <li>정정 기록은 "취소됨"으로 남습니다(사유 이력 보존).</li></ul>`,
+        buttons: [{ label: '닫기', value: false }, { label: '정정 취소', value: true, cls: 'btn-danger' }],
+      });
+      if (!ok) return;
+      const r = await api.post(`documents/${d.document_id}/correction/cancel`, { expected_version: d.version });
+      if (r.ok) { T.toast('정정을 취소했습니다. 승인 상태로 돌아갔습니다.', 'success'); this.showDetail(d.document_id); return; }
+      const code = r.data && r.data.code;
+      const message = code === 'CORRECTION_HAS_CHANGES'
+        ? '수정한 내용이 있어 취소할 수 없습니다. 작성완료 후 재상신하세요.'
+        : esc(T.errorText(r));
+      await this.reopenAfter('정정을 취소할 수 없습니다', `${code === 'CORRECTION_HAS_CHANGES' ? `[${code}] ` : ''}${message}`, d);
     },
 
     // ================================================= DOC-SC-05 삭제 확인

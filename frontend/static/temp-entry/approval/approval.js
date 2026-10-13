@@ -3,6 +3,7 @@
 // 화면: WF-SC-01 문서 상세 결재 영역 · 02 상신 모달 · 03 결재함 · 04 결재 요청 상세
 //       05 승인 모달 · 06 반려 모달 · 07 상신 충돌 모달
 // 설계: dev-notes/document-workflow/s1-screens.md, API: s2-spec.md 2장
+// P6: 유효 승인본·대체됨·정정 상신 꼬리표·⤷ 정정 줄(p6-s1-screens WF-SC-01·03·04, API p6-s2-spec A4~A6)
 // 결재는 병렬이다. 칸 번호는 표시 순서일 뿐이므로 "차례" 같은 순서 표현을 쓰지 않는다.
 // =============================================
 (function () {
@@ -36,6 +37,24 @@
   }
   const approvedCount = (req) => req.slots.filter((s) => s.state === 'approved').length;
   const pendingCount = (req) => req.slots.filter((s) => s.state === 'pending').length;
+  // P6 회차 꼬리표(계산 값 — 저장하지 않음, P6-S2-Q2)
+  const effectiveChip = (req) => (req.effective ? ' <span class="badge te-chip-effective">유효 승인본</span>' : '');
+  const supersededChip = (req) => (req.superseded_by ? ` <span class="badge te-chip-superseded">대체됨(${req.superseded_by}회차)</span>` : '');
+  const correctionChip = (isCorrection) => (isCorrection ? ' <span class="badge te-chip-fix">정정 상신</span>' : '');
+  const reqChips = (req) => `${correctionChip(req.is_correction)}${effectiveChip(req)}${supersededChip(req)}`;
+  // 정정 시작 기록 → 그 시점 직전 승인 회차 아래 ⤷ 줄(여러 번 정정하면 여러 줄)
+  function correctionLines(items, corrections) {
+    const out = {};
+    (corrections || []).forEach((c) => {
+      const base = items.filter((x) => x.status === 'approved' && x.closed_at && x.closed_at <= c.started_at)
+        .sort((a, b) => b.attempt - a.attempt)[0];
+      if (!base) return;
+      const end = c.outcome === 'cancelled' ? ` · 취소됨(${T.fmtDateTime(c.closed_at)})` : (c.outcome === 'approved' ? ` · 승인으로 닫힘(${T.fmtDateTime(c.closed_at)})` : ' · 진행 중');
+      (out[base.request_id] = out[base.request_id] || []).push(
+        `<li class="te-fix-line" data-fix-line="${c.correction_id}">⤷ 정정 시작 ${T.fmtDateTime(c.started_at)} staff ${esc(c.started_by)} "${esc(c.reason)}"${end}</li>`);
+    });
+    return out;
+  }
   const slotName = (s) => `${s.slot_no}번 칸${s.label ? ` · ${esc(s.label)}` : ''}`;
 
   function slotTable(req) {
@@ -121,11 +140,19 @@
       const items = r.data.items;
       const latest = items[0] || null;
       // P4: 상신은 작성완료(completed)에서만. 반려 뒤 수정·작성완료·작성 재개를 거치면 최신 회차는 rejected로 남는다.
+      // P6: 정정 중·정정 작성완료의 최신 회차 = 유효 승인 회차 또는 반려된 정정 회차
+      const fixing = !!d.correction;
       const allowed = {
-        draft: [null, 'rejected'], completed: [null, 'rejected'],
+        draft: [null, 'rejected'], completed: fixing ? ['approved', 'rejected'] : [null, 'rejected'],
         submitted: ['in_progress'], approved: ['approved'], rejected: ['rejected'],
+        correcting: ['approved', 'rejected'],
       }[d.status] || [];
-      const mismatch = !allowed.includes(latest ? latest.status : null);
+      const effective = items.find((x) => x.effective) || null;
+      const lines = correctionLines(items, d.corrections);
+      const linesOf = (req) => (lines[req.request_id] ? `<ul class="te-fix-lines">${lines[req.request_id].join('')}</ul>` : '');
+      // 정정 진행 중의 반려 회차는 정정 회차여야 한다(일반 회차 반려 + 정정 중은 어긋남 — P6 S5 검토 B1)
+      const mismatch = !allowed.includes(latest ? latest.status : null)
+        || (fixing && latest && latest.status === 'rejected' && !latest.is_correction);
       const canSubmit = d.status === 'completed';
       const notReady = '<div class="te-hint">작성완료한 뒤 상신할 수 있습니다.</div>';
       let head = '';
@@ -141,15 +168,22 @@
           : `<p class="te-hint">아직 상신하지 않았습니다.</p>${notReady}`;
         if (canSubmit) action = `<button class="btn btn-primary btn-sm" id="apSubmit" ${disabled}>결재 상신</button>`;
       } else {
-        head = `<span class="te-hint">${latest.attempt}회차 ·</span> ${badge(REQUEST, latest.status)}`;
-        body = `<div class="te-meta">상신 staff ${latest.requested_by} · ${T.fmtDateTime(latest.requested_at)} · 문서 버전 v${latest.document_version}</div>${slotTable(latest)}`;
+        head = `<span class="te-hint">${latest.attempt}회차 ·</span> ${badge(REQUEST, latest.status)}${reqChips(latest)}`;
+        const effLine = fixing && effective && effective.request_id !== latest.request_id
+          ? `<div class="te-meta" id="teEffectiveLine">유효 승인본: <b>${effective.attempt}회차</b> (${T.fmtDateTime(effective.closed_at)} 승인) <button class="btn btn-secondary btn-sm" data-open-request="${effective.request_id}">보기</button></div>` : '';
+        body = `<div class="te-meta">상신 staff ${latest.requested_by} · ${T.fmtDateTime(latest.requested_at)} · 문서 버전 v${latest.document_version}</div>${effLine}
+          ${latest.is_correction && latest.correction_reason ? `<div class="te-hint">정정 사유: ${esc(latest.correction_reason)}</div>` : ''}${slotTable(latest)}`;
+        if (fixing && latest.status !== 'in_progress' && d.status !== 'completed') {
+          body += '<div class="te-status-note">정정 중입니다. 작성완료한 뒤 상신하세요.</div>';
+        }
         if (latest.status === 'in_progress') {
           body += `<div class="te-hint te-progress">진행 ${approvedCount(latest)}/${latest.slots.length} 승인</div>${myLine(latest)}`;
         } else if (latest.status === 'approved') {
-          body += `<div class="te-status-note te-ok-note">결재가 끝났습니다 (${T.fmtDateTime(latest.closed_at)})</div>`;
+          body += `<div class="te-status-note te-ok-note">결재가 끝났습니다 (${T.fmtDateTime(latest.closed_at)})</div>${linesOf(latest)}`;
+          if (fixing && canSubmit) action = `<button class="btn btn-primary btn-sm" id="apSubmit" ${disabled}>결재 상신</button>`;
         } else {
           const rej = latest.slots.find((s) => s.state === 'rejected');
-          body += `<div class="te-reject-reason">반려 사유 — ${rej ? `${slotName(rej)} staff ${rej.approver_id}: ${esc(rej.comment)}` : '-'}</div>
+          body += `<div class="te-reject-reason">${latest.is_correction && d.status === 'correcting' ? '반려 — 정정 중으로 돌아갔습니다 · ' : ''}반려 사유 — ${rej ? `${slotName(rej)} staff ${rej.approver_id}: ${esc(rej.comment)}` : '-'}</div>
             <div class="te-hint">${canSubmit ? '작성완료된 내용으로 재상신할 수 있습니다.' : '필요하면 수정하고, 작성완료한 뒤 재상신하세요.'}</div>`;
           if (canSubmit) action = `<button class="btn btn-primary btn-sm" id="apSubmit" ${disabled}>재상신</button>`;
         }
@@ -159,8 +193,8 @@
         <details class="te-history"><summary>이전 회차 (${older.length})</summary>
           <ul>${older.map((h) => {
             const rej = h.slots.find((s) => s.state === 'rejected');
-            return `<li>${h.attempt}회차 · ${badge(REQUEST, h.status)} · ${T.fmtDateTime(h.closed_at || h.requested_at)}${rej ? ` · staff ${rej.approver_id} "${esc(rej.comment)}"` : ''}
-              <button class="btn btn-secondary btn-sm" data-open-request="${h.request_id}">회차 보기</button></li>`;
+            return `<li data-history="${h.attempt}">${h.attempt}회차 · ${badge(REQUEST, h.status)}${reqChips(h)} · ${T.fmtDateTime(h.closed_at || h.requested_at)}${rej ? ` · staff ${rej.approver_id} "${esc(rej.comment)}"` : ''}
+              <button class="btn btn-secondary btn-sm" data-open-request="${h.request_id}">회차 보기</button>${linesOf(h)}</li>`;
           }).join('')}</ul></details>` : '';
       const current = latest && !mismatch ? `<button class="btn btn-secondary btn-sm" data-open-request="${latest.request_id}">회차 보기</button>` : '';
       el.innerHTML = `
@@ -444,11 +478,12 @@
             ${done ? '<th>내 처리</th><th>처리 일시</th><th>회차 결과</th>' : '<th>진행</th>'}</tr></thead>
           <tbody>${items.map((x) => `
             <tr class="te-row-link" data-request="${x.request.request_id}">
-              <td>#${x.request.document_id}</td><td>${esc(names[x.request.template_id])}</td><td>${esc(x.request.subject || '-')}</td>
+              <td>#${x.request.document_id}${correctionChip(x.request.is_correction)}</td><td>${esc(names[x.request.template_id])}</td>
+              <td>${esc(x.request.subject || '-')}${x.request.is_correction && x.request.correction_reason ? `<div class="te-hint">정정 사유: ${esc(x.request.correction_reason)}</div>` : ''}</td>
               <td>${x.request.work_date}</td><td>${x.request.attempt}</td>
               <td>staff ${x.request.requested_by}<div class="te-hint">${T.fmtDateTime(x.request.requested_at)}</div></td>
               <td>${x.slot_no}${x.label ? ` · ${esc(x.label)}` : ''}</td>
-              ${done ? `<td>${badge(SLOT, x.state)}</td><td>${T.fmtDateTime(x.decided_at)}</td><td>${badge(REQUEST, x.request.status)}</td>`
+              ${done ? `<td>${badge(SLOT, x.state)}</td><td>${T.fmtDateTime(x.decided_at)}</td><td>${badge(REQUEST, x.request.status)}${x.request.superseded ? ' <span class="badge te-chip-superseded">대체됨</span>' : ''}</td>`
                 : `<td>${x.request.progress.approved}/${x.request.progress.total}</td>`}
             </tr>`).join('')}</tbody>
         </table>
@@ -490,13 +525,14 @@
           ${T.topBar(`결재 요청 #${req.request_id} · 문서 #${req.document_id} · ${req.attempt}회차`, '결재 요청 상세 — 상신 당시 문서 내용(스냅샷)', req.document_id)}
           <div class="card">
             <div class="card-header">
-              <div class="card-title">${badge(REQUEST, req.status)}</div>
+              <div class="card-title">${badge(REQUEST, req.status)}${reqChips(req)}</div>
               <div class="page-actions">
                 <button class="btn btn-secondary btn-sm" id="rqInbox">결재함으로</button>
                 <button class="btn btn-secondary btn-sm" id="rqDoc">문서 열기</button>
               </div>
             </div>
             ${changed ? `<div class="te-status-note">현재 문서는 이 회차 이후 수정되었습니다 (v${req.document_version} → v${current.data.version}). <button class="btn btn-secondary btn-sm" id="rqDoc2">문서 열기</button></div>` : ''}
+            ${this.requestBanner(req, current.ok ? current.data : null)}
             ${!current.ok && current.status === 404 ? '<div class="te-status-note">현재 문서를 찾을 수 없습니다(삭제되었을 수 있습니다). 아래는 상신 당시 내용입니다.</div>' : ''}
             <div class="te-meta">
               <span>${esc(template.name)} v${esc(template.version)}</span><span>대상 <b>${esc(req.subject || '-')}</b></span><span>작업일 <b>${req.work_date}</b></span>
@@ -524,6 +560,24 @@
       root.querySelector('#rqDoc').addEventListener('click', origin.from === 'doc' ? back : openDoc);
       root.querySelector('#rqDoc2')?.addEventListener('click', origin.from === 'doc' ? back : openDoc);
       bindMyLine(root, req, () => this.showRequest(requestId, origin));
+      root.querySelector('#rqEffective')?.addEventListener('click', async () => {
+        const h = await api.get(`documents/${req.document_id}/approval-requests`);
+        const eff = h.ok ? h.data.items.find((x) => x.effective) : null;
+        if (eff) this.showRequest(eff.request_id, origin); else T.toast(h.ok ? '유효 승인본이 없습니다.' : T.errorText(h), 'error');
+      });
+    },
+
+    // WF-SC-04 P6 배너: 대체됨 / 유효 승인본(정정 진행 중) / 정정 상신 사유
+    requestBanner(req, doc) {
+      const out = [];
+      if (req.superseded_by) {
+        out.push(`<div class="te-status-note" id="rqSuperseded">ⓘ 이 승인본은 ${req.superseded_by}회차 승인(${T.fmtDateTime(req.superseded_at)})으로 대체되었습니다.
+          <button class="btn btn-secondary btn-sm" id="rqEffective">유효 승인본 보기</button></div>`);
+      } else if (req.effective && doc && doc.correction) {
+        out.push(`<div class="te-fix-banner" id="rqEffectiveNote">지금 유효한 승인본입니다. 문서는 정정 중입니다(사유: ${esc(doc.correction.reason)}).</div>`);
+      }
+      if (req.is_correction) out.push(`<div class="te-meta" id="rqFixReason">정정 사유: ${esc(req.correction_reason || '-')}</div>`);
+      return out.join('');
     },
   };
 
