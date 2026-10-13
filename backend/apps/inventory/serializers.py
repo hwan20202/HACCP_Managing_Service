@@ -299,6 +299,15 @@ def bom(obj, lines):
                 },
                 "unit": line.component_item.base_unit,
                 "quantity": qty(line.quantity_e6),
+                "alternatives": [
+                    {
+                        "id": alternative.item_id,
+                        "item_code": alternative.item.item_code,
+                        "name": alternative.item.name,
+                        "unit": alternative.item.base_unit,
+                    }
+                    for alternative in line.alternatives.select_related("item").order_by("id")
+                ],
             }
             for line in lines
         ],

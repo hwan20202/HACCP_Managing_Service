@@ -389,7 +389,7 @@ class ProductionApiTests(ApiTestCase):
         ).json()
         self.assertEqual(
             output["outputs"][0]["lot_number"],
-            f"BGH{self.today[2:4]}{self.today[5:7]}{self.today[8:10]}",
+            f"{self.today[2:4]}{self.today[5:7]}{self.today[8:10]}A",
         )
         self.assertEqual(output["outputs"][0]["lot_quantity"], "2000")
         self.assertEqual(

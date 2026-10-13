@@ -1,8 +1,8 @@
 """LOT number generation from lot_number_rules + lot_number_sequences.
 
-Default rules (BOM v4 mentor scheme, adopted 10/12 — see docs/inventory-decisions.md)
+Default rules (반제품 v6.1 adopted 10/13; other types retain v4 — see docs/inventory-decisions.md)
     INCOMING (원료·포장재)   {short_code}{date:yyMMdd}{seq:-N}    AHN261005, AHN261005-2
-    PRODUCED (반제품, 기본)  {short_code}{date:yyMMdd}{seq:-N}    BNY261007
+    PRODUCED SEMI           {date:yyMMdd}{seq:A}               261013A (생산 순번)
     PRODUCED FINISHED        {date:yyMMdd}{shift}{seq:-N}         261011A  (완제품코드와 함께 읽음)
 
 Pattern tokens

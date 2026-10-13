@@ -446,7 +446,7 @@ class LotNumberTests(TestCase):
 
     def test_semi_finished_lot_is_short_code_and_manufacturing_date(self):
         semi = self.item_of("SEMI", "3000019", "BTS")
-        self.assertEqual(self.draw(semi, kind=LotKind.PRODUCED), "BTS261009")
+        self.assertEqual(self.draw(semi, kind=LotKind.PRODUCED), "261009A")
 
     def test_finished_lot_is_date_and_shift_per_product(self):
         first = self.item_of("FINISHED", "4000019")
@@ -494,7 +494,7 @@ class MasterImportTests(TestCase):
         call_command("seed_master", "--sample", stdout=out)
         self.assertIn("staff: created 3, updated 0", out.getvalue())
         self.assertIn("created default INCOMING rule", out.getvalue())
-        self.assertIn("created default PRODUCED rule", out.getvalue())
+        self.assertIn("created default PRODUCED SEMI rule", out.getvalue())
         self.assertIn("created default PRODUCED FINISHED rule", out.getvalue())
         call_command("seed_master", "--sample", stdout=(out := StringIO()))
         self.assertIn("items: created 0, updated 5", out.getvalue())

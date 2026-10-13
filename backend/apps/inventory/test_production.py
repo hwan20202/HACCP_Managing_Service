@@ -16,6 +16,7 @@ from .models import (
     BatchStatus,
     Bom,
     BomLine,
+    BomLineAlternative,
     Inventory,
     Item,
     LotKind,
@@ -119,7 +120,7 @@ class BatchFlowTests(ProductionTestCase):
         self.use(mfg, raw_lot, "40", "u1")
         semi_lot = self.output(mfg, "10000", "o1").lot
         complete_batch(batch_id=mfg.pk, staff_id=self.staff.pk)
-        self.assertEqual(semi_lot.lot_number, f"BGH{day}")
+        self.assertEqual(semi_lot.lot_number, f"{day}A")
         self.assertEqual(semi_lot.lot_kind, LotKind.PRODUCED)
         self.assertEqual(semi_lot.status, LotStatus.AVAILABLE)
         self.assertEqual(semi_lot.expiration_date, self.today + datetime.timedelta(days=365))
@@ -159,7 +160,7 @@ class BatchFlowTests(ProductionTestCase):
         batch = self.batch(self.semi, manufactured_date=made)
         self.use(batch, raw_lot, "5", "u1", occurred_at=made)
         lot = self.output(batch, "500", "o1", occurred_at=made).lot
-        self.assertEqual(lot.lot_number, f"BGH{made:%y%m%d}")
+        self.assertEqual(lot.lot_number, f"{made:%y%m%d}A")
         with patch("apps.inventory.document_bridge.batch_started") as hook:
             done = complete_batch(batch_id=batch.pk, staff_id=self.staff.pk)
         hook.assert_called_once_with(batch_id=batch.pk, staff_id=self.staff.pk)
@@ -291,3 +292,50 @@ class FefoTests(ProductionTestCase):
         everything = fefo_candidates(item_id=self.raw.pk, quantity="1000")
         self.assertEqual([lot.pk for lot, _, _ in everything], [sooner.pk, later.pk, no_date.pk])
         self.assertEqual(sum(take for _, take, _ in everything), to_e6(55))
+
+
+class AlternativeAndSemiLotTests(ProductionTestCase):
+    def test_semi_sequence_without_abbreviation_or_shift(self):
+        self.semi.short_code = None
+        self.semi.save(update_fields=["short_code"])
+        first = self.output(self.batch(self.semi, shift="B"), "1", "a").lot
+        second = self.output(self.batch(self.semi, shift="A"), "1", "b").lot
+        self.assertEqual(first.lot_number, f"{self.today:%y%m%d}A")
+        self.assertEqual(second.lot_number, f"{self.today:%y%m%d}B")
+
+    def test_alternative_conversion_and_correction(self):
+        alternate = Item.objects.create(
+            item_code="1000099",
+            item_type_id="RAW",
+            name="가상 대체 원료",
+            short_code="AXX",
+            base_unit="g",
+        )
+        bom = Bom.objects.create(
+            item=self.semi, version=1, base_quantity_e6=to_e6(1000), effective_from=self.today
+        )
+        line = BomLine.objects.create(
+            bom=bom, line_no=1, component_item=self.raw, quantity_e6=to_e6(1)
+        )
+        BomLineAlternative.objects.create(bom_line=line, item=alternate)
+        batch = self.batch(self.semi)
+        lot = self.receive(alternate, "1000", "alt")
+        usage = self.use(batch, lot, "500", "use-alt", bom_line_id=line.pk)
+        self.output(batch, "1000", "out-alt")
+        self.assertEqual(
+            batch_summary(batch.pk)["bom_check"]["lines"][0]["actual_e6"], to_e6("0.5")
+        )
+        correct_movement(
+            movement_id=usage.stock_movement_id,
+            quantity="100",
+            staff_id=self.staff.pk,
+            reason="투입 정정",
+            idempotency_key="correct-alt",
+        )
+        self.assertEqual(
+            batch_summary(batch.pk)["bom_check"]["lines"][0]["actual_e6"], to_e6("0.4")
+        )
+        outside = self.receive(self.pouch, "10", "outside")
+        with self.assertRaises(InventoryError):
+            self.use(batch, outside, "1", "reject-alt", bom_line_id=line.pk)
+        self.assert_consistent()

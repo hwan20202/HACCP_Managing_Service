@@ -32,6 +32,7 @@ from .models import (
     BatchStatus,
     Bom,
     BomLine,
+    BomLineAlternative,
     Item,
     Lot,
     LotKind,
@@ -280,6 +281,19 @@ def cancel_batch(*, batch_id, staff_id, reason):
 # ---------------------------------------------------------------------------
 
 
+def _component_quantity(quantity_e6, source_unit, target_unit):
+    """Convert mass units exactly; other units must match the BOM component unit."""
+    if source_unit == target_unit:
+        return quantity_e6
+    factors = {"kg": 1000, "g": 1}
+    if source_unit not in factors or target_unit not in factors:
+        raise InventoryError("대체 원료와 BOM 구성 품목의 단위를 환산할 수 없습니다.")
+    value, remainder = divmod(quantity_e6 * factors[source_unit], factors[target_unit])
+    if remainder:
+        raise InventoryError("대체 원료 환산 수량은 기준단위 소수점 6자리 이내여야 합니다.")
+    return value
+
+
 def add_usage(
     *,
     batch_id,
@@ -328,8 +342,14 @@ def add_usage(
             bom_line = BomLine.objects.filter(pk=bom_line_id).first()
             if bom_line is None or bom_line.bom_id != batch.bom_id:
                 raise InventoryError("배치의 BOM 구성이 아닙니다.")
-            if bom_line.component_item_id != lot.item_id:
+            if (
+                bom_line.component_item_id != lot.item_id
+                and not BomLineAlternative.objects.filter(
+                    bom_line=bom_line, item_id=lot.item_id
+                ).exists()
+            ):
                 raise InventoryError("BOM 구성 품목과 투입 LOT의 품목이 다릅니다.")
+            _component_quantity(quantity_e6, lot.item.base_unit, bom_line.component_item.base_unit)
         _check_outflow(lot, quantity_e6, when)
         movement = StockMovement.objects.create(
             lot=lot,
@@ -361,7 +381,7 @@ def add_output(
 ):
     """Create an output LOT for the batch item and put the quantity in stock.
 
-    LOT number: the PRODUCED rule (반제품 약어 + 제조일, 완제품 제조일 + 근무조) unless one is
+    LOT number: the PRODUCED rule (반제품 제조일 + 생산 순번, 완제품 제조일 + 근무조) unless one is
     given. The base date is the batch's manufacturing date (set from the output time if empty).
     Expiration: given, else manufacturing date + the item's shelf life (shelf_life.py), else none.
     The new LOT is AVAILABLE (no product inspection flow yet).
@@ -502,21 +522,35 @@ def _bom_check(batch, usages, outputs):
     """BOM standard vs actual per component, scaled to the output (or the plan if no output).
 
     Returns None without a BOM. Rows: line, standard_e6, actual_e6 (net usage of LOTs of the
-    component item, whichever BOM line they were recorded against).
+    primary component or an explicitly linked allowed alternative (converted to its base unit)).
     """
     if not batch.bom_id:
         return None
     produced = sum(row["net_quantity_e6"] for row in outputs)
     basis = produced if produced > 0 else batch.planned_quantity_e6
     used = {}
-    for row in usages:
-        used[row["item_id"]] = used.get(row["item_id"], 0) + row["net_quantity_e6"]
+    alternatives = {}
+    for alternative in BomLineAlternative.objects.filter(bom_line__bom_id=batch.bom_id):
+        alternatives.setdefault(alternative.bom_line_id, set()).add(alternative.item_id)
     lines = standard_requirements(bom_id=batch.bom_id, quantity_e6=basis) if basis else []
+    for row in usages:
+        for line, _ in lines:
+            # Explicit links own the quantity; unlinked primary inputs retain legacy matching.
+            linked = row["bom_line_id"] == line.pk
+            primary = row["bom_line_id"] is None and row["item_id"] == line.component_item_id
+            allowed = row["item_id"] == line.component_item_id or row[
+                "item_id"
+            ] in alternatives.get(line.pk, set())
+            if primary or (linked and allowed):
+                amount = _component_quantity(
+                    row["net_quantity_e6"], row["item"].base_unit, line.component_item.base_unit
+                )
+                used[line.pk] = used.get(line.pk, 0) + amount
     return {
         "basis_e6": basis,
         "basis": "output" if produced > 0 else "plan",
         "lines": [
-            {"line": line, "standard_e6": need, "actual_e6": used.get(line.component_item_id, 0)}
+            {"line": line, "standard_e6": need, "actual_e6": used.get(line.pk, 0)}
             for line, need in lines
         ],
     }

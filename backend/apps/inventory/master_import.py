@@ -25,7 +25,7 @@ from .quantity import to_e6
 
 # BOM v4 멘토안 (10/12 채택). 같은 날 같은 품목이 또 생기면 -2, -3 (가정)
 DEFAULT_INCOMING_PATTERN = "{short_code}{date:yyMMdd}{seq:-N}"  # LOT 약어 + 입고일
-DEFAULT_PRODUCED_PATTERN = "{short_code}{date:yyMMdd}{seq:-N}"  # LOT 약어 + 제조일 (반제품)
+DEFAULT_PRODUCED_PATTERN = "{date:yyMMdd}{seq:A}"  # 제조일 + 품목별 생산 순번 (반제품)
 DEFAULT_FINISHED_PATTERN = "{date:yyMMdd}{shift}{seq:-N}"  # 제조일 + 근무조 (완제품)
 DEFAULT_RULE_EFFECTIVE_FROM = datetime.date(2026, 1, 1)
 
@@ -192,7 +192,7 @@ def ensure_default_lot_rules():
     """Create each default rule whose (kind, item type) has no active rule. Returns new rules."""
     defaults = [
         (LotKind.INCOMING, None, DEFAULT_INCOMING_PATTERN, "기본 입고 LOT 규칙 (seed_master 생성)"),
-        (LotKind.PRODUCED, None, DEFAULT_PRODUCED_PATTERN, "기본 생산 LOT 규칙 (seed_master 생성)"),
+        (LotKind.PRODUCED, "SEMI", DEFAULT_PRODUCED_PATTERN, "반제품 LOT: 제조일 + 생산 순번"),
         (
             LotKind.PRODUCED,
             "FINISHED",

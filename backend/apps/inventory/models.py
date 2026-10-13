@@ -436,6 +436,15 @@ class BomLine(models.Model):
         db_table = "bom_lines"
 
 
+class BomLineAlternative(models.Model):
+    bom_line = models.ForeignKey(BomLine, models.PROTECT, related_name="alternatives")
+    item = models.ForeignKey(Item, models.PROTECT, related_name="bom_alternatives")
+
+    class Meta:
+        managed = False
+        db_table = "bom_line_alternatives"
+
+
 class ProcessType(models.TextChoices):
     MANUFACTURE = "MANUFACTURE", "제조"
     PACKAGING = "PACKAGING", "포장"
