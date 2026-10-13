@@ -20,9 +20,11 @@
   const mmdd = (iso) => (iso || '').slice(5, 10).replace('-', '');
 
   // SC-04 결과 문구: D03도 D01·D02와 같은 "새로 만듦 / 이미 있음"(P6a-S1 REQ-SC-04).
-  // 육안검사를 함께 보냈으면(inspection_applied 있음) 검사 값 채움 여부를 붙인다(P6a-S1 3.3)
-  const resultText = (item) => {
-    if (item.type_code === 'D03' && typeof item.inspection_applied === 'boolean') {
+  // 육안검사를 함께 보냈을 때만(sentInspection) 검사 값 채움 여부를 붙인다(P6a-S1 3.3).
+  // 서버는 inspection을 보내지 않아도 D03에 inspection_applied: false를 주므로 그 값만으로 고르지 않는다
+  // (P7 S6 A1 실패 — 새로 만든 D03이 "이미 있음"으로 보임, ISS-024)
+  const resultText = (item, sentInspection = false) => {
+    if (item.type_code === 'D03' && sentInspection && typeof item.inspection_applied === 'boolean') {
       return item.inspection_applied ? 'D03 새로 만듦 · 검사 값 채움' : 'D03 이미 있음 — 검사 값 채우지 않음';
     }
     return RESULT[item.result] || item.result;
@@ -222,7 +224,7 @@
       const rows = docs.length ? docs.map((d) => `
         <tr data-doc="${d.document_id}">
           <td>#${d.document_id}</td><td>${formName(d.type_code)}</td><td class="mono">${esc(d.record_key)}</td>
-          <td class="te-req-res-${esc(d.result)}">${esc(resultText(d))}</td>
+          <td class="te-req-res-${esc(d.result)}">${esc(resultText(d, r.sentInspection))}</td>
           <td><button class="btn btn-secondary btn-sm" data-open-doc="${d.document_id}">문서 열기</button></td>
         </tr>`).join('') : '<tr><td colspan="5" class="te-hint">요구되는 문서가 없습니다(예: 포장 배치는 CCP 공정 없음).</td></tr>';
       return `<div class="te-req-result" id="teReqResult">${head}
@@ -235,14 +237,14 @@
       this.root.querySelectorAll('[data-open-doc]').forEach((b) => b.addEventListener('click', () => T.open('temp-doc', { documentId: Number(b.dataset.openDoc) })));
     },
 
-    async remember(call, record, rolledBack) {
+    async remember(call, record, rolledBack, sentInspection = false) {
       const body = record.data || {};
       const result = body.result || body;
       this.lastResult = {
         call, record, ok: record.ok, ms: record.ms, traceId: record.traceId,
         at: new Date().toTimeString().slice(0, 8),
         documents: record.ok ? (result.documents || []) : [],
-        rolledBack,
+        rolledBack, sentInspection,
       };
       if (record.ok) {
         // 새로 만든 LOT·배치가 보이도록 그 날짜로 이동
@@ -304,7 +306,7 @@
           const record = await api.post(`${DEV}/lots`, body);
           if (record.status === 400) { showFieldErrors(wrap, record); return true; }
           await this.remember(`require_for_lot(staff ${api.staffId}, lot ${record.ok ? record.data.lot.lot_id : '?'}${body.inspection ? ', inspection' : ''})`, record,
-            'LOT·문서 모두 만들어지지 않았습니다(롤백).');
+            'LOT·문서 모두 만들어지지 않았습니다(롤백).', !!body.inspection);
           return false;
         },
       });

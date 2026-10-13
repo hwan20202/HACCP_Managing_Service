@@ -200,10 +200,12 @@
 
   // 결과 실패 문구(WF-SC-13): 코드는 그대로, 화면이 code + details[0].code(상태)로 고른다(p7-s2-spec 5.3).
   // 그 밖의 코드는 한 건 처리 때와 같은 문구(P3 WF-SC-02·05).
+  // ISS-022(P7 S6 D9): REQUEST_CLOSED는 "회차가 끝남"(반려 또는 결재 완료) — 반려로 단정하지 않는다(한 건·일괄 같은 문구)
+  const CLOSED_TEXT = '이 회차는 이미 끝났습니다(반려 또는 결재 완료). 결재 영역에서 현재 상태를 확인하세요.';
   function failureText(action, error) {
     const code = error.code;
     // P7-S5-Q2 b: 일괄 승인에서는 다른 화면·다른 사람이 먼저 처리해 회차가 승인으로 끝난 경우에도 REQUEST_CLOSED가 온다
-    if (code === 'REQUEST_CLOSED' && action === 'approve') return '이 회차는 이미 끝났습니다(반려 또는 결재 완료). 문서를 열어 확인하세요.';
+    if (code === 'REQUEST_CLOSED' && action === 'approve') return '이 회차는 이미 끝났습니다(반려 또는 결재 완료). 문서를 열어 확인하세요.'; // 일괄 결과(P7-S5-Q2 b) — [문서 열기]가 함께 보임
     const sub = error.details && error.details[0] && error.details[0].code;
     if (code === 'DOCUMENT_LOCKED' && action === 'submit') {
       return ['draft', 'rejected', 'correcting'].includes(sub) ? '작성완료 상태가 아닙니다. 작성완료 후 상신하세요.' : '이미 결재 진행 중이거나 승인된 문서입니다.';
@@ -217,7 +219,7 @@
       OPEN_REQUEST_EXISTS: '이미 결재 진행 중인 회차가 있습니다. 결재 영역을 확인하세요.',
       NOT_YOUR_SLOT: '이 칸의 결재자가 아닙니다 (현재 사용자를 확인하세요).',
       ALREADY_DECIDED: '이미 처리된 칸입니다.',
-      REQUEST_CLOSED: '다른 결재자가 반려해 이 회차가 종료되었습니다.',
+      REQUEST_CLOSED: CLOSED_TEXT,
       APPROVAL_NOT_FOUND: '결재 칸을 찾을 수 없습니다.',
       INVALID_TRANSITION: MISMATCH_TEXT,
       DOCUMENT_NOT_FOUND: action === 'approve' ? MISMATCH_TEXT : '문서를 찾을 수 없습니다 (삭제되었을 수 있습니다).',
@@ -637,7 +639,7 @@
         const messages = {
           NOT_YOUR_SLOT: '이 칸의 결재자가 아닙니다 (현재 사용자를 확인하세요).',
           ALREADY_DECIDED: '이미 처리된 칸입니다.',
-          REQUEST_CLOSED: '다른 결재자가 반려해 이 회차가 종료되었습니다.',
+          REQUEST_CLOSED: CLOSED_TEXT,
           INVALID_TRANSITION: MISMATCH_TEXT,
           DOCUMENT_NOT_FOUND: MISMATCH_TEXT,
         };

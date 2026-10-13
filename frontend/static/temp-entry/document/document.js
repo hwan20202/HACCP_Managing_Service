@@ -1071,10 +1071,11 @@
         const rows = d.sections.filter((x) => x.section_def === s.key);
         if (!s.repeat) {
           const v = rows[0] ? rows[0].values : {};
+          const hints = (rows[0] && rows[0].hints) || {}; // P7 S6(ISS-025): 반복 아닌 섹션(D03 v2 검사)도 자동 제안 표시
           const ng = !!rows[0] && isNonconforming(s, v);
           const add = ng && detail && api.staffId ? ` <button class="btn btn-secondary btn-sm te-dev-add" data-dev-for="" data-dev-text="${esc(`${s.label} 부적합`)}">개선조치 추가</button>` : '';
           return `<div class="te-section${ng ? ' te-section-ng' : ''}"><div class="te-section-title">${esc(s.label)}${ng ? ' <span class="te-judge-ng">⚠ 부적합</span>' : ''}${add}</div>
-            <dl class="te-kv">${s.fields.map((fd) => `<div${verdictFocus(d.template && d.template.type_code, fd) ? ' class="te-verdict-kv"' : ''}><dt>${esc(fd.label)}</dt><dd>${this.display(fd, withComputed(s, v)[fd.key])}</dd></div>`).join('')}</dl></div>`;
+            <dl class="te-kv">${s.fields.map((fd) => `<div${verdictFocus(d.template && d.template.type_code, fd) ? ' class="te-verdict-kv"' : ''}><dt>${esc(fd.label)}</dt><dd>${this.display(fd, withComputed(s, v)[fd.key], hints[fd.key])}</dd></div>`).join('')}</dl></div>`;
         }
         const legacy = this.legacyJudge(s);
         const canDev = detail && api.staffId && !!s.nonconforming;

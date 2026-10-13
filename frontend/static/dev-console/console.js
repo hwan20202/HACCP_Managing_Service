@@ -572,12 +572,19 @@
     }
     return null;
   }
+  // P7 S6(ISS-019): 첫 페이지만 보면 작성 요구·콘솔 준비 문서(작성중)가 많을 때 CCP 가열 문서를 못 찾는다
+  // → CCP 가열 양식으로 거르고 페이지를 넘기며 찾는다(findDoc과 같은 방식)
   async function docWithRounds(min = 2) {
-    const r = await quietGet('documents?status=draft');
-    for (const d of (r ? r.items : [])) {
-      if (d.kind === 'bundle' || d.submitted_at) continue;
-      const full = await quietGet(`documents/${d.document_id}`);
-      if (full && full.template.type_code === 'CCP_MONITORING' && full.sections.filter((s) => s.section_def === 'rounds').length >= min) return full;
+    const tid = await ccpTemplateId();
+    for (let page = 1; page <= 50; page += 1) {
+      const r = await quietGet(`documents?status=draft&template_id=${tid}&page=${page}`);
+      const items = r ? r.items : [];
+      if (!items.length) break;
+      for (const d of items) {
+        if (d.kind === 'bundle' || d.submitted_at) continue;
+        const full = await quietGet(`documents/${d.document_id}`);
+        if (full && full.template.type_code === 'CCP_MONITORING' && full.sections.filter((s) => s.section_def === 'rounds').length >= min) return full;
+      }
     }
     return null;
   }
@@ -599,7 +606,7 @@
       ],
     };
   }
-  const need = (doc, what) => { if (!doc) throw new Error(`${what} 문서가 없습니다. seed_dev_documents로 시드 데이터를 넣으세요.`); return doc; };
+  const need = (doc, what) => { if (!doc) throw new Error(`${what} 문서가 없습니다. 개발 DB를 다시 만드세요(init → seed_dev_workflow → seed_dev_p4).`); return doc; };
   const J = (o) => JSON.stringify(o, null, 2);
 
   const PRESETS = [
