@@ -100,5 +100,7 @@ HACCP_DEV_CONSOLE = False
 #   apps.inventory.judgment.apply_incoming_judgment / apps.inventory.errors.InventoryError
 HACCP_INVENTORY_JUDGMENT = os.environ.get("HACCP_INVENTORY_JUDGMENT", "")
 HACCP_INVENTORY_ERRORS = env_list("HACCP_INVENTORY_ERRORS")
+# [P7 WF] 일괄 승인·상신 대상 양식 유형(P7-S2-Q2). 형식이 틀리면 시스템 점검 W001.
+HACCP_BATCH_TYPES = env_list("HACCP_BATCH_TYPES", "D03")
 # [임시 진입점 T5] 시제품 사이드바의 "개발 검증 (임시)" 탭. 운영(사용 테스트)에서도 켤 수 있다.
 HACCP_TEMP_ENTRY = env_bool("HACCP_TEMP_ENTRY", False)

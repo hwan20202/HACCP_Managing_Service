@@ -6,6 +6,7 @@ CSRF: 문서 API와 같은 이유로 토큰 검사를 하지 않는다(apps/docu
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
+from apps.core import batch
 from apps.core.http import (
     ApiError,
     error_response,
@@ -79,3 +80,45 @@ def decision(request, approval_id):
         _required(body, "result")
     actor = _actor(request, "WF-DEC-02")
     return json_response(services.decide(actor, approval_id, body["result"], body.get("comment")))
+
+
+# ---------------------------------------------------------------- P7 일괄 (p7-s2-spec 3.1)
+
+BATCH_DECISION_KEYS = ("approval_ids", "comment")
+BATCH_SUBMIT_KEYS = ("items", "slots")
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@_api
+def batch_decision(request):
+    """WF-A03 일괄 승인 {approval_ids, comment?} — 반려 없음(result 키 없음, S1 Q2)."""
+    with step("WF-BAP-01", "API", "입력 형식 확인"):
+        body = parse_json_body(request)
+        reject_unknown_keys(body, BATCH_DECISION_KEYS)
+        _required(body, "approval_ids")
+        batch.id_list(body["approval_ids"], "approval_ids")
+    actor = _actor(request, "WF-BAP-02")
+    return json_response(services.batch_approve(actor, body["approval_ids"], body.get("comment")))
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@_api
+def batch_submit(request):
+    """WF-A04 일괄 상신 {items: [{document_id, expected_version}], slots}."""
+    with step("WF-BSB-01", "API", "입력 형식 확인"):
+        body = parse_json_body(request)
+        reject_unknown_keys(body, BATCH_SUBMIT_KEYS)
+        _required(body, "items")
+        _required(body, "slots")
+        batch.version_items(body["items"], "items")
+    actor = _actor(request, "WF-BSB-02")
+    return json_response(services.batch_submit(actor, body["items"], body["slots"]))
+
+
+@require_http_methods(["GET"])
+@_api
+def batch_config(request):
+    """WF-A05 일괄 설정 조회."""
+    return json_response(services.batch_config())

@@ -8,6 +8,7 @@ from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
+from apps.core import batch
 from apps.core.http import (
     ApiError,
     error_response,
@@ -232,3 +233,45 @@ def deviation_item(request, deviation_id):
         actor = actor_from_header(request.headers.get("X-Staff-Id"))
     services.delete_deviation(actor, deviation_id, expected)
     return HttpResponse(status=204)
+
+
+# ---------------------------------------------------------------- P7: 점검자 일괄 지정·문서 요약
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@_api
+def batch_inspector(request):
+    """DOC-A20 점검자 일괄 지정 {items: [{document_id, expected_version}], inspector_id}."""
+    with step("DOC-BIN-01", "API", "요청 형식·사용자 확인"):
+        body = parse_json_body(request)
+        reject_unknown_keys(body, ("items", "inspector_id"))
+        batch.version_items(body.get("items"), "items")
+        if "inspector_id" not in body:
+            raise ApiError(
+                "inspector_id가 필요합니다.",
+                [{"path": "inspector_id", "code": "required", "message": "필수 값입니다."}],
+            )
+        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+    return json_response(services.batch_set_inspector(actor, body["items"], body["inspector_id"]))
+
+
+@require_http_methods(["GET"])
+@_api
+def document_brief(request):
+    """DOC-A21 문서 요약 여러 건 ?ids=58,67,73 (1~50개)."""
+    raw = request.GET.get("ids") or ""
+    parts = [p.strip() for p in raw.split(",")] if raw.strip() else []
+    if not parts:
+        raise errors.InvalidFilter(
+            details=[{"path": "ids", "code": "required", "message": "문서 id를 지정하세요."}]
+        )
+    if any(not (p.isascii() and p.isdigit()) or int(p) < 1 for p in parts):
+        raise errors.InvalidFilter(
+            details=[{"path": "ids", "code": "invalid", "message": "쉼표로 구분한 양의 정수"}]
+        )
+    if len(parts) > services.BRIEF_MAX:
+        raise errors.InvalidFilter(
+            details=[{"path": "ids", "code": "max", "message": f"최대 {services.BRIEF_MAX}개"}]
+        )
+    return json_response(services.brief_documents([int(p) for p in parts]))

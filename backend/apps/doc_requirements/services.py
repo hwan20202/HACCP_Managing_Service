@@ -303,3 +303,101 @@ def docs_for_batch(batch_id):
             },
             "documents": documents,
         }
+
+
+# ---------------------------------------------------------------- F05 incoming_bundle (P7)
+
+
+def _bundle_document(brief, approved, progress):
+    """LOT 줄의 문서 값(p7-s2-spec 3.4). 승인본 판정은 F03과 같은 규칙(_approved_verdict)."""
+    return {
+        "document_id": brief["document_id"],
+        "status": brief["status"],
+        "version": brief["version"],
+        "correcting": brief["correcting"],
+        "inspector_id": brief["inspector_id"],
+        "verdict": brief["verdict"],
+        "nonconforming": brief["nonconforming"],
+        "approved": None
+        if approved is None
+        else {k: approved[k] for k in ("request_id", "attempt", "closed_at")},
+        "approved_verdict": _approved_verdict(approved, rules.D03),
+        "progress": None
+        if progress is None
+        else {
+            k: progress[k]
+            for k in ("request_id", "attempt", "status", "total", "approved", "pending")
+        },
+        "my_slot": None if progress is None else progress["my_slot"],
+    }
+
+
+def incoming_bundle(actor_id, received_date):
+    """F05: 입고일 묶음 조회(REQ-BDL). 그날 입고 LOT 전부 + LOT별 D03 + 판정·결재 진행·내 칸.
+
+    쓰기·트랜잭션 없음. SQL 8 이하(뷰 1 · N4 1 · F26 3 · A8 1 · A10 2). received_date는 API가
+    YYYY-MM-DD로 확인한 문자열.
+    """
+    with step("REQ-BDL-02", "REQ", "입고 뷰(그날 입고 LOT)"):
+        lots = sources.incoming_lots_on(received_date)
+    with step("REQ-BDL-03", "REQ", "LOT별 D03(DOC N4)") as s:
+        by_lot = {}
+        if lots:
+            for row in doc.find_documents_by_lots([lot["lot_id"] for lot in lots], [rules.D03]):
+                by_lot.setdefault(row["lot_id"], row["document_id"])
+        else:
+            s.skip("입고 LOT 없음")
+    document_ids = list(dict.fromkeys(by_lot.values()))
+    with step("REQ-BDL-04", "REQ", "문서 요약(DOC F26)") as s:
+        briefs = {}
+        if document_ids:
+            briefs = {b["document_id"]: b for b in doc.brief_documents(document_ids)["items"]}
+        else:
+            s.skip("문서 없음")
+    with step("REQ-BDL-05", "REQ", "최신 승인 회차(APR A8)") as s:
+        latest = apr.latest_approved(document_ids) if document_ids else {}
+        if not document_ids:
+            s.skip("문서 없음")
+    with step("REQ-BDL-06", "REQ", "결재 진행·내 칸(APR A10)") as s:
+        progress = {"documents": {}, "latest_slots": []}
+        if document_ids:
+            progress = apr.document_progress(document_ids, actor_id)
+        else:
+            s.skip("문서 없음")
+    with step("REQ-BDL-07", "REQ", "조립"):
+        rows, status_counts, correcting, mine = [], {}, 0, 0
+        for lot in lots:
+            brief = briefs.get(by_lot.get(lot["lot_id"]))
+            document = None
+            if brief is not None:
+                document = _bundle_document(
+                    brief,
+                    latest.get(brief["document_id"]),
+                    progress["documents"].get(brief["document_id"]),
+                )
+                status_counts[brief["status"]] = status_counts.get(brief["status"], 0) + 1
+                correcting += brief["correcting"]
+                mine += document["my_slot"] is not None
+            rows.append(
+                {
+                    "lot_id": lot["lot_id"],
+                    "lot_number": lot["lot_number"],
+                    "item_name": lot["item_name"],
+                    "supplier_name": lot["supplier_name"],
+                    "material_kind": lot["material_kind"],
+                    "quantity": _quantity(lot),
+                    "expiration_date": _text(lot["expiration_date"]),
+                    "document": document,
+                }
+            )
+        return {
+            "received_date": received_date,
+            "lots": rows,
+            "summary": {
+                "documents": len(briefs),
+                "status_counts": status_counts,
+                "correcting_count": correcting,
+                "my_pending": mine,
+            },
+            "default_slots": progress["latest_slots"],
+        }

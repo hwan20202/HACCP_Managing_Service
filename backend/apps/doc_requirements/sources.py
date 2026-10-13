@@ -52,6 +52,17 @@ def incoming_lot(lot_id):
     return rows[0] if rows else None
 
 
+def incoming_lots_on(day):
+    """P7 REQ-BDL-02: 그날 입고 LOT 전부, LOT 번호 순(입고 뷰 received_date 조건)."""
+    return _select(
+        LOT_VIEW,
+        LOT_COLUMNS,
+        " WHERE received_date = %s AND lot_kind = 'INCOMING'",
+        [day],
+        " ORDER BY lot_number",
+    )
+
+
 def batch(batch_id):
     rows = _select(BATCH_VIEW, BATCH_COLUMNS, " WHERE production_batch_id = %s", [batch_id])
     return rows[0] if rows else None

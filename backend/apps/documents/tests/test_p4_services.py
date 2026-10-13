@@ -645,10 +645,16 @@ class ReadTests(P4TestCase):
         d01 = new_d01(89)["document"]["document_id"]
         new_ccp()
         found = services.list_documents({"target": "RM-1011"}, 1)
-        self.assertEqual({i["document_id"] for i in found["items"]}, {d03, d01})
-        summaries = {i["document_id"]: i["target_summary"] for i in found["items"]}
+        # P7(DOC-F04 변경): D03은 작업일마다 묶음 줄 1개 — 대상 필터는 문서마다 먼저 적용
+        docs = [i for i in found["items"] if i["kind"] == "document"]
+        bundles = [i for i in found["items"] if i["kind"] == "bundle"]
+        self.assertEqual({i["document_id"] for i in docs}, {d01})
+        self.assertEqual([(b["type_code"], b["count"]) for b in bundles], [("D03", 1)])
+        summaries = {i["document_id"]: i["target_summary"] for i in docs}
         self.assertEqual(summaries[d01], "LOT RM-1011-02 · 유자")  # P6a: 품명(D-088 Q3·Q6)
-        self.assertEqual(summaries[d03], "LOT RM-1011-01 · 유자")
+        self.assertEqual(
+            services.get_document(d03)["target_summary"], "LOT RM-1011-01 · 유자 · 고흥농협"
+        )  # P7 상세: 매입처까지(ISS-018)
         with self.assertRaises(errors.InvalidFilter):
             services.list_documents({"target": "x" * 51}, 1)
 
@@ -730,13 +736,17 @@ FULL = {"appearance": "양호", "packaging": "양호", "labeling": "양호", "ve
 
 class P6aD03Tests(P4TestCase):
     def test_p6a_tc012_list_query_count(self):
-        """D03이 든 목록: 개수 + 목록 + 대상 요약 + info 품명 = SQL 4개(NFR-03 상한 4)."""
+        """D03이 든 목록. P7(DOC-F04 변경): D03 2건은 묶음 줄 1개 — 건수·페이지(UNION) + 묶음 집계
+        + 묶음 전체 건수(기간 필터) = SQL 4(문서 줄이 없어 참조·품명 SQL 없음, 상한 6)."""
         new_d03()
         new_d03(lot_id=89)
-        with self.assertNumQueries(4):
+        new_d01(89)
+        with self.assertNumQueries(6):
             result = services.list_documents({"from": DAY, "to": DAY}, 1)
-        summaries = {i["target_summary"] for i in result["items"] if i["record_key"]}
-        self.assertIn("LOT RM-1011-01 · 유자", summaries)
+        bundle = next(i for i in result["items"] if i["kind"] == "bundle")
+        self.assertEqual((bundle["count"], bundle["total"]), (2, 2))
+        summaries = {i["target_summary"] for i in result["items"] if i["kind"] == "document"}
+        self.assertIn("LOT RM-1011-02 · 유자", summaries)
 
     def test_p6a_tc010_completion_rules(self):
         """작성완료 검사: 점검자·판정 필수, 부적합이면 개선조치 1건 이상(비반복 섹션에서도)."""

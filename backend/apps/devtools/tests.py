@@ -157,6 +157,49 @@ class D03FixtureTests(TestCase):
             with self.subTest(body=body):
                 self.assertEqual(self.post(body).status_code, 400)
 
+    def test_p7_tc102_count_and_date(self):
+        res = self.post({"state": "completed", "count": 3, "received_date": "2026-10-21"})
+        self.assertEqual(res.status_code, 201, res.content)
+        items = res.json()["items"]
+        self.assertEqual(len(items), 3)
+        self.assertEqual({i["status"] for i in items}, {"completed"})
+        self.assertEqual(
+            [i["lot_number"] for i in items], ["RM-1021-01", "RM-1021-02", "RM-1021-03"]
+        )
+        more = self.post({"received_date": "2026-10-21"}).json()  # 같은 날 이어서
+        self.assertEqual(more["lot_number"], "RM-1021-04")
+        for body in (
+            {"count": 11},
+            {"count": 0},
+            {"received_date": "2026-13-01"},
+            {"inspector": "4"},
+            {"state": "completed", "inspector": None},
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(self.post(body).status_code, 400)
+
+    def test_p7_states_and_inspector(self):
+        from apps.documents import services as doc
+
+        partial = self.post({"state": "submitted_partial"}).json()
+        self.assertEqual(partial["status"], "submitted")
+        from apps.approvals import services as apr
+
+        request = apr.list_requests(partial["document_id"])["items"][0]
+        self.assertEqual(
+            [(x["approver_id"], x["state"]) for x in request["slots"]],
+            [(3, "approved"), (1, "pending")],
+        )
+        rejected = self.post({"state": "rejected"}).json()
+        self.assertEqual(rejected["status"], "rejected")
+        empty = self.post({"inspector": None}).json()
+        info = next(
+            s["values"]
+            for s in doc.get_document(empty["document_id"])["sections"]
+            if s["section_def"] == "info"
+        )
+        self.assertNotIn("inspector", info)
+
     def test_snapshot_lots(self):
         made = self.post({"state": "approved"}).json()
         snap = self.client.get(f"/api/dev/snapshot?document_id={made['document_id']}").json()

@@ -311,28 +311,35 @@ def _decide_failure(approval_id, actor_id):
         raise errors.AlreadyDecided()
 
 
+def check_decision_input(result, comment):
+    """A11: 결재 입력 검사(APR-DEC-01 규칙, SQL 없음). 반환: 정리된 의견.
+
+    A3 decide가 부르고, 일괄 승인은 트랜잭션 밖에서 먼저 부른다(P7-VR-08).
+    """
+    if result not in ("approved", "rejected"):
+        raise errors.InvalidDecision(
+            details=[_error("result", "invalid", "approved 또는 rejected여야 합니다.")]
+        )
+    if comment is not None and not isinstance(comment, str):
+        raise errors.InvalidDecision(details=[_error("comment", "invalid", "문자열이어야 합니다.")])
+    comment = (comment or "").strip() or None
+    if comment and len(comment) > COMMENT_MAX:
+        raise errors.InvalidDecision(
+            details=[_error("comment", "max_length", f"{COMMENT_MAX}자 이하입니다.")]
+        )
+    if result == "rejected" and not comment:
+        raise errors.CommentRequired(
+            details=[_error("comment", "required", "반려 사유를 입력하세요.")]
+        )
+    return comment
+
+
 def decide(approval_id, actor_id, result, comment=None):
     """내 슬롯을 승인·반려하고 요청 결과를 판정한다. WF 트랜잭션 안에서만 호출한다."""
     with step("APR-DEC-00", "APR", "트랜잭션 확인"):
         _require_transaction()
     with step("APR-DEC-01", "APR", "입력 확인"):
-        if result not in ("approved", "rejected"):
-            raise errors.InvalidDecision(
-                details=[_error("result", "invalid", "approved 또는 rejected여야 합니다.")]
-            )
-        if comment is not None and not isinstance(comment, str):
-            raise errors.InvalidDecision(
-                details=[_error("comment", "invalid", "문자열이어야 합니다.")]
-            )
-        comment = (comment or "").strip() or None
-        if comment and len(comment) > COMMENT_MAX:
-            raise errors.InvalidDecision(
-                details=[_error("comment", "max_length", f"{COMMENT_MAX}자 이하입니다.")]
-            )
-        if result == "rejected" and not comment:
-            raise errors.CommentRequired(
-                details=[_error("comment", "required", "반려 사유를 입력하세요.")]
-            )
+        comment = check_decision_input(result, comment)
     now = timezone.now()
     with step("APR-DEC-02", "APR", "내 슬롯 처리(조건부 UPDATE)") as s:
         changed = Approval.objects.filter(
@@ -601,3 +608,102 @@ def latest_approved(document_ids):
             }
             for req in rows
         }
+
+
+# ------------------------------------------------ P7 A9·A10 (p7-s2-spec 3.3)
+
+
+def _ids(values):
+    return sorted({i for i in values if _is_int(i)})
+
+
+def slot_refs(approval_ids):
+    """A9: 칸 id → {document_id, request_id, template_id}(SQL 1). 없는 id는 빠진다.
+
+    일괄 승인 양식 판정의 유일한 출처(검토 B-6). 쓰기 없음.
+    """
+    ids = _ids(approval_ids)
+    if not ids:
+        return {}
+    with step("APR-SRF-01", "APR", "칸 출처"):
+        rows = Approval.objects.filter(pk__in=ids).values_list(
+            "approval_id", "request__document_id", "request_id", "request__template_id"
+        )
+        return {
+            approval_id: {
+                "document_id": document_id,
+                "request_id": request_id,
+                "template_id": template_id,
+            }
+            for approval_id, document_id, request_id, template_id in rows
+        }
+
+
+def document_progress(document_ids, actor_id):
+    """A10: 문서마다 가장 큰 attempt 회차의 진행·내 대기 칸, 가장 최근 상신 회차의 결재선(SQL 2).
+
+    반환 {"documents": {id: {request_id, attempt, status, total, approved, pending, my_slot}},
+    "latest_slots": [{slot_no, label, approver_id}]}. my_slot은 회차가 진행 중일 때만(검토 B-9).
+    회차가 없는 문서는 빠진다. 빈 목록이면 SQL 없음.
+    """
+    ids = _ids(document_ids)
+    result = {"documents": {}, "latest_slots": []}
+    if not ids:
+        return result
+    with step("APR-PRG-01", "APR", "문서별 최신 회차·내 칸"):
+        newest = (
+            ApprovalRequest.objects.filter(document_id=OuterRef("request__document_id"))
+            .order_by("-attempt")
+            .values("attempt")[:1]
+        )
+        rows = (
+            Approval.objects.filter(request__document_id__in=ids, request__attempt=Subquery(newest))
+            .order_by("request__document_id", "slot_no")
+            .values_list(
+                "request__document_id",
+                "request_id",
+                "request__attempt",
+                "request__status",
+                "approval_id",
+                "slot_no",
+                "label",
+                "approver_id",
+                "state",
+            )
+        )
+        documents = result["documents"]
+        for doc_id, req_id, attempt, status, approval_id, slot_no, label, approver, state in rows:
+            item = documents.setdefault(
+                doc_id,
+                {
+                    "request_id": req_id,
+                    "attempt": attempt,
+                    "status": status,
+                    "total": 0,
+                    "approved": 0,
+                    "pending": 0,
+                    "my_slot": None,
+                },
+            )
+            item["total"] += 1
+            item["approved"] += state == "approved"
+            item["pending"] += state == "pending"
+            mine = approver == actor_id and state == "pending" and status == "in_progress"
+            if mine and item["my_slot"] is None:
+                item["my_slot"] = {"approval_id": approval_id, "slot_no": slot_no, "label": label}
+    with step("APR-PRG-02", "APR", "가장 최근 상신 회차의 결재선") as s:
+        if not result["documents"]:
+            s.skip("회차 없음")
+            return result
+        latest = (
+            ApprovalRequest.objects.filter(document_id__in=ids)
+            .order_by("-requested_at", "-request_id")
+            .values("request_id")[:1]
+        )
+        result["latest_slots"] = [
+            {"slot_no": slot_no, "label": label, "approver_id": approver}
+            for slot_no, label, approver in Approval.objects.filter(request_id=Subquery(latest))
+            .order_by("slot_no")
+            .values_list("slot_no", "label", "approver_id")
+        ]
+    return result

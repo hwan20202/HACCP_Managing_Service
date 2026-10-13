@@ -113,6 +113,19 @@
   // 정정 진행 중이면 배지 옆 `정정` 꼬리표(정정 중 상태는 배지 자체가 "정정 중", DOC-SC-01·04)
   const correctionTag = (status, correcting) => (correcting && status !== 'correcting' ? ' <span class="badge te-chip-fix">정정</span>' : '');
   const statusCell = (status, correcting) => `${T.statusBadge(status)}${correctionTag(status, correcting)}`;
+  // P7 S4: 목록 묶음 줄(DOC-F04 변경, D03 작업일마다 1줄)이 화면을 깨지 않게 하는 최소 표시.
+  // 묶음 줄 화면(DOC-SC-01·10)은 P7 S5에서 만든다.
+  const bundleRow = (b) => `
+            <tr class="te-row-bundle">
+              <td>묶음</td>
+              <td>${esc(b.template_name)}</td>
+              <td>입고 ${b.count}건${b.count !== b.total ? ` (전체 ${b.total})` : ''}</td>
+              <td>${b.work_date}</td>
+              <td>-</td>
+              <td>${Object.entries(b.status_counts).map(([k, n]) => `${T.statusBadge(k)} ${n}`).join(' ')}${b.correcting_count ? ` (정정 ${b.correcting_count})` : ''}</td>
+              <td><span class="te-req">${REQUIREMENT[b.requirement]}</span></td>
+              <td>-</td>
+            </tr>`;
   const requirementChip = (d) => (d.requirement ? `<span class="badge te-chip-req">${REQUIREMENT[d.requirement]} 작성 요구</span>` : '');
 
   const Doc = {
@@ -235,7 +248,7 @@
       body.innerHTML = `
         <table class="data-table">
           <thead><tr><th>번호</th><th>양식(버전)</th><th>대상</th><th>작업일</th><th>작성/담당</th><th>상태</th><th>작성 요구</th><th>작성일</th></tr></thead>
-          <tbody>${items.map((d) => `
+          <tbody>${items.map((d) => d.kind === 'bundle' ? bundleRow(d) : `
             <tr class="te-row-link" data-id="${d.document_id}">
               <td>${d.document_id}</td>
               <td>${esc(d.template.name)} v${d.template.version}</td>

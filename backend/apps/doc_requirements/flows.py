@@ -28,6 +28,8 @@ FLOWS = {
         "REQ-DEV-04",
     ],
     "REQ-DEV-RE-BAT": ["REQ-DEV-01", "REQ-DEV-RE1", *BAT, "REQ-DEV-04"],
+    # P7 입고일 묶음 조회(document-workflow/p7-s2-flows.md 7장) — 안에 DOC·APR 단계
+    "REQ-BDL": [f"REQ-BDL-0{n}" for n in range(1, 8)],
 }
 
 

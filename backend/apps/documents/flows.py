@@ -8,7 +8,8 @@ FLOWS = {
     "DOC-STF": ["DOC-STF-01"],
     "DOC-TPL-LIST": ["DOC-TPL-01"],
     "DOC-TPL-GET": ["DOC-TPL-02"],
-    "DOC-LST": ["DOC-LST-01", "DOC-LST-02", "DOC-LST-03", "DOC-LST-04"],
+    # P7: 02·03 UNION, 04 문서 줄 값, 05 묶음 집계, 06 묶음 전체 건수, 07 조립(p7-s2-flows 6장)
+    "DOC-LST": [f"DOC-LST-0{n}" for n in range(1, 8)],
     "DOC-GET": ["DOC-GET-01", "DOC-GET-02", "DOC-GET-03"],
     "DOC-CRT": [f"DOC-CRT-0{n}" for n in range(1, 10)],
     "DOC-UPD": [
@@ -42,6 +43,11 @@ FLOWS = {
     # P6 정정 (dev-notes/document-workflow/p6-s2-flows.md 2·2.1장)
     "DOC-COR": [*[f"DOC-COR-0{n}" for n in range(1, 5)], "DOC-SIG-01", "DOC-COR-05"],
     "DOC-CCN": [*[f"DOC-CCN-0{n}" for n in range(1, 4)], "DOC-SIG-01", "DOC-CCN-04"],
+    # P7 (dev-notes/document-workflow/p7-s2-flows.md 4·5장, 11장). DOC-BIN은 문서 1건일 때
+    # (04~06이 문서마다 반복 — 콘솔 비교는 항목별 묶음, S5). 같은 값이면 05 → 05a(성공)
+    "DOC-BIN": [f"DOC-BIN-0{n}" for n in range(1, 8)],
+    "DOC-BRF": [f"DOC-BRF-0{n}" for n in range(1, 5)],
+    "DOC-FNL": ["DOC-FNL-01"],
 }
 
 

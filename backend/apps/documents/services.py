@@ -16,6 +16,7 @@ from django.db import IntegrityError, models, transaction
 from django.db.models import Case, Count, Exists, F, Func, OuterRef, Q, Subquery, Value, When
 from django.utils import timezone
 
+from apps.core import batch
 from apps.core.http import ApiError
 from apps.core.trace import step
 from apps.staff import services as staff_services
@@ -50,6 +51,10 @@ DEVIATION_MAX_CHECKERS = 10
 PAGE_SIZE = 20
 MAX_RANGE_DAYS = 366
 EDITABLE_FIELDS = ("subject", "work_date", "assignee_id", "due_at")
+# P7(p7-s2-spec 3.2, Q9): DOC가 양식 코드를 직접 아는 첫 예외 — 스키마 표시로 옮기는 일은 ISS-020
+LIST_BUNDLE_TYPES = ("D03",)  # 목록에서 작업일마다 묶음 줄 1개
+INSPECTOR_TYPES = ("D03",)  # 점검자 일괄 지정 대상(info.inspector)
+BRIEF_MAX = 50
 
 
 def _open_correction(**match):
@@ -147,10 +152,12 @@ def _item_names(document_ids):
     return names
 
 
-def _target_summary(document, refs, item_name=None):
-    """목록의 대상 표시(S1 SC-01). 작성 요구 문서는 업무 대상, 아니면 subject.
+def _target_summary(document, refs, item_name=None, supplier_name=None):
+    """대상 표시(S1 SC-01). 작성 요구 문서는 업무 대상, 아니면 subject.
 
     문서 단위 LOT이면 `LOT {label} · {품명}`(P6a-S2 2.4 — info.item_name이 있을 때).
+    P7(ISS-018): 상세·요약은 매입처까지 — `LOT {label} · {품명} · {매입처}`(있는 값만 붙임).
+    목록은 supplier_name을 넘기지 않는다(지금 그대로).
     """
     if not document.record_key or not refs:
         return document.subject
@@ -161,8 +168,8 @@ def _target_summary(document, refs, item_name=None):
             tail = f" · {ref['process_code']}" if ref["process_code"] else ""
             return f"배치 {ref['label'] or ref['production_batch_id']}{tail}"
         if ref["lot_id"] is not None:
-            head = f"LOT {ref['label'] or ref['lot_id']}"
-            return f"{head} · {item_name}" if item_name else head
+            parts = [f"LOT {ref['label'] or ref['lot_id']}", item_name, supplier_name]
+            return " · ".join(p for p in parts if p)
         return ref["label"] or document.subject
     lots = [r for r in refs if r["lot_id"] is not None]
     return f"{_iso(document.work_date)} · LOT {len(lots)}건"
@@ -229,6 +236,10 @@ def _assemble(document, rows, refs=None, files=None, deviations=None, hints=None
     data["files"] = files or []
     data["deviations"] = deviations or []
     data["correction"], data["corrections"] = corrections or (None, [])
+    info = next((r.values_json or {} for r in rows if r.section_def == "info"), {})
+    data["target_summary"] = _target_summary(  # P7 DOC-F05 변경(ISS-018)
+        document, refs, info.get("item_name"), info.get("supplier_name")
+    )
     return data
 
 
@@ -361,8 +372,12 @@ def list_staff():
         return list(Staff.objects.order_by("staff_id").values_list("staff_id", flat=True))
 
 
-def list_templates():
+def list_templates(all_versions=False):
+    """F02 양식 목록. all_versions=True면 모든 버전(비활성 포함) — P7 WF 일괄 설정용(S4 G1)."""
     with step("DOC-TPL-01", "DOC", "최신 활성 양식 목록"):
+        if all_versions:
+            templates = DocumentTemplate.objects.order_by("type_code", "version")
+            return [_template_detail(t, with_schema=False) for t in templates]
         latest = (
             DocumentTemplate.objects.filter(type_code=OuterRef("type_code"), is_active=True)
             .order_by("-version")
@@ -439,59 +454,239 @@ def list_documents(filters=None, page=1):
         if problems:
             raise errors.InvalidFilter(details=problems)
 
-    queryset = Document.objects.filter(deleted_at__isnull=True).annotate(
-        correcting=Exists(_open_correction())
+    where, params = _list_where(
+        correcting=correcting,
+        date_from=date_from,
+        date_to=date_to,
+        status=status,
+        template_id=template_id,
+        author_id=author_id,
+        assignee_id=assignee_id,
+        target=target,
     )
-    if correcting is not None:
-        queryset = queryset.filter(correcting=correcting == "true")
-    if date_from:
-        queryset = queryset.filter(work_date__gte=date_from)
-    if date_to:
-        queryset = queryset.filter(work_date__lte=date_to)
-    if status:
-        queryset = queryset.filter(status=status)
-    if template_id is not None:
-        queryset = queryset.filter(template_id=template_id)
-    if author_id is not None:
-        queryset = queryset.filter(created_by_id=author_id)
-    if assignee_id is not None:
-        queryset = queryset.filter(assignee_id=assignee_id)
-    if target:
-        queryset = queryset.filter(
-            Exists(
-                DocumentRef.objects.filter(
-                    document_id=OuterRef("document_id"), label__icontains=target
-                )
-            )
-        )
+    filtered = len(where) > 1  # 삭제 제외 말고 필터가 하나라도 있는가(DOC-LST-06)
+    where = " AND ".join(where)
+    bundle_in = ", ".join(["%s"] * len(LIST_BUNDLE_TYPES))
+    bundle = list(LIST_BUNDLE_TYPES)
 
-    with step("DOC-LST-02", "DOC", "건수"):
-        total = queryset.count()
-    with step("DOC-LST-03", "DOC", "페이지 조회"):
-        offset = (page_number - 1) * PAGE_SIZE
-        documents = list(
-            queryset.select_related("template").order_by("-work_date", "-document_id")[
-                offset : offset + PAGE_SIZE
-            ]
-        )
-    with step("DOC-LST-04", "DOC", "결과 조립"):
-        refs = _refs_by_document([d.document_id for d in documents]) if documents else {}
-        names = _item_names([d.document_id for d in documents if d.record_key])
-        items = []
-        for d in documents:
-            item = _document_head(d)
-            item["correcting"] = d.correcting
-            item["requirement"] = _requirement(d.record_key, refs.get(d.document_id, []))
-            item["target_summary"] = _target_summary(
-                d, refs.get(d.document_id, []), names.get(d.document_id)
+    with step("DOC-LST-02", "DOC", "건수(UNION)"):
+        with connection_cursor() as cursor:
+            cursor.execute(
+                f"SELECT COUNT(*) FROM ({_list_union(where, bundle_in, count_only=True)})",
+                [*params, *bundle, *params, *bundle],
             )
-            items.append(item)
+            total = cursor.fetchone()[0]
+    with step("DOC-LST-03", "DOC", "페이지(UNION)"):
+        offset = (page_number - 1) * PAGE_SIZE
+        with connection_cursor() as cursor:
+            cursor.execute(
+                f"{_list_union(where, bundle_in)} ORDER BY 2 DESC, 1, 4 DESC LIMIT %s OFFSET %s",
+                [*params, *bundle, *params, *bundle, PAGE_SIZE, offset],
+            )
+            rows = cursor.fetchall()
+    documents = [_list_document(row) for row in rows if row[0] == 1]
+    bundles = [row for row in rows if row[0] == 0]
+    with step("DOC-LST-04", "DOC", "문서 줄 값(참조·품명)") as s:
+        refs, names = {}, {}
+        if documents:
+            refs = _refs_by_document([d.document_id for d in documents])
+            names = _item_names([d.document_id for d in documents if d.record_key])
+        else:
+            s.skip("문서 줄 없음")
+    days = sorted({_text_date(row[1]) for row in bundles})
+    with step("DOC-LST-05", "DOC", "묶음 집계") as s:
+        counts = {}
+        if bundles:
+            marks = ", ".join(["%s"] * len(days))
+            with connection_cursor() as cursor:
+                cursor.execute(
+                    "SELECT d.work_date, t.type_code, d.status, "
+                    f"{_OPEN_CORRECTION_SQL} AS correcting, COUNT(*) "
+                    "FROM document d JOIN document_template t ON t.template_id = d.template_id "
+                    f"WHERE {where} AND t.type_code IN ({bundle_in}) AND d.work_date IN ({marks}) "
+                    "GROUP BY 1, 2, 3, 4",
+                    [*params, *bundle, *days],
+                )
+                for day, type_code, row_status, row_correcting, n in cursor.fetchall():
+                    item = counts.setdefault(
+                        (_text_date(day), type_code), {"status": {}, "correcting": 0, "count": 0}
+                    )
+                    item["status"][row_status] = item["status"].get(row_status, 0) + n
+                    item["correcting"] += n if row_correcting else 0
+                    item["count"] += n
+        else:
+            s.skip("묶음 줄 없음")
+    with step("DOC-LST-06", "DOC", "묶음 전체 건수") as s:
+        totals = {}
+        if bundles and filtered:
+            marks = ", ".join(["%s"] * len(days))
+            with connection_cursor() as cursor:
+                cursor.execute(
+                    "SELECT d.work_date, t.type_code, COUNT(*) FROM document d "
+                    "JOIN document_template t ON t.template_id = d.template_id "
+                    f"WHERE d.deleted_at IS NULL AND t.type_code IN ({bundle_in}) "
+                    f"AND d.work_date IN ({marks}) GROUP BY 1, 2",
+                    [*bundle, *days],
+                )
+                totals = {(_text_date(d), t): n for d, t, n in cursor.fetchall()}
+        else:
+            s.skip("묶음 줄 없음" if not bundles else "필터 없음 — 걸러진 수와 같음")
+    with step("DOC-LST-07", "DOC", "결과 조립"):
+        by_id = {d.document_id: d for d in documents}
+        items = []
+        for row in rows:
+            if row[0] == 1:
+                d = by_id[row[3]]
+                item = {"kind": "document", **_document_head(d)}
+                item["correcting"] = d.correcting
+                item["requirement"] = _requirement(d.record_key, refs.get(d.document_id, []))
+                item["target_summary"] = _target_summary(
+                    d, refs.get(d.document_id, []), names.get(d.document_id)
+                )
+                items.append(item)
+                continue
+            key = (_text_date(row[1]), row[2])
+            agg = counts.get(key, {"status": {}, "correcting": 0, "count": 0})
+            items.append(
+                {
+                    "kind": "bundle",
+                    "type_code": row[2],
+                    "template_name": row[_COL_NAME],
+                    "work_date": key[0],
+                    "count": agg["count"],
+                    "total": totals.get(key, agg["count"]) if filtered else agg["count"],
+                    "status_counts": {k: v for k, v in agg["status"].items() if v},
+                    "correcting_count": agg["correcting"],
+                    "requirement": "lot",
+                }
+            )
         return {
             "items": items,
             "total": total,
             "page": page_number,
             "page_size": PAGE_SIZE,
         }
+
+
+# 목록 SQL (p7-s2-flows 6장, P7 S3 1.1). d.deleted_at IS NULL은 부분 인덱스 ix_document_list의
+# 조건이라 문자 그대로 넣는다. 열린 정정 EXISTS는 ux_correction_open(부분 인덱스)으로 찾는다.
+_OPEN_CORRECTION_SQL = (
+    "EXISTS (SELECT 1 FROM document_correction c "
+    "WHERE c.document_id = d.document_id AND c.closed_at IS NULL)"
+)
+_LIST_COLUMNS = (
+    "t.template_id",
+    "t.version",
+    "t.name",
+    "d.subject",
+    "d.status",
+    "d.created_by",
+    "d.assignee_id",
+    "d.due_at",
+    "d.created_at",
+    "d.updated_at",
+    "d.submitted_at",
+    "d.version",
+    "d.record_key",
+    "d.completed_at",
+    "d.completed_by",
+    _OPEN_CORRECTION_SQL,
+)
+_COL_NAME = 4 + _LIST_COLUMNS.index("t.name")  # kind, work_date, type_code, document_id 다음
+
+
+def _list_where(**f):
+    """문서마다 필터 F(p7-s2-flows 6장). 반환: ([조건], [값]) — 첫 조건은 삭제 제외."""
+    where, params = ["d.deleted_at IS NULL"], []
+    if f["correcting"] is not None:
+        where.append(
+            _OPEN_CORRECTION_SQL if f["correcting"] == "true" else f"NOT {_OPEN_CORRECTION_SQL}"
+        )
+    if f["date_from"]:
+        where.append("d.work_date >= %s")
+        params.append(_db_date(f["date_from"]))
+    if f["date_to"]:
+        where.append("d.work_date <= %s")
+        params.append(_db_date(f["date_to"]))
+    for column, key in (
+        ("d.status", "status"),
+        ("d.template_id", "template_id"),
+        ("d.created_by", "author_id"),
+        ("d.assignee_id", "assignee_id"),
+    ):
+        if f[key] is not None:
+            where.append(f"{column} = %s")
+            params.append(f[key])
+    if f["target"]:
+        # 지금까지의 label__icontains와 같은 식(SQLite LIKE, ESCAPE)
+        from django.db import connection
+
+        where.append(
+            "EXISTS (SELECT 1 FROM document_ref rf WHERE rf.document_id = d.document_id "
+            "AND rf.label LIKE %s ESCAPE '\\')"
+        )
+        params.append(f"%{connection.ops.prep_for_like_query(f['target'])}%")
+    return where, params
+
+
+def _list_union(where, bundle_in, count_only=False):
+    """문서 줄(kind 1)과 묶음 줄(kind 0, 작업일·양식 유형마다 1줄)의 UNION ALL."""
+    columns = ["NULL"] if count_only else list(_LIST_COLUMNS)
+    nulls = ["NULL"] * len(columns)
+    if not count_only:
+        nulls[_LIST_COLUMNS.index("t.name")] = "MAX(t.name)"
+    source = "FROM document d JOIN document_template t ON t.template_id = d.template_id"
+    return (
+        f"SELECT 1 AS kind, d.work_date, t.type_code, d.document_id, {', '.join(columns)} "
+        f"{source} WHERE {where} AND t.type_code NOT IN ({bundle_in}) "
+        f"UNION ALL SELECT 0, d.work_date, t.type_code, MIN(d.document_id), {', '.join(nulls)} "
+        f"{source} WHERE {where} AND t.type_code IN ({bundle_in}) "
+        "GROUP BY t.type_code, d.work_date"
+    )
+
+
+def _text_date(value):
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def _list_document(row):
+    """페이지 쿼리의 문서 줄을 _document_head가 읽는 모양으로(SQL 다시 읽지 않음 — 검토 B-3)."""
+    from types import SimpleNamespace
+
+    from django.db import connection
+
+    ops = connection.ops
+    values = dict(zip(("kind", "work_date", "type_code", "document_id", *_LIST_COLUMNS), row))
+
+    def dt(key):
+        return ops.convert_datetimefield_value(values[key], None, connection)
+
+    def day(key):
+        return ops.convert_datefield_value(values[key], None, connection)
+
+    return SimpleNamespace(
+        document_id=values["document_id"],
+        template=SimpleNamespace(
+            template_id=values["t.template_id"],
+            type_code=values["type_code"],
+            version=values["t.version"],
+            name=values["t.name"],
+        ),
+        subject=values["d.subject"],
+        work_date=day("work_date"),
+        status=values["d.status"],
+        created_by_id=values["d.created_by"],
+        assignee_id=values["d.assignee_id"],
+        due_at=dt("d.due_at"),
+        created_at=dt("d.created_at"),
+        updated_at=dt("d.updated_at"),
+        submitted_at=dt("d.submitted_at"),
+        version=values["d.version"],
+        record_key=values["d.record_key"],
+        completed_at=dt("d.completed_at"),
+        completed_by_id=values["d.completed_by"],
+        correcting=bool(values[_OPEN_CORRECTION_SQL]),
+    )
 
 
 # ---------------------------------------------------------------- F05 상세
@@ -1855,6 +2050,246 @@ def find_documents_by_ref(lot_id=None, production_batch_id=None, process_code=No
             for r in refs
             if r.document_id in documents
         ]
+
+
+# ---------------------------------------------------------------- P7 (p7-s2-spec 3.2)
+
+
+def _one_row_sections(schema):
+    return [section for section in schema["sections"] if not section.get("repeat")]
+
+
+def _verdict_of(schema, values_by_key):
+    """1행 섹션 중 필드 verdict가 있는 첫 섹션의 값과 부적합 여부. 없으면 (None, None)."""
+    for section in _one_row_sections(schema):
+        if any(f["key"] == "verdict" for f in section["fields"]):
+            values = values_by_key.get(section["key"]) or {}
+            return values.get("verdict"), validation.is_nonconforming(section, values)
+    return None, None
+
+
+def brief_documents(document_ids):
+    """F26: 문서 요약 여러 건(≤50). SQL 3(문서·양식, 1행 섹션, 문서 단위 참조).
+
+    빈 목록이면 SQL 없음.
+    반환 {items: [...입력 순서], missing: [없거나 삭제된 id]}.
+    """
+    with step("DOC-BRF-01", "DOC", "입력 확인"):
+        if not isinstance(document_ids, (list, tuple)) or any(
+            not isinstance(i, int) or isinstance(i, bool) or i < 1 for i in document_ids
+        ):
+            raise errors.InvalidFilter(
+                details=[validation.error("ids", "invalid", "1 이상의 정수 목록이어야 합니다.")]
+            )
+        ids = list(dict.fromkeys(document_ids))
+        if len(ids) > BRIEF_MAX:
+            raise errors.InvalidFilter(
+                details=[validation.error("ids", "max", f"최대 {BRIEF_MAX}건입니다.")]
+            )
+    if not ids:
+        return {"items": [], "missing": []}
+    with step("DOC-BRF-02", "DOC", "문서·양식"):
+        documents = {
+            d.document_id: d
+            for d in Document.objects.select_related("template")
+            .filter(pk__in=ids, deleted_at__isnull=True)
+            .annotate(correcting=Exists(_open_correction()))
+        }
+    found = [i for i in ids if i in documents]
+    with step("DOC-BRF-03", "DOC", "1행 섹션·문서 단위 참조") as s:
+        values, refs = {}, {i: [] for i in found}
+        if found:
+            keys = {
+                section["key"]
+                for d in documents.values()
+                for section in _one_row_sections(d.template.schema_json)
+            }
+            for document_id, key, row in DocSection.objects.filter(
+                document_id__in=found, section_def__in=sorted(keys)
+            ).values_list("document_id", "section_def", "values_json"):
+                values.setdefault(document_id, {})[key] = row or {}
+            for ref in DocumentRef.objects.filter(
+                document_id__in=found, section_id__isnull=True
+            ).order_by("ref_id"):
+                refs[ref.document_id].append(_ref_row(ref))
+        else:
+            s.skip("문서 없음")
+    with step("DOC-BRF-04", "DOC", "조립"):
+        items = []
+        for document_id in found:
+            d = documents[document_id]
+            own = values.get(document_id, {})
+            info = own.get("info") or {}
+            verdict, nonconforming = _verdict_of(d.template.schema_json, own)
+            items.append(
+                {
+                    "document_id": document_id,
+                    "type_code": d.template.type_code,
+                    "status": d.status,
+                    "version": d.version,
+                    "correcting": d.correcting,
+                    "target_summary": _target_summary(
+                        d, refs[document_id], info.get("item_name"), info.get("supplier_name")
+                    ),
+                    "inspector_id": info.get("inspector"),
+                    "verdict": verdict,
+                    "nonconforming": nonconforming,
+                }
+            )
+        return {"items": items, "missing": [i for i in ids if i not in documents]}
+
+
+def find_documents_by_lots(lot_ids, type_codes):
+    """N4: LOT 여러 개에 문서 단위로 연결된 문서(삭제 제외, 양식 유형 한정). SQL 1.
+
+    빈 목록이면 SQL 없음.
+    반환 [{lot_id, document_id, type_code}] — LOT·문서 id 순.
+    """
+    lots = sorted({i for i in lot_ids if isinstance(i, int) and not isinstance(i, bool)})
+    types = sorted(set(type_codes))
+    if not lots or not types:
+        return []
+    with step("DOC-FNL-01", "DOC", "LOT 여러 개로 문서 찾기"):
+        lot_marks, type_marks = ", ".join(["%s"] * len(lots)), ", ".join(["%s"] * len(types))
+        with connection_cursor() as cursor:
+            cursor.execute(
+                "SELECT r.lot_id, d.document_id, t.type_code FROM document_ref r "
+                "JOIN document d ON d.document_id = r.document_id "
+                "JOIN document_template t ON t.template_id = d.template_id "
+                f"WHERE r.lot_id IN ({lot_marks}) AND r.section_id IS NULL "
+                f"AND t.type_code IN ({type_marks}) AND d.deleted_at IS NULL "
+                "ORDER BY r.lot_id, d.document_id",
+                [*lots, *types],
+            )
+            return [
+                {"lot_id": lot_id, "document_id": document_id, "type_code": type_code}
+                for lot_id, document_id, type_code in cursor.fetchall()
+            ]
+
+
+def _inspector_failure(document_id, expected_version, inspector_id):
+    """DOC-BIN-05a: 0행일 때 사유 — 404 → 상태 409 → 버전 409 → info 행 없음 409 → 같은 값(성공).
+
+    기존 _lock_failure는 마지막에 DOCUMENT_LOCKED를 내므로 쓰지 않는다(검토 B-4).
+    """
+    with step("DOC-BIN-05a", "DOC", "실패·같은 값 판정") as s:
+        row = (
+            Document.objects.filter(pk=document_id)
+            .values("status", "deleted_at", "version", "updated_at")
+            .first()
+        )
+        if row is None or row["deleted_at"] is not None:
+            raise errors.DocumentNotFound()
+        if row["status"] not in EDITABLE:
+            raise errors.DocumentLocked(
+                details=[
+                    {
+                        "path": "status",
+                        "code": row["status"],
+                        "message": f"현재 상태: {row['status']}",
+                    }
+                ]
+            )
+        if row["version"] != expected_version:
+            raise errors.VersionConflict(
+                details=[
+                    {
+                        "path": "expected_version",
+                        "code": "conflict",
+                        "message": f"내가 연 버전 {expected_version}, 현재 {row['version']}",
+                        "expected": expected_version,
+                        "current": row["version"],
+                        "updated_at": _iso(row["updated_at"]),
+                    }
+                ]
+            )
+        info = (
+            DocSection.objects.filter(document_id=document_id, section_def="info")
+            .values_list("values_json", flat=True)
+            .first()
+        )
+        if info is None:
+            raise errors.SectionRowNotFound(
+                details=[{"path": "info", "code": "missing", "message": "기본정보 행이 없습니다."}]
+            )
+        if (info or {}).get("inspector") != inspector_id:  # 방어선 — 같은 트랜잭션이라 오지 않음
+            raise errors.DocumentLocked()
+        s.note("같은 값 — 변화 없음(버전 그대로)")
+        return {"changed": False, "version": row["version"]}
+
+
+def _set_inspector(actor_id, document_id, expected_version, inspector_id, now):
+    """한 문서: 조건부 UPDATE(검사·잠금·같은 값 제외를 한 문장으로) → info.inspector 변경."""
+    with step("DOC-BIN-05", "DOC", "문서 UPDATE(조건부)") as s:
+        with connection_cursor() as cursor:
+            cursor.execute(
+                "UPDATE document SET version = version + 1, updated_at = %s "
+                "WHERE document_id = %s AND deleted_at IS NULL "
+                f"AND status IN ({', '.join(['%s'] * len(EDITABLE))}) AND version = %s "
+                "AND EXISTS (SELECT 1 FROM doc_section s "
+                "WHERE s.document_id = document.document_id AND s.section_def = 'info' "
+                "AND json_extract(s.values_json, '$.inspector') IS NOT %s)",
+                [_db_datetime(now), document_id, *EDITABLE, expected_version, inspector_id],
+            )
+            changed = cursor.rowcount
+        s.note(f"영향 행 {changed}")
+    if changed == 0:
+        return _inspector_failure(document_id, expected_version, inspector_id)
+    with step("DOC-BIN-06", "DOC", "info.inspector 변경"):
+        with connection_cursor() as cursor:
+            cursor.execute(
+                "UPDATE doc_section SET values_json = json_set(values_json, '$.inspector', %s), "
+                "recorded_at = %s, recorded_by = %s "
+                "WHERE document_id = %s AND section_def = 'info'",
+                [inspector_id, _db_datetime(now), actor_id, document_id],
+            )
+    return {"changed": True, "version": expected_version + 1}
+
+
+def batch_set_inspector(actor_id, items, inspector_id):
+    """F25: 점검자 일괄 지정(D03 info.inspector). 문서마다 세이브포인트, 같은 값은 "변화 없음".
+
+    items: [{document_id, expected_version}] 1~50건. 입력 검사(staff·유형)는 트랜잭션 밖(G3).
+    inspector_id는 정수로 바인딩한다(P7 S3 J6). 상태 전이가 아니라 신호 없음.
+    """
+    pairs = batch.version_items(items, "items")
+    if not isinstance(inspector_id, int) or isinstance(inspector_id, bool):
+        raise ApiError(
+            "inspector_id(staff id)가 필요합니다.",
+            [{"path": "inspector_id", "code": "invalid", "message": "정수여야 합니다."}],
+        )
+    with step("DOC-BIN-02", "DOC", "staff·유형 검사"):
+        if not staff_services.existing_ids([inspector_id]):
+            raise errors.ValidationFailed(
+                details=[
+                    validation.error("inspector_id", "unknown_staff", "등록되지 않은 사용자입니다.")
+                ]
+            )
+        types = dict(
+            Document.objects.filter(
+                pk__in=[document_id for document_id, _ in pairs], deleted_at__isnull=True
+            ).values_list("document_id", "template__type_code")
+        )
+        wrong = [
+            f"items[{i}]"
+            for i, (document_id, _) in enumerate(pairs)
+            if document_id in types and types[document_id] not in INSPECTOR_TYPES
+        ]
+        if wrong:
+            raise batch.not_batchable(wrong, "점검자 일괄 지정은 육안검사(D03)만 할 수 있습니다.")
+    now = timezone.now()
+    with step("DOC-BIN-03", "DOC", "트랜잭션") as tx:
+        with transaction.atomic():
+            results = batch.run_each(
+                pairs,
+                lambda pair: _set_inspector(actor_id, pair[0], pair[1], inspector_id, now),
+                ident=lambda pair: {"document_id": pair[0]},
+                layer="DOC",
+                item_step="DOC-BIN-04",
+            )
+        tx.note(f"커밋: {sum(r['ok'] for r in results)}/{len(results)}")
+    with step("DOC-BIN-07", "DOC", "결과 모음"):
+        return batch.summary("inspector", results)
 
 
 def connection_cursor():

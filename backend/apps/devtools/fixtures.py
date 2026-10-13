@@ -7,15 +7,22 @@ P6 프리셋은 실행 전에 이 개발 API로 **새 입고 LOT과 육안검사
 개발 설정 + devstock에서만.
 
 POST /api/dev/fixtures/d03 {
-  state: draft | completed | approved | submitted | correcting | correction_completed
-         | correction_submitted,
+  state: draft | completed | approved | submitted | submitted_partial | rejected | correcting
+         | correction_completed | correction_submitted,
+         (submitted_partial: 담당 staff 3 승인 뒤 staff 1 대기, rejected: staff 1 반려 — P7)
   verdict: PASS | FAIL           (검사 값, 기본 PASS),
   edited: bool                   (correcting: 정정 시작 뒤 한 번 수정),
   change_to: PASS | FAIL         (correcting 계열: 정정 시작 뒤 판정을 이 값으로 고침),
-  used: bool                     (승인 뒤 개발 lots를 CONSUMED로 — "사용된 LOT" 흉내)
+  used: bool                     (승인 뒤 개발 lots를 CONSUMED로 — "사용된 LOT" 흉내),
+  received_date: YYYY-MM-DD      (P7, 기본 오늘 — 같은 날이면 LOT 번호 이어서 RM-MMDD-nn),
+  count: 1~10                    (P7, 기본 1),
+  inspector: staff id | null     (P7, 기본 4. null이면 점검자 비움 — 작성중(draft)만)
 }
 → 201 {document_id, lot_id, lot_number, version, status}
+   count > 1이면 {items: [{document_id, lot_id, lot_number, version, status}, …]}
 """
+
+import datetime
 
 from django.db import transaction
 from django.utils import timezone
@@ -40,6 +47,8 @@ STATES = (
     "completed",
     "approved",
     "submitted",
+    "submitted_partial",
+    "rejected",
     "correcting",
     "correction_completed",
     "correction_submitted",
@@ -63,29 +72,45 @@ def _clean(body):
     return state, verdict, change_to, bool(body.get("edited")), bool(body.get("used"))
 
 
+def _clean_p7(body, state):
+    """P7 옵션: received_date·count·inspector(p7-s2-spec 3.5)."""
+    raw = body.get("received_date")
+    day = timezone.localdate()
+    if raw is not None:
+        try:
+            if not isinstance(raw, str) or len(raw) != 10:
+                raise ValueError(raw)
+            day = datetime.date.fromisoformat(raw)
+        except ValueError:
+            raise _bad("received_date는 YYYY-MM-DD입니다.") from None
+    count = body.get("count", 1)
+    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 10:
+        raise _bad("count는 1~10입니다.")
+    inspector = body.get("inspector", 4)
+    if inspector is not None and (isinstance(inspector, bool) or not isinstance(inspector, int)):
+        raise _bad("inspector는 staff id 또는 null입니다.")
+    if inspector is None and state != "draft":
+        raise _bad("점검자가 없으면 작성완료할 수 없습니다 — inspector: null은 draft에서만.")
+    return day, count, inspector
+
+
 def _version(document_id):
     return doc.get_document(document_id)["version"]
 
 
-def _fill(document_id, verdict):
+def _fill(document_id, verdict, inspector=4):
     detail = doc.get_document(document_id)
     info = next(s for s in detail["sections"] if s["section_def"] == "info")
     check = next(s for s in detail["sections"] if s["section_def"] == "inspection")
+    updates = [
+        {"section_id": check["section_id"], "values": {**CHECK[verdict], "verdict": verdict}}
+    ]
+    if inspector is not None:
+        updates.append({"section_id": info["section_id"], "values": {"inspector": inspector}})
     doc.update_document(
         ACTOR,
         document_id,
-        {
-            "expected_version": detail["version"],
-            "sections": {
-                "update": [
-                    {"section_id": info["section_id"], "values": {"inspector": 4}},
-                    {
-                        "section_id": check["section_id"],
-                        "values": {**CHECK[verdict], "verdict": verdict},
-                    },
-                ]
-            },
-        },
+        {"expected_version": detail["version"], "sections": {"update": updates}},
     )
     if verdict == "FAIL" and not doc.get_document(document_id)["deviations"]:
         doc.create_deviation(
@@ -131,13 +156,15 @@ def _new_lot(day):
     return lot_id
 
 
-def build_d03(state, verdict="PASS", change_to=None, edited=False, used=False):
-    day = timezone.localdate()
+def build_d03(
+    state, verdict="PASS", change_to=None, edited=False, used=False, day=None, inspector=4
+):
+    day = day or timezone.localdate()
     with transaction.atomic():
         lot_id = _new_lot(day)
         out = req.require_for_lot(ACTOR, lot_id)
         document_id = next(d for d in out["documents"] if d["type_code"] == "D03")["document_id"]
-    _fill(document_id, verdict)
+    _fill(document_id, verdict, inspector)
     if state == "draft":
         return lot_id, document_id
     doc.complete_document(ACTOR, document_id, _version(document_id))
@@ -145,6 +172,12 @@ def build_d03(state, verdict="PASS", change_to=None, edited=False, used=False):
         return lot_id, document_id
     if state == "submitted":
         _submit(document_id)
+        return lot_id, document_id
+    if state == "submitted_partial":  # P7: 담당(staff 3) 승인, HACCP팀장(staff 1) 대기
+        wf.decide(3, _submit(document_id)[1], "approved")
+        return lot_id, document_id
+    if state == "rejected":  # P7: HACCP팀장(staff 1) 반려
+        wf.decide(1, _submit(document_id)[2], "rejected", "콘솔 준비: 반려")
         return lot_id, document_id
     _approve(document_id)
     if used:
@@ -174,21 +207,29 @@ def d03_fixture(request):
     try:
         body = parse_json_body(request)
         state, verdict, change_to, edited, used = _clean(body)
-        lot_id, document_id = build_d03(state, verdict, change_to, edited, used)
+        day, count, inspector = _clean_p7(body, state)
+        made = [
+            build_d03(state, verdict, change_to, edited, used, day, inspector) for _ in range(count)
+        ]
     except ApiError as error:
         return error_response(error)
-    detail = doc.get_document(document_id)
-    lot = Lot.objects.get(pk=lot_id)
+    items = []
+    for lot_id, document_id in made:
+        detail = doc.get_document(document_id)
+        items.append(
+            {
+                "document_id": document_id,
+                "lot_id": lot_id,
+                "lot_number": Lot.objects.get(pk=lot_id).lot_number,
+                "version": detail["version"],
+                "status": detail["status"],
+                "correction": detail["correction"],
+            }
+        )
+    if count == 1:
+        return json_response(items[0], status=201)
     return json_response(
-        {
-            "document_id": document_id,
-            "lot_id": lot_id,
-            "lot_number": lot.lot_number,
-            "version": detail["version"],
-            "status": detail["status"],
-            "correction": detail["correction"],
-        },
-        status=201,
+        {"items": [{k: v for k, v in i.items() if k != "correction"} for i in items]}, status=201
     )
 
 
