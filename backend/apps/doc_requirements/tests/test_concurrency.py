@@ -3,8 +3,9 @@
 HACCP_TEST_FILE_DB=1 python manage.py test apps.doc_requirements.tests.test_concurrency \
     --settings=config.settings.test_filedb
 
-호출자 흉내: 같은 트랜잭션에서 자기 쓰기(touched_at) → require_for_*. 첫 호출이 자기 쓰기 뒤에
-멈춘 동안 두 번째 호출을 시작하고, 두 번째가 기다리는(또는 실패하는) 동안 첫 호출을 끝낸다.
+호출자 흉내: 같은 트랜잭션에서 자기 쓰기(수불 행 UPDATE) → require_for_*. 첫 호출이 자기 쓰기 뒤에
+멈춘 동안 두 번째 호출을 시작하고, 두 번째가 기다리는 동안 첫 호출을 끝낸다.
+트랜잭션은 운영과 같이 IMMEDIATE로 시작한다(C2 — ISS-030, D-129): 자기 쓰기가 없어도 기다린다.
 """
 
 import os
@@ -97,13 +98,12 @@ class ReqConcurrencyTests(TransactionTestCase):
         self.assertEqual(sorted(d03), ["D03|lot:88", "D03|lot:89"])  # P6a: LOT마다 D03
 
     def test_tc009_write_first_rule(self):
-        # ① 두 번째가 자기 쓰기 없이(첫 SQL = 읽기) 부르면 즉시 database is locked
+        # ① IMMEDIATE(C2, D-129): 두 번째가 자기 쓰기 없이(첫 SQL = 읽기) 불러도 트랜잭션 시작에서
+        #    쓰기 잠금을 기다렸다가 성공 — D-067 "첫 SQL은 쓰기" 규칙이 없어도 됨(지켜도 무해)
         first = self.caller(touch_lot, 88, services.require_for_lot, hold=True)
         second = self.caller(touch_lot, 89, services.require_for_lot, write_first=False)
-        results = self.run_pair(first, second, second_waits=False)
-        self.assertEqual(results["first"][0], "ok", results)
-        self.assertEqual(results["second"][0], "error", results)
-        self.assertIn("database is locked", str(results["second"][1]))
+        results = self.run_pair(first, second)
+        self.assertEqual([results[k][0] for k in ("first", "second")], ["ok", "ok"], results)
         cleanup_refs()
         Document.objects.all().delete()
         # ② 자기 쓰기를 먼저 하면 기다렸다가 성공

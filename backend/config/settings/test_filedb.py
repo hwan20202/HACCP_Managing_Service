@@ -14,6 +14,8 @@ DATABASES = {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": str(Path(tempfile.gettempdir()) / "haccp_test_base.sqlite3"),
         "TEST": {"NAME": str(Path(tempfile.gettempdir()) / "haccp_test_concurrency.sqlite3")},
-        "OPTIONS": {"timeout": 20},
+        # 운영(base.py)·메모리 테스트(test.py)와 같은 방식: 모든 atomic()이 쓰기 잠금으로 시작
+        # (수불 규칙 S5, C2 — ISS-030 a, D-129)
+        "OPTIONS": {"timeout": 20, "transaction_mode": "IMMEDIATE"},
     }
 }
