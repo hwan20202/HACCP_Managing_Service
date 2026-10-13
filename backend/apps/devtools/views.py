@@ -18,8 +18,10 @@ from apps.documents.models import (
     DocSection,
     Document,
     DocumentCorrection,
+    DocumentFile,
     DocumentRef,
     DocumentTemplate,
+    File,
 )
 
 from .middleware import recall
@@ -140,7 +142,7 @@ def snapshot(request):
     slots = _rows(
         Approval.objects.filter(request__document_id=document_id).order_by("request_id", "slot_no")
     )
-    # P4: 업무 대상 참조·개선조치(파일 두 테이블은 스프린트 3 기능이라 아직 비교하지 않는다)
+    # P4: 업무 대상 참조·개선조치
     refs = _rows(DocumentRef.objects.filter(document_id=document_id).order_by("ref_id"))
     deviations = _rows(
         DeviationAction.objects.filter(document_id=document_id).order_by("deviation_id")
@@ -149,6 +151,13 @@ def snapshot(request):
         DeviationChecker.objects.filter(deviation__document_id=document_id).order_by(
             "deviation_id", "staff_id"
         )
+    )
+    # 스프린트 3: 파일(연결과 그 파일 행 — 연결이 끊겨 지워진 파일은 비교 전 쪽에만 남는다)
+    file_links = _rows(
+        DocumentFile.objects.filter(document_id=document_id).order_by("linked_at", "file_id")
+    )
+    files = _rows(
+        File.objects.filter(file_id__in=[row["file_id"] for row in file_links]).order_by("file_id")
     )
     # P6: 정정 기록
     corrections = _rows(
@@ -170,6 +179,8 @@ def snapshot(request):
             if row[k]
         }
         | {row["staff_id"] for row in checkers}
+        | {row["linked_by_id"] for row in file_links}
+        | {row["uploaded_by_id"] for row in files}
         | {
             row[k]
             for row in corrections
@@ -188,6 +199,8 @@ def snapshot(request):
         "deviation_action": deviations,
         "deviation_checker": checkers,
         "document_correction": corrections,
+        "document_file": file_links,
+        "file": files,
     }
     # P6 S5: 참조 LOT의 상태(판정 전달 EFF 결과 확인) — 수불 lots(C2)
     lot_ids = sorted({row["lot_id"] for row in refs if row["lot_id"]})

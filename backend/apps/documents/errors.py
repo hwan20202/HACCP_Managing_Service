@@ -97,3 +97,36 @@ class CorrectionHasChanges(DocumentError):
         "CORRECTION_HAS_CHANGES",
         "정정 시작 뒤 수정한 내용이 있어 취소할 수 없습니다. 작성완료 후 재상신하세요.",
     )
+
+
+# ---------------------------------------------------------------- 파일(F14~F18, 스프린트 3 — D-058)
+
+
+class FilesNotAllowed(DocumentError):
+    status, code, message = 409, "FILES_NOT_ALLOWED", "이 양식은 파일을 첨부하지 않습니다."
+
+
+class FileRejected(DocumentError):
+    """details[].reason = type / size / name (DOC-VR-20)."""
+
+    status, code, message = 400, "FILE_REJECTED", "올릴 수 없는 파일입니다."
+
+
+class FileNotFound(DocumentError):
+    status, code, message = 404, "FILE_NOT_FOUND", "파일을 찾을 수 없습니다."
+
+
+class FileNotLinked(DocumentError):
+    status, code, message = 409, "FILE_NOT_LINKED", "이 문서에 연결된 파일이 아닙니다."
+
+
+class FileAlreadyLinked(DocumentError):
+    status, code, message = 409, "FILE_ALREADY_LINKED", "이미 연결된 파일입니다."
+
+
+class FileTemplateMismatch(DocumentError):
+    status, code, message = (
+        409,
+        "FILE_TEMPLATE_MISMATCH",
+        "다른 종류 문서의 파일은 연결할 수 없습니다.",
+    )

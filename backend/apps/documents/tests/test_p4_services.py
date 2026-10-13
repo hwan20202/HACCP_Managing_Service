@@ -1,6 +1,6 @@
 """P4 메소드 테스트 (수준 M). 이름의 tcNNN은 document/p4-s2-spec.md 7장의 TC ID.
 
-파일 기능(F14~F18)·상신 잠금의 파일 보존(TC-141)은 스프린트 3(D-058)이라 여기 없다.
+파일 기능(F14~F18)·상신 잠금의 파일 보존(TC-141)은 스프린트 3 test_files.py에 있다.
 """
 
 import ast
@@ -12,7 +12,7 @@ from django.test import TestCase, TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 
 from apps.core import trace
-from apps.documents import errors, flows, services
+from apps.documents import errors, files, flows, services
 from apps.documents.models import (
     DeviationAction,
     DeviationChecker,
@@ -723,6 +723,7 @@ class BoundaryTests(P4TestCase):
             services.get_document(d03)
             attach_file(d01)
             complete(d01)
+            files.search_files({"type_code": "D01", "item": "유자"})  # 스프린트 3 F18
         pattern = re.compile(r'\b(FROM|JOIN)\s+"?(%s)"?\b' % "|".join(STOCK_TABLES), re.I)
         offenders = [q["sql"] for q in ctx.captured_queries if pattern.search(q["sql"])]
         self.assertEqual(offenders, [])

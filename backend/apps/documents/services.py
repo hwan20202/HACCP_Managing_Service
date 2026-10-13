@@ -32,6 +32,7 @@ from .models import (
     DocumentFile,
     DocumentRef,
     DocumentTemplate,
+    File,
 )
 
 EDITABLE = ("draft", "rejected", "correcting")  # P6: 정정 중도 수정·작성완료(P6-FR-04)
@@ -1240,6 +1241,13 @@ def lock_for_review(document_id, expected_version=None):
         _lock_failure(
             document_id, "DOC-LCK-01a", expected_version=expected_version, allowed=LOCKABLE
         )
+    with step("DOC-LCK-01b", "DOC", "연결 파일 보존 표시") as s:
+        # 스프린트 3(D-058, p4-s2-flows 9장): 상신된 문서의 파일은 끊어도 지우지 않는다(FR-24)
+        kept = File.objects.filter(
+            retained_at__isnull=True,
+            file_id__in=DocumentFile.objects.filter(document_id=document_id).values("file_id"),
+        ).update(retained_at=now)
+        s.note(f"보존 표시 {kept}개")
     with step("DOC-LCK-02", "DOC", "결과"):
         return _lifecycle_result(document_id)
 

@@ -31,4 +31,13 @@ urlpatterns = [
         name="api-deviation-collection",
     ),
     path("deviations/<int:deviation_id>", api.deviation_item, name="api-deviation-item"),
+    # 스프린트 3 파일 (DOC-A11~A14)
+    path("documents/<int:document_id>/files", api.document_files, name="api-document-files"),
+    path(
+        "documents/<int:document_id>/files/<int:file_id>",
+        api.document_file_item,
+        name="api-document-file-item",
+    ),
+    path("files", api.file_collection, name="api-file-collection"),
+    path("files/<int:file_id>", api.file_item, name="api-file-item"),
 ]

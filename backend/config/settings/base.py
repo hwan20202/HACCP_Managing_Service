@@ -83,7 +83,8 @@ STATIC_ROOT = DATA_DIR / "static"
 PROTOTYPE_DATA_FILE = DATA_DIR / "legacy-prototype" / "src" / "js" / "data.js"
 PROTOTYPE_STANDARD_DIR = DATA_DIR / "reference" / "setup_standard"
 MEDIA_ROOT = DATA_DIR / "uploads"
-# Reserved for future uploads; there is currently no upload/download feature.
+# Document attachments (D01·D02) are stored under MEDIA_ROOT/files/YYYY/MM/ and served only
+# through /api/v1/files/<id>; MEDIA_URL is not routed.
 MEDIA_URL = "/private-media/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 FILE_UPLOAD_PERMISSIONS = 0o600

@@ -4,7 +4,7 @@ CSRF: 계정·세션 쿠키가 없고, 쓰기 요청은 JSON 본문과 사용자
 다른 출처의 단순 요청으로는 이 조건을 만들 수 없으므로 CSRF 토큰 검사는 하지 않는다.
 """
 
-from django.http import HttpResponse
+from django.http import FileResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
@@ -19,7 +19,7 @@ from apps.core.http import (
 from apps.core.trace import step
 from apps.staff.services import actor_from_header
 
-from . import errors, services
+from . import errors, files, services
 
 CREATE_KEYS = ("template_id", "subject", "work_date", "assignee_id", "due_at", "sections")
 PATCH_KEYS = ("expected_version", "document", "sections")
@@ -275,3 +275,90 @@ def document_brief(request):
             details=[{"path": "ids", "code": "max", "message": f"최대 {services.BRIEF_MAX}개"}]
         )
     return json_response(services.brief_documents([int(p) for p in parts]))
+
+
+# ---------------------------------------------------------------- 스프린트 3: 파일 (DOC-A11~A14)
+
+
+def _positive_int(raw, path):
+    raw = str(raw or "").strip()
+    value = int(raw) if raw.isascii() and raw.isdigit() else 0
+    if value < 1:
+        raise ApiError(
+            f"{path}(1 이상 정수)이 필요합니다.",
+            [{"path": path, "code": "required", "message": "1 이상의 정수여야 합니다."}],
+        )
+    return value
+
+
+def _multipart_upload(request):
+    """multipart: file 1개 + expected_version. 반환: (upload, expected_version)."""
+    reject_unknown_keys(request.POST, ("expected_version",))
+    reject_unknown_keys(request.FILES, ("file",))
+    uploads = request.FILES.getlist("file")
+    if len(uploads) != 1:
+        raise ApiError(
+            "파일은 한 요청에 1개씩 올립니다.",
+            [{"path": "file", "code": "required", "message": "file 1개가 필요합니다."}],
+        )
+    return uploads[0], _positive_int(request.POST.get("expected_version"), "expected_version")
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@_api
+def document_files(request, document_id):
+    """DOC-A11 파일 올리기(multipart, F14) 또는 기존 파일 연결(F15).
+
+    연결은 JSON {expected_version, link_file_id}.
+
+    CSRF: 다른 출처의 multipart 단순 요청도 X-Staff-Id 헤더는 붙일 수 없어(사전 요청 필요) 거부된다.
+    """
+    if (request.content_type or "").startswith("multipart/form-data"):
+        with step("DOC-FUP-01", "API", "요청 형식·사용자 확인"):
+            upload, expected = _multipart_upload(request)
+            actor = actor_from_header(request.headers.get("X-Staff-Id"))
+        return json_response(files.attach_file(actor, document_id, expected, upload), status=201)
+
+    with step("DOC-FLK-01", "API", "요청 형식·사용자 확인"):
+        body = parse_json_body(request)
+        reject_unknown_keys(body, ("expected_version", "link_file_id"))
+        expected = services._expected_version(body)
+        file_id = body.get("link_file_id")
+        if isinstance(file_id, bool) or not isinstance(file_id, int) or file_id < 1:
+            raise ApiError(
+                "link_file_id(1 이상 정수)이 필요합니다.",
+                [{"path": "link_file_id", "code": "required", "message": "필수입니다."}],
+            )
+        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+    return json_response(files.link_file(actor, document_id, expected, file_id), status=201)
+
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+@_api
+def document_file_item(request, document_id, file_id):
+    """DOC-A12 파일 연결 끊기 ?expected_version=n (F16)."""
+    with step("DOC-FDT-01", "API", "요청 형식·사용자 확인"):
+        expected = _positive_int(request.GET.get("expected_version"), "expected_version")
+        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+    return json_response(files.detach_file(actor, document_id, expected, file_id))
+
+
+@require_http_methods(["GET"])
+@_api
+def file_collection(request):
+    """DOC-A14 이전 파일 검색 (F18). 읽기라 X-Staff-Id 불필요."""
+    keys = ("type_code", "item", "supplier", "days", "page")
+    reject_unknown_keys(request.GET, keys)
+    return json_response(files.search_files({k: request.GET.get(k) for k in keys}))
+
+
+@require_http_methods(["GET"])
+@_api
+def file_item(request, file_id):
+    """DOC-A13 파일 보기 (F17). 내용을 inline으로 보낸다. 읽기라 X-Staff-Id 불필요."""
+    path, name, mime = files.open_file(file_id)
+    response = FileResponse(open(path, "rb"), content_type=mime, filename=name)
+    response["Cache-Control"] = "private, no-store"
+    return response

@@ -5,7 +5,7 @@ WF 단계 안에 도메인 단계가 이어서 기록된다. 도식을 바꾸면
 
 _SUB = (
     ["WF-SUB-01", "WF-SUB-02", "WF-SUB-03", "APR-VAL-01", "APR-VAL-02", "APR-VAL-03"]
-    + ["WF-SUB-04", "WF-SUB-05", "DOC-LCK-00", "DOC-LCK-01", "DOC-LCK-02"]
+    + ["WF-SUB-04", "WF-SUB-05", "DOC-LCK-00", "DOC-LCK-01", "DOC-LCK-01b", "DOC-LCK-02"]
     + ["WF-SUB-06", "DOC-GET-01", "DOC-GET-02", "DOC-GET-03"]
     + ["WF-SUB-07", *[f"APR-OPN-0{n}" for n in range(0, 6)], "WF-SUB-08"]
 )

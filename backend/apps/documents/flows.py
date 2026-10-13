@@ -26,7 +26,8 @@ FLOWS = {
         "DOC-UPD-10",
     ],
     "DOC-DEL": ["DOC-DEL-01", "DOC-DEL-02", "DOC-DEL-03"],
-    "DOC-LCK": ["DOC-LCK-00", "DOC-LCK-01", "DOC-LCK-02"],
+    # 01b: 연결 파일 보존 표시(스프린트 3)
+    "DOC-LCK": ["DOC-LCK-00", "DOC-LCK-01", "DOC-LCK-01b", "DOC-LCK-02"],
     # P6: 생명주기 함수는 상태 변경 뒤 DOC-SIG-01(신호)을 지난다(p6-s2-spec 4.7)
     "DOC-APV": ["DOC-APV-01", "DOC-SIG-01", "DOC-APV-02"],
     "DOC-RJT": ["DOC-RJT-01", "DOC-SIG-01", "DOC-RJT-02"],
@@ -48,6 +49,11 @@ FLOWS = {
     "DOC-BIN": [f"DOC-BIN-0{n}" for n in range(1, 8)],
     "DOC-BRF": [f"DOC-BRF-0{n}" for n in range(1, 5)],
     "DOC-FNL": ["DOC-FNL-01"],
+    # 스프린트 3 파일 (p4-s2-flows 6장). FDT-05(파일 행 삭제)는 마지막 연결·보존 없음일 때만
+    "DOC-FUP": [f"DOC-FUP-0{n}" for n in range(1, 7)],
+    "DOC-FLK": [f"DOC-FLK-0{n}" for n in range(1, 6)],
+    "DOC-FDT": [f"DOC-FDT-0{n}" for n in range(1, 5)],
+    "DOC-FSR": ["DOC-FSR-01", "DOC-FSR-02"],
 }
 
 # P7 S5: 개발 콘솔의 항목별 비교(WF BATCH와 같은 모양: 머리 → 항목 × n → 꼬리).
