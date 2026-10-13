@@ -1,0 +1,559 @@
+"""JSON API for inventory: /api/v1/inventory/...
+
+Conventions
+- Request bodies are JSON. Numbers are read as Decimal, so 0.1 stays 0.1; quantities may
+  also be sent as strings ("50.25"). Quantities are in the item's base unit.
+- Responses: a list is {"results": [...]} (+ "count" when paginated); one record is the object.
+- Errors: {"error": {"message": "<Korean, show to user>", "fields": {...}?}} with
+  400 (invalid request), 404 (not found), 405 (method), 409 (conflict).
+- CSRF: the CSRF middleware is on. GET responses set the csrftoken cookie; send it back in
+  the X-CSRFToken header on POST / PATCH.
+- No login yet (MVP): the acting person is sent as staff_id in the body.
+"""
+
+import datetime
+import functools
+import json
+from decimal import Decimal
+
+from django.db import IntegrityError, transaction
+from django.http import JsonResponse
+from django.views.decorators.csrf import ensure_csrf_cookie
+
+from . import serializers as out
+from .errors import InventoryError, NotFound
+from .fields import KST
+from .judgment import apply_incoming_judgment
+from .ledger import stock_ledger, stock_ledger_changes_since
+from .master_import import parse_item_row, parse_staff_row, parse_supplier_row
+from .models import (
+    IncomingReceipt,
+    Inventory,
+    Item,
+    ItemType,
+    Lot,
+    LotStatus,
+    ReceiptStatus,
+    Staff,
+    StockMovement,
+    StockMovementType,
+    Supplier,
+)
+from .movements import (
+    adjust_stock,
+    correct_movement,
+    dispose,
+    record_opening_balance,
+    return_to_supplier,
+)
+from .quantity import from_e6
+from .receiving import ReceiptInput, cancel_receipt, register_receipt
+from .stock import item_stock, lot_stock
+
+MAX_PAGE = 500
+
+
+class BadRequest(InventoryError):
+    def __init__(self, message, fields=None):
+        super().__init__(message)
+        self.fields = fields
+
+
+class Conflict(InventoryError):
+    pass
+
+
+def error_response(status, message, fields=None):
+    body = {"message": message}
+    if fields:
+        body["fields"] = fields
+    return JsonResponse({"error": body}, status=status, json_dumps_params={"ensure_ascii": False})
+
+
+def ok(data, status=200):
+    return JsonResponse(data, status=status, json_dumps_params={"ensure_ascii": False})
+
+
+def endpoint(*methods):
+    """Method check, JSON body parsing and error mapping for one view."""
+
+    def decorate(view):
+        @functools.wraps(view)
+        def wrapper(request, *args, **kwargs):
+            if request.method not in methods:
+                return error_response(405, f"허용되지 않는 요청 방식입니다: {request.method}")
+            if request.method in {"POST", "PATCH"}:
+                try:
+                    body = json.loads(request.body or b"{}", parse_float=Decimal)
+                except ValueError, UnicodeDecodeError:
+                    return error_response(400, "요청 본문이 올바른 JSON이 아닙니다.")
+                if not isinstance(body, dict):
+                    return error_response(400, "요청 본문은 JSON 객체여야 합니다.")
+                request.data = body
+            try:
+                return view(request, *args, **kwargs)
+            except NotFound as error:
+                return error_response(404, str(error))
+            except Conflict as error:
+                return error_response(409, str(error))
+            except BadRequest as error:
+                return error_response(400, str(error), error.fields)
+            except InventoryError as error:
+                return error_response(400, str(error))
+
+        wrapped = ensure_csrf_cookie(wrapper) if "GET" in methods else wrapper
+        return wrapped
+
+    return decorate
+
+
+# ---------------------------------------------------------------------------
+# Parameter helpers
+# ---------------------------------------------------------------------------
+
+
+def _date(value, name, required=False):
+    if value in (None, ""):
+        if required:
+            raise BadRequest(f"'{name}' 값이 필요합니다.", {name: "required"})
+        return None
+    try:
+        return datetime.date.fromisoformat(str(value))
+    except ValueError as error:
+        raise BadRequest(f"'{name}' 는 YYYY-MM-DD 형식이어야 합니다.", {name: "invalid"}) from error
+
+
+def _datetime(value, name):
+    """'YYYY-MM-DD' -> date (start of day), ISO datetime -> datetime (naive = KST)."""
+    if value in (None, ""):
+        return None
+    text = str(value)
+    if len(text) == 10:
+        return _date(text, name)
+    try:
+        parsed = datetime.datetime.fromisoformat(text)
+    except ValueError as error:
+        raise BadRequest(f"'{name}' 일시 형식을 확인하세요.", {name: "invalid"}) from error
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=KST)
+
+
+def _int(value, name, required=False):
+    if value in (None, ""):
+        if required:
+            raise BadRequest(f"'{name}' 값이 필요합니다.", {name: "required"})
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError) as error:
+        raise BadRequest(f"'{name}' 는 정수여야 합니다.", {name: "invalid"}) from error
+
+
+def _flag(value):
+    return str(value).lower() in {"1", "true", "yes", "y"}
+
+
+def _required(data, *names):
+    missing = {name: "required" for name in names if data.get(name) in (None, "")}
+    if missing:
+        raise BadRequest(f"필수 항목이 없습니다: {', '.join(missing)}", missing)
+
+
+def _page(request, queryset):
+    limit = min(_int(request.GET.get("limit"), "limit") or 100, MAX_PAGE)
+    offset = _int(request.GET.get("offset"), "offset") or 0
+    return queryset.count(), queryset[offset : offset + limit]
+
+
+def _get(model, pk, label):
+    obj = model.objects.filter(pk=pk).first()
+    if obj is None:
+        raise NotFound(f"{label}을(를) 찾을 수 없습니다. (id={pk})")
+    return obj
+
+
+# ---------------------------------------------------------------------------
+# Reference codes
+# ---------------------------------------------------------------------------
+
+
+@endpoint("GET")
+def item_types(request):
+    rows = ItemType.objects.order_by("sort_order")
+    return ok({"results": [{"code": r.code, "name": r.name} for r in rows]})
+
+
+@endpoint("GET")
+def movement_types(request):
+    rows = StockMovementType.objects.order_by("code")
+    return ok(
+        {"results": [{"code": r.code, "name": r.name, "direction": r.direction} for r in rows]}
+    )
+
+
+# ---------------------------------------------------------------------------
+# Master data: staff / suppliers / items
+# ---------------------------------------------------------------------------
+
+MASTER = {
+    "staff": (Staff, "staff_code", parse_staff_row, out.staff, "담당자"),
+    "suppliers": (Supplier, "supplier_code", parse_supplier_row, out.supplier, "공급처"),
+    "items": (Item, "item_code", parse_item_row, out.item, "품목"),
+}
+
+
+def _master_row(obj, serialize):
+    """Current record as an input row, so PATCH can merge and re-validate the whole record."""
+    row = serialize(obj)
+    row.pop("id")
+    if "minimum_stock" in row:
+        row["minimum_stock"] = row["minimum_stock"] or "0"
+    row["is_active"] = "1" if row["is_active"] else "0"
+    return row
+
+
+def _master_save(kind, data, obj=None):
+    model, code_field, parse, serialize, label = MASTER[kind]
+    if obj is not None:
+        if code_field in data and str(data[code_field]).strip() != getattr(obj, code_field):
+            raise BadRequest(
+                "코드는 변경할 수 없습니다. 새로 등록하세요.", {code_field: "readonly"}
+            )
+        data = {**_master_row(obj, serialize), **data}
+    if isinstance(data.get("is_active"), bool):
+        data = {**data, "is_active": "1" if data["is_active"] else "0"}
+    try:
+        values = parse(data)
+    except ValueError as error:
+        raise BadRequest(str(error)) from error
+    code = values.pop("code")
+    try:
+        with transaction.atomic():
+            if obj is None:
+                if model.objects.filter(**{code_field: code}).exists():
+                    raise Conflict(f"이미 등록된 {label} 코드입니다: {code}")
+                obj = model.objects.create(**{code_field: code}, **values)
+            else:
+                for name, value in values.items():
+                    setattr(obj, name, value)
+                obj.save()
+    except IntegrityError as error:
+        raise Conflict(f"{label} 저장이 거부되었습니다: {error}") from error
+    obj.refresh_from_db()
+    return obj
+
+
+def _master_list(request, kind):
+    model, code_field, _, serialize, _ = MASTER[kind]
+    rows = model.objects.order_by(code_field)
+    active = request.GET.get("active", "1")
+    if active != "all":
+        rows = rows.filter(is_active=_flag(active))
+    if q := request.GET.get("q", "").strip():
+        rows = rows.filter(**{f"{code_field}__icontains": q}) | rows.filter(name__icontains=q)
+    if kind == "items" and (item_type := request.GET.get("item_type")):
+        rows = rows.filter(item_type=item_type)
+    return [serialize(obj) for obj in rows]
+
+
+def _master_collection(kind):
+    @endpoint("GET", "POST")
+    def view(request):
+        if request.method == "POST":
+            return ok(MASTER[kind][3](_master_save(kind, request.data)), status=201)
+        return ok({"results": _master_list(request, kind)})
+
+    view.__name__ = f"{kind}_collection"
+    return view
+
+
+def _master_detail(kind):
+    @endpoint("GET", "PATCH")
+    def view(request, pk):
+        model, _, _, serialize, label = MASTER[kind]
+        obj = _get(model, pk, label)
+        if request.method == "PATCH":
+            obj = _master_save(kind, request.data, obj)
+        return ok(serialize(obj))
+
+    view.__name__ = f"{kind}_detail"
+    return view
+
+
+staff_collection = _master_collection("staff")
+staff_detail = _master_detail("staff")
+supplier_collection = _master_collection("suppliers")
+supplier_detail = _master_detail("suppliers")
+item_collection = _master_collection("items")
+item_detail = _master_detail("items")
+
+
+# ---------------------------------------------------------------------------
+# Receipts
+# ---------------------------------------------------------------------------
+
+RECEIPT_RELATED = ("lot__item", "supplier", "staff")
+
+
+@endpoint("GET", "POST")
+def receipt_collection(request):
+    if request.method == "POST":
+        data = request.data
+        _required(data, "item_id", "supplier_id", "staff_id", "received_date", "quantity")
+        receipt = register_receipt(
+            ReceiptInput(
+                item_id=_int(data["item_id"], "item_id"),
+                supplier_id=_int(data["supplier_id"], "supplier_id"),
+                staff_id=_int(data["staff_id"], "staff_id"),
+                received_date=_date(data["received_date"], "received_date"),
+                quantity=data["quantity"],
+                idempotency_key=str(data.get("idempotency_key") or ""),
+                supplier_lot_number=data.get("supplier_lot_number"),
+                manufactured_date=_date(data.get("manufactured_date"), "manufactured_date"),
+                expiration_date=_date(data.get("expiration_date"), "expiration_date"),
+                judgment=str(data["judgment"]).upper() if data.get("judgment") else None,
+            )
+        )
+        receipt = IncomingReceipt.objects.select_related(*RECEIPT_RELATED).get(pk=receipt.pk)
+        return ok(out.receipt(receipt), status=201)
+
+    rows = IncomingReceipt.objects.select_related(*RECEIPT_RELATED).order_by(
+        "-received_date", "-pk"
+    )
+    if date_from := _date(request.GET.get("from"), "from"):
+        rows = rows.filter(received_date__gte=date_from)
+    if date_to := _date(request.GET.get("to"), "to"):
+        rows = rows.filter(received_date__lte=date_to)
+    if supplier_id := _int(request.GET.get("supplier_id"), "supplier_id"):
+        rows = rows.filter(supplier_id=supplier_id)
+    if item_id := _int(request.GET.get("item_id"), "item_id"):
+        rows = rows.filter(lot__item_id=item_id)
+    if status := request.GET.get("status"):
+        if status not in ReceiptStatus.values:
+            raise BadRequest(f"status 는 {ReceiptStatus.values} 중 하나여야 합니다.")
+        rows = rows.filter(receipt_status=status)
+    count, page = _page(request, rows)
+    return ok({"count": count, "results": [out.receipt(r) for r in page]})
+
+
+@endpoint("GET")
+def receipt_detail(request, pk):
+    receipt = IncomingReceipt.objects.select_related(*RECEIPT_RELATED).filter(pk=pk).first()
+    if receipt is None:
+        raise NotFound(f"입고 건을 찾을 수 없습니다. (id={pk})")
+    return ok(out.receipt(receipt))
+
+
+@endpoint("POST")
+def receipt_cancel(request, pk):
+    _required(request.data, "staff_id", "reason")
+    cancel_receipt(
+        receipt_id=pk,
+        staff_id=_int(request.data["staff_id"], "staff_id"),
+        reason=str(request.data["reason"]),
+    )
+    receipt = IncomingReceipt.objects.select_related(*RECEIPT_RELATED).get(pk=pk)
+    return ok(out.receipt(receipt))
+
+
+# ---------------------------------------------------------------------------
+# Lots / stock / ledger
+# ---------------------------------------------------------------------------
+
+
+@endpoint("GET")
+def lot_detail(request, pk):
+    lot = Lot.objects.select_related("item").filter(pk=pk).first()
+    if lot is None:
+        raise NotFound(f"LOT을 찾을 수 없습니다. (id={pk})")
+    quantity = Inventory.objects.filter(lot=lot).values_list("quantity_e6", flat=True).first()
+    movements = (
+        StockMovement.objects.filter(lot=lot)
+        .select_related("lot__item", "movement_type", "staff")
+        .order_by("occurred_at", "pk")
+    )
+    data = out.lot(lot, quantity or 0)
+    data["movements"] = [out.movement(m) for m in movements]
+    return ok(data)
+
+
+@endpoint("POST")
+def lot_judgment(request, pk):
+    """Incoming inspection result for the LOT (PASS / FAIL). Normally called by the document app
+    as a function; exposed here for screens and testing."""
+    data = request.data
+    _required(data, "result", "staff_id")
+    lot = apply_incoming_judgment(
+        lot_id=pk,
+        result=str(data["result"]).upper(),
+        staff_id=_int(data["staff_id"], "staff_id"),
+        document_id=_int(data.get("document_id"), "document_id"),
+        judged_at=_datetime(data.get("judged_at"), "judged_at") or None,
+        reason=data.get("reason"),
+    )
+    lot = Lot.objects.select_related("item").get(pk=lot.pk)
+    quantity = Inventory.objects.filter(lot=lot).values_list("quantity_e6", flat=True).first()
+    return ok(out.lot(lot, quantity or 0))
+
+
+@endpoint("GET")
+def stock_lots(request):
+    status = request.GET.get("status")
+    if status and status not in LotStatus.values:
+        raise BadRequest(f"status 는 {LotStatus.values} 중 하나여야 합니다.")
+    rows = lot_stock(
+        item_type=request.GET.get("item_type") or None,
+        item_id=_int(request.GET.get("item_id"), "item_id"),
+        status=status,
+        include_empty=_flag(request.GET.get("include_empty", "0")),
+        expiring_within_days=_int(request.GET.get("expiring_within_days"), "expiring_within_days"),
+    )
+    return ok({"results": [out.lot_stock(row) for row in rows]})
+
+
+@endpoint("GET")
+def stock_items(request):
+    rows = item_stock(
+        item_type=request.GET.get("item_type") or None,
+        item_id=_int(request.GET.get("item_id"), "item_id"),
+    )
+    if _flag(request.GET.get("below_minimum", "0")):
+        rows = [row for row in rows if row.below_minimum]
+    return ok({"results": [out.item_stock(row) for row in rows]})
+
+
+def ledger_params(request):
+    date_from = _date(request.GET.get("from"), "from", required=True)
+    date_to = _date(request.GET.get("to"), "to", required=True)
+    if date_to < date_from:
+        raise BadRequest("조회 종료일이 시작일보다 빠릅니다.")
+    if (date_to - date_from).days > 366:
+        raise BadRequest("조회 기간은 1년 이내로 지정하세요.")
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "item_type": request.GET.get("item_type") or None,
+        "item_id": _int(request.GET.get("item_id"), "item_id"),
+        "lot_id": _int(request.GET.get("lot_id"), "lot_id"),
+    }
+
+
+@endpoint("GET")
+def ledger(request):
+    params = ledger_params(request)
+    items = stock_ledger(params.pop("date_from"), params.pop("date_to"), **params)
+    return ok(
+        {
+            "from": request.GET["from"],
+            "to": request.GET["to"],
+            "results": [out.ledger_item(row) for row in items],
+        }
+    )
+
+
+@endpoint("GET")
+def ledger_changes(request):
+    """Movements recorded since an approval that change the ledger for the period."""
+    since = _datetime(request.GET.get("since"), "since")
+    if not isinstance(since, datetime.datetime):
+        raise BadRequest(
+            "'since' 는 승인 일시(YYYY-MM-DDTHH:MM:SS)여야 합니다.", {"since": "invalid"}
+        )
+    params = ledger_params(request)
+    changes = stock_ledger_changes_since(
+        since, params.pop("date_from"), params.pop("date_to"), **params
+    )
+    return ok({"changed": bool(changes), "results": [out.ledger_change(c) for c in changes]})
+
+
+# ---------------------------------------------------------------------------
+# Movements
+# ---------------------------------------------------------------------------
+
+
+def _movement_response(movement, status=201):
+    movement = StockMovement.objects.select_related("lot__item", "movement_type", "staff").get(
+        pk=movement.pk
+    )
+    data = out.movement(movement)
+    data["lot_quantity"] = str(
+        from_e6(
+            Inventory.objects.filter(lot_id=movement.lot_id)
+            .values_list("quantity_e6", flat=True)
+            .first()
+            or 0
+        )
+    )
+    data["lot_status"] = movement.lot.status
+    return ok(data, status=status)
+
+
+@endpoint("POST")
+def opening_balance(request):
+    data = request.data
+    _required(data, "item_id", "quantity", "staff_id", "occurred_at", "idempotency_key")
+    movement = record_opening_balance(
+        item_id=_int(data["item_id"], "item_id"),
+        quantity=data["quantity"],
+        staff_id=_int(data["staff_id"], "staff_id"),
+        occurred_at=_datetime(data["occurred_at"], "occurred_at"),
+        idempotency_key=str(data["idempotency_key"]),
+        lot_number=data.get("lot_number"),
+        manufactured_date=_date(data.get("manufactured_date"), "manufactured_date"),
+        expiration_date=_date(data.get("expiration_date"), "expiration_date"),
+        status=data.get("status") or LotStatus.AVAILABLE,
+        reason=data.get("reason"),
+    )
+    return _movement_response(movement)
+
+
+@endpoint("POST")
+def adjust(request):
+    data = request.data
+    _required(data, "lot_id", "direction", "quantity", "reason", "staff_id", "idempotency_key")
+    movement = adjust_stock(
+        lot_id=_int(data["lot_id"], "lot_id"),
+        direction=str(data["direction"]).upper(),
+        quantity=data["quantity"],
+        reason=str(data["reason"]),
+        staff_id=_int(data["staff_id"], "staff_id"),
+        idempotency_key=str(data["idempotency_key"]),
+        occurred_at=_datetime(data.get("occurred_at"), "occurred_at"),
+    )
+    return _movement_response(movement)
+
+
+def _outflow_view(service):
+    @endpoint("POST")
+    def view(request):
+        data = request.data
+        _required(data, "lot_id", "reason", "staff_id", "idempotency_key")
+        movement = service(
+            lot_id=_int(data["lot_id"], "lot_id"),
+            quantity=data.get("quantity") or None,
+            reason=str(data["reason"]),
+            staff_id=_int(data["staff_id"], "staff_id"),
+            idempotency_key=str(data["idempotency_key"]),
+            occurred_at=_datetime(data.get("occurred_at"), "occurred_at"),
+        )
+        return _movement_response(movement)
+
+    view.__name__ = service.__name__
+    return view
+
+
+return_view = _outflow_view(return_to_supplier)
+disposal_view = _outflow_view(dispose)
+
+
+@endpoint("POST")
+def correct(request, pk):
+    data = request.data
+    _required(data, "reason", "staff_id", "idempotency_key")
+    movement = correct_movement(
+        movement_id=pk,
+        quantity=data.get("quantity") or None,
+        reason=str(data["reason"]),
+        staff_id=_int(data["staff_id"], "staff_id"),
+        idempotency_key=str(data["idempotency_key"]),
+    )
+    return _movement_response(movement)

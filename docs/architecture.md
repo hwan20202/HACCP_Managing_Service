@@ -22,8 +22,9 @@ HTTP 자동 검사는 `scripts/smoke_process.py`가 `scripts/smoke_server.py`를
 - `backend/config/settings/production.py`: 비밀키·허용 호스트 검증과 HTTPS 설정
 - `backend/config/settings/test.py`: 메모리 DB와 테스트용 설정
 - `backend/apps/core`: 초기 화면·테스트 화면·헬스체크·지정 시제품 자료 제공
+- `backend/apps/inventory`: 생산·수불 코어(입고·LOT·재고·원료수불대장)와 `/api/v1/inventory/` API. 테이블은 `sql/0001_core.sql`(코어)·`sql/0002_production.sql`(BOM·제조배치·투입·산출)이 만들고 모델은 `managed=False`. 결정 사항은 [inventory-decisions.md](inventory-decisions.md), 문서 앱 연동 명세는 [inventory-document-interface.md](inventory-document-interface.md)
 
-계정·로그인·세션·권한·Django 관리자·첨부파일 앱은 제거했습니다. Django의 `contenttypes`는 기본 DB 메타데이터로 유지하며, 현재 DB에는 계정 테이블이나 업무 테이블이 없습니다. 준비 상태 검사는 SQLite 연결과 마이그레이션·필수 테이블을 확인합니다.
+계정·로그인·세션·권한·Django 관리자·첨부파일 앱은 제거했습니다. Django의 `contenttypes`는 기본 DB 메타데이터로 유지하며, 계정 테이블은 없습니다. 준비 상태 검사는 SQLite 연결과 마이그레이션·필수 테이블을 확인합니다.
 
 업무 기능은 요구사항을 확정하면서 `inventory`, `production`, `quality` 등 별도 앱으로 추가합니다. 새 업무 JSON API는 `/api/v1/` 아래에 두고, 헬스체크는 `/health/`를 유지합니다.
 

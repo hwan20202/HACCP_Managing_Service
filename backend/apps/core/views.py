@@ -70,10 +70,11 @@ def ready(request):
         executor = MigrationExecutor(connection)
         pending = executor.migration_plan(executor.loader.graph.leaf_nodes())
         tables = set(connection.introspection.table_names())
+        # Unmanaged models count too: their tables come from SQL migrations (apps.inventory).
         required_tables = {
             model._meta.db_table
             for model in apps.get_models(include_auto_created=True)
-            if model._meta.managed and not model._meta.proxy
+            if not model._meta.proxy
         }
         if pending or not required_tables.issubset(tables):
             return JsonResponse({"status": "not_ready", "database": "not_ready"}, status=503)

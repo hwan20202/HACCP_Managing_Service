@@ -1,5 +1,5 @@
 from apps.core.views import home, live, prototype_data, prototype_standard, ready, system_test
-from django.urls import path
+from django.urls import include, path
 
 urlpatterns = [
     path("", home, name="home"),
@@ -8,4 +8,5 @@ urlpatterns = [
     path("setup_standard/<str:filename>", prototype_standard, name="prototype-standard"),
     path("health/live/", live, name="health-live"),
     path("health/ready/", ready, name="health-ready"),
+    path("api/v1/inventory/", include("apps.inventory.urls")),
 ]

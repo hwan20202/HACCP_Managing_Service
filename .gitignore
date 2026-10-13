@@ -32,3 +32,6 @@ desktop.ini
 *.exe
 .idea/
 .vscode/
+
+# Claude 작업 메모·임시 스크립트 (저장소에 올리지 않음, ruff 도 건너뜀)
+/Claude outputs/
