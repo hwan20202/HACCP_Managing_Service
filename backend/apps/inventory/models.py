@@ -116,6 +116,8 @@ class Item(models.Model):
     base_unit = models.TextField()
     unit_weight_mg = models.BigIntegerField(null=True, blank=True)
     shelf_life_days = models.IntegerField(null=True, blank=True)
+    # 소비기한 개월 ("제조일로부터 24개월"). Set months or days, not both. See shelf_life.py.
+    shelf_life_months = models.IntegerField(null=True, blank=True)
     origin_country = models.TextField(null=True, blank=True)
     food_type = models.TextField(null=True, blank=True)
     minimum_stock_e6 = models.BigIntegerField(default=0)

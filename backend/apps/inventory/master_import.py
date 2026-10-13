@@ -7,7 +7,8 @@ whole import is rejected if any row is invalid, so a file is applied all or noth
     staff.csv      staff_code*, name*, is_active
     suppliers.csv  supplier_code*, name*, is_active
     items.csv      item_code*, item_type*, name*, base_unit*, short_code, unit_weight_mg,
-                   shelf_life_days, origin_country, food_type, minimum_stock, is_active
+                   shelf_life_months, shelf_life_days, origin_country, food_type,
+                   minimum_stock, is_active   (소비기한은 개월·일수 중 하나만)
 
 (* required)  item_type: RAW / PACKAGING / SEMI / FINISHED.  minimum_stock is in the base
 unit (e.g. 12.5 for 12.5 kg) and is stored as minimum_stock_e6.  is_active: 1/0, Y/N,
@@ -113,6 +114,12 @@ def parse_item_row(row, item_types=None):
         raise ValueError(f"'minimum_stock' 값을 확인하세요: {error}") from error
     if minimum_stock_e6 < 0:
         raise ValueError("'minimum_stock' 은 음수일 수 없습니다")
+    shelf_life_months = _positive_int(row, "shelf_life_months")
+    shelf_life_days = _positive_int(row, "shelf_life_days")
+    if shelf_life_months and shelf_life_days:
+        raise ValueError(
+            "소비기한은 'shelf_life_months'(개월)와 'shelf_life_days'(일) 중 하나만 입력하세요"
+        )
     return {
         "code": _text(row, "item_code", required=True),
         "item_type_id": item_type,
@@ -120,7 +127,8 @@ def parse_item_row(row, item_types=None):
         "base_unit": _text(row, "base_unit", required=True),
         "short_code": _text(row, "short_code"),
         "unit_weight_mg": _positive_int(row, "unit_weight_mg"),
-        "shelf_life_days": _positive_int(row, "shelf_life_days"),
+        "shelf_life_months": shelf_life_months,
+        "shelf_life_days": shelf_life_days,
         "origin_country": _text(row, "origin_country"),
         "food_type": _text(row, "food_type"),
         "minimum_stock_e6": minimum_stock_e6,

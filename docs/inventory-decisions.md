@@ -42,6 +42,7 @@
 
 | 항목 | 현재 동작 | 바꿀 곳 |
 |---|---|---|
+| 소비기한 계산 | `items.shelf_life_months`(개월, 제조방법설명서 "제조일로부터 24개월") 또는 `shelf_life_days`(일) 중 하나. 제조일 + 개월, 같은 날짜(말일은 그 달 마지막 날). 표시일이 하루 전인지 PM 확인 대기 | `shelf_life.END_DAY_OFFSET` |
 | 입고 가능 품목 유형 | 원료(RAW)·포장재(PACKAGING) | `receiving.RECEIVABLE_ITEM_TYPES` |
 | 지난 날짜 입고 | 그날 00:00:00 으로 기록 (그날 다른 이동보다 앞에 오도록) | `receiving._occurred_at` |
 | 입고 취소 | 입고 후 사용·조정이 없을 때만. 전량 CORRECTION_OUT, LOT 상태는 그대로 | `receiving.cancel_receipt` |

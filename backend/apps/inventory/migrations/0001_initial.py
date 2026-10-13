@@ -191,6 +191,7 @@ class Migration(migrations.Migration):
                 ("base_unit", models.TextField()),
                 ("unit_weight_mg", models.BigIntegerField(blank=True, null=True)),
                 ("shelf_life_days", models.IntegerField(blank=True, null=True)),
+                ("shelf_life_months", models.IntegerField(blank=True, null=True)),
                 ("origin_country", models.TextField(blank=True, null=True)),
                 ("food_type", models.TextField(blank=True, null=True)),
                 ("minimum_stock_e6", models.BigIntegerField(default=0)),

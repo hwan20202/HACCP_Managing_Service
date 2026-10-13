@@ -20,7 +20,7 @@
 | 테이블 | 주요 컬럼 | 비고 |
 |---|---|---|
 | `staff` | `id`, `staff_code`(UNIQUE), `name`, `is_active` | 작성자·결재자 등은 `staff.id` 참조 |
-| `items` | `id`, `item_code`(UNIQUE), `short_code`(LOT 약어), `name`, `item_type`, `base_unit`, `origin_country`, `shelf_life_days` | `item_type`: RAW 원료 / PACKAGING 포장재 / SEMI 반제품 / FINISHED 완제품 |
+| `items` | `id`, `item_code`(UNIQUE), `short_code`(LOT 약어), `name`, `item_type`, `base_unit`, `unit_weight_mg`, `origin_country`, `shelf_life_months` / `shelf_life_days` | `item_type`: RAW 원료 / PACKAGING 포장재 / SEMI 반제품 / FINISHED 완제품 |
 | `lots` | `id`, `lot_number`(**품목 안에서 UNIQUE**), `item_id`, `lot_kind`, `status`, `manufactured_date`, `expiration_date` | `lot_kind`: INCOMING / PRODUCED |
 | `production_batches` | `id`, `batch_number`(UNIQUE), `process_type`, `item_id`, `status`, `manufactured_date`, `shift`, … | `process_type`: MANUFACTURE / PACKAGING, `shift`: A 주간 / B 야간 / C 오후 |
 
@@ -81,6 +81,7 @@
 | `batch_number`, `process_type`, `status` | 배치 번호, MANUFACTURE / PACKAGING, 상태 |
 | `shift` | 근무조 A 주간 / B 야간 / C 오후 (NULL 가능) |
 | `item_id`, `item_code`, `item_name`, `item_type`, `base_unit` | 산출 품목 |
+| `unit_weight_mg` | 기준단위 1개 무게(mg, NULL 가능). kg 환산: 개수 × `unit_weight_mg` ÷ 1,000,000 (예: 환 10,000개 × 4,000mg = 40kg). 문서 요청 V1 |
 | `bom_id`, `bom_version` | 기준 BOM (없으면 NULL) |
 | `planned_date`, `planned_quantity_e6` | 계획 (NULL 가능 — 사후 입력) |
 | `manufactured_date`, `started_at`, `completed_at` | 제조일, 시작·완료 시각 |
@@ -89,7 +90,7 @@
 | `staff_name` | 작업 책임자 |
 | `subject_label` | `품목코드 품명 / 배치번호 / 제조일` 표시용 |
 
-문서 쪽 요청 대비: `quantity_kg` 대신 `output_quantity_e6` + `base_unit` (완제품은 단위가 `개`)
+문서 쪽 요청 대비: `quantity_kg` 대신 `output_quantity_e6` + `base_unit` (완제품은 단위가 `개`). kg 가 필요하면 `unit_weight_mg` 로 환산
 
 ## 4. 수불이 제공하는 함수 (문서 → 수불 호출)
 
