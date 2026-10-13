@@ -17,8 +17,9 @@
 | 10/10 | `fd114a1` | 개발 계획 문서에 커밋 번호 기록 |
 | 10/10 | `807207e` | 0002 생산 스키마 초안 + 검증 테스트 |
 | 10/12 | `b6a1fa2` | 10/11 ERD 반영: 0001 수정(LOT 번호 전체 UNIQUE, LOT 상태 3개, `deviation_action_id`·`domain_event_inbox` 삭제, 문서 뷰), 0002 확정·마이그레이션 연결, 입고 시 판정 동시 반영 |
-| 10/12 | (다음 커밋) | 문서 연동 인터페이스 문서 [inventory-document-interface.md](inventory-document-interface.md), 뷰 확인 명령 `show_view` |
-| 10/12 | (다음 커밋) | LOT 번호 BOM v4 멘토안 채택: `{short_code}`·`{shift}`·`{seq:-N}` 토큰, 기본 규칙 3개, `UNIQUE(item_id, lot_number)` 로 되돌림, `production_batches.shift` |
+| 10/12 | `076d681` | 문서 연동 인터페이스 문서 [inventory-document-interface.md](inventory-document-interface.md), 뷰 확인 명령 `show_view` |
+| 10/12 | `076d681` | LOT 번호 BOM v4 멘토안 채택: `{short_code}`·`{shift}`·`{seq:-N}` 토큰, 기본 규칙 3개, `UNIQUE(item_id, lot_number)` 로 되돌림, `production_batches.shift` |
+| 10/13 | (다음 커밋) | 문서 ERD v7 요청 V1: `v_doc_batch` 에 `unit_weight_mg` 추가 (main 병합 전) |
 
 ## 한눈에 보기
 
