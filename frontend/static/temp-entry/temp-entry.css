@@ -142,3 +142,36 @@
 .btn-warning:disabled { opacity: 0.55; }
 .te-fix-lines { margin: 0.2rem 0 0 0; padding: 0; }
 #reqInspection[hidden] { display: none; }
+
+/* P7 일괄 결재·육안검사 묶음 (p7-s1-screens DOC-SC-01·03·04·10·11, WF-SC-03·11·12·13) */
+.te-chip-bundle { white-space: nowrap; background: #eef2ff; color: #3730a3; border: 1px solid #c7d2fe; font-weight: 600; }
+.te-row-bundle td { background: #fafbff; }
+.te-count { white-space: nowrap; margin-right: 0.15rem; }
+.te-bundle-nav { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+.te-bundle-day { font-size: 0.95rem; }
+.te-bundle-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.5rem; font-size: 0.85rem; margin-bottom: 0.6rem; }
+.te-bundle-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-bottom: 0.75rem; }
+.te-bundle-missing { margin-top: 0.75rem; padding: 0.55rem 0.8rem; border: 1px dashed var(--border-strong); border-radius: var(--radius-md); font-size: 0.82rem; color: var(--text-secondary); }
+.te-check-col { width: 2rem; text-align: center; }
+.te-row-picked td { background: #eef6ff; }
+.te-my-turn { color: var(--brand-primary); }
+.te-filter-note { margin: -0.4rem 0 0.75rem; }
+.te-excluded { margin-top: 0.6rem; font-size: 0.8rem; color: var(--text-secondary); }
+.te-ng-warn { margin-top: 0.6rem; color: var(--color-danger); font-weight: 700; font-size: 0.85rem; }
+.te-last { color: var(--color-success); font-weight: 600; white-space: nowrap; }
+.te-target-list { margin: 0.4rem 0 0 1.1rem; font-size: 0.85rem; }
+.te-result-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; font-size: 0.85rem; }
+.te-result-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.5rem; }
+.te-result-fail-line { color: var(--color-danger); }
+.te-result-fail-line .btn { margin-left: auto; }
+.modal-title.te-result-fail { color: var(--color-danger); }
+.modal-title.te-result-ok { color: var(--color-success); }
+.te-verdict-field { border: 2px solid var(--brand-primary); border-radius: var(--radius-md); padding: 0.4rem 0.6rem; background: #f5f9ff; }
+.te-verdict-field .form-label { font-weight: 800; color: var(--text-primary); }
+.te-verdict-hint { margin-top: 0.3rem; font-size: 0.75rem; color: #8a4b00; }
+.te-verdict-hint[hidden] { display: none; }
+.te-verdict-kv { border: 2px solid var(--brand-primary); border-radius: var(--radius-md); padding: 0.2rem 0.5rem; }
+.te-verdict-kv dd { font-weight: 800; font-size: 0.95rem; }
+#bdTable .mono, .te-bundle-missing .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
+.te-excluded summary { cursor: pointer; font-weight: 600; }
+.te-excluded ul { margin: 0.3rem 0 0 1.1rem; display: grid; gap: 0.15rem; }

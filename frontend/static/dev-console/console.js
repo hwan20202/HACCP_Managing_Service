@@ -54,7 +54,25 @@
       scope: (s) => `batch_id=${s.id}` },
     lotDocs: { label: 'REQ LOT별 연결 문서 (F03·A01)', method: 'GET', flow: 'REQ-FND', uses: ['id'], path: (s) => `lots/${s.id}/documents`, scope: (s) => `lot_id=${s.id}` },
     batchDocs: { label: 'REQ 배치별 연결 문서 (F04·A02)', method: 'GET', flow: 'REQ-FND-B', uses: ['id'], path: (s) => `batches/${s.id}/documents`, scope: (s) => `batch_id=${s.id}` },
+    // ---- P7 일괄 — document-workflow/p7-s2-spec.md 3장. 일괄 쓰기는 ④에서 여러 문서를 비교한다(docs: 쉼표 목록)
+    batchApprove: { label: 'WF 일괄 승인 (WF-A03)', method: 'POST', flow: 'WF-BAP', uses: ['body', 'docId'], path: () => 'approvals/batch-decision', docs: (s) => idList(s.docId) },
+    batchSubmit: { label: 'WF 일괄 상신 (WF-A04)', method: 'POST', flow: 'WF-BSB', uses: ['body', 'docId'], path: () => 'documents/batch-submit', docs: (s) => idList(s.docId) || bodyDocs(s) },
+    batchConfig: { label: 'WF 일괄 설정 (WF-A05)', method: 'GET', flow: 'WF-CFG', uses: [], path: () => 'workflow/batch-config' },
+    batchInspector: { label: '점검자 일괄 지정 (F25·A20)', method: 'POST', flow: 'DOC-BIN', uses: ['body', 'docId'], path: () => 'documents/batch-inspector', docs: (s) => idList(s.docId) || bodyDocs(s) },
+    brief: { label: '문서 요약 여러 건 (F26·A21)', method: 'GET', flow: 'DOC-BRF', uses: ['query'], path: (s) => `documents/brief${s.query ? `?${s.query}` : ''}` },
+    incoming: { label: 'REQ 입고일 묶음 (F05·A03)', method: 'GET', flow: 'REQ-BDL', uses: ['query'], path: (s) => `incoming-inspections${s.query ? `?${s.query}` : ''}` },
   };
+  const idList = (text) => {
+    const ids = String(text || '').split(',').map((x) => x.trim()).filter((x) => /^\d+$/.test(x));
+    return ids.length ? ids : null;
+  };
+  function bodyDocs(spec) {
+    try {
+      const items = JSON.parse(spec.body || '{}').items || [];
+      const ids = items.map((x) => x && x.document_id).filter((x) => Number.isInteger(x)).map(String);
+      return ids.length ? ids : null;
+    } catch (e) { return null; }
+  }
   function dayScope(spec, key) {
     try {
       const day = JSON.parse(spec.body || '{}')[key];
@@ -63,7 +81,7 @@
   }
   const flowOf = (fn, record) => (typeof fn.flow === 'function' ? fn.flow(record) : fn.flow);
 
-  const state = { flows: {}, history: [], active: null, preset: null };
+  const state = { flows: {}, batch: {}, history: [], active: null, preset: null };
 
   // ---------------------------------------------------------------- 개발 API (기록하지 않는 직접 호출)
   async function devGet(path) {
@@ -108,6 +126,18 @@
       const scope = fn.scope(spec, record) || scopeBefore;
       const snapAfter = await scopeSnapshot(scope);
       const entry = { spec, fn, record, trace, before: snapBefore, after: snapAfter, scope, preset: state.preset };
+      addEntry(entry);
+      return entry;
+    }
+    if (fn.docs) {
+      // P7 일괄: 문서 여러 건의 실행 전/후(④는 문서마다 표)
+      const ids = fn.docs(spec) || [];
+      const snaps = async () => Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await snapshot(id)])));
+      const multiBefore = await snaps();
+      const record = await api.request(fn.method, fn.path(spec), spec.body, { staffId: spec.staff });
+      let trace = record.data && typeof record.data === 'object' && record.data.trace;
+      if (!trace && record.traceId) trace = await devGet(`/api/dev/traces/${record.traceId}`);
+      const entry = { spec, fn, record, trace, multi: { ids, before: multiBefore, after: await snaps() }, preset: state.preset };
       addEntry(entry);
       return entry;
     }
@@ -235,6 +265,85 @@
     return { chips, summary, innerHtml };
   }
 
+  // ---- P7 일괄 흐름(NFR-05): 머리 → 항목 단계 묶음 × n → 꼬리. 서버 flows.matches_batch와 같은 방식
+  // (document_workflow/flows.py BATCH, documents/flows.py BATCH — /api/dev/flows의 batch로 받음).
+  // 항목은 항목 시작 단계(묶음들의 첫 단계)마다 끊고, 끝이 a인 실패 분기 단계를 뺀 순서가
+  //   성공 항목: 묶음 중 하나와 같아야, 실패 항목(fail 단계 있음): 묶음 중 하나의 앞부분과 같아야 한다.
+  // 머리·꼬리는 길이까지 같아야 하고, 항목마다 trace의 성공·실패가 응답 결과 줄(results[i].ok)과 같아야 한다(P7 S5 검토 B1).
+  // 입력 검사에서 멈추면(400) 항목·꼬리 없이 머리만.
+  const compare = (flowId, steps, record) => (state.batch[flowId] ? compareBatch(flowId, steps, record) : compareFlow(flowId, steps));
+  function compareBatch(flowId, steps, record) {
+    const spec = state.batch[flowId];
+    const kinds = Object.entries(spec.items);
+    const start = kinds[0][1][0];
+    const ids = steps.map((s) => s.step_id);
+    const first = ids.indexOf(start);
+    const tailAt = ids.lastIndexOf(spec.tail[0]);
+    const plain = (list) => list.map((s) => s.step_id).filter((id) => !/\da$/.test(id));
+    const chip = (id, cls) => `<span class="dc-chip ${cls}" title="${cls}">${esc(id)}</span>`;
+    const headSteps = steps.slice(0, first >= 0 ? first : (tailAt >= 0 ? tailAt : steps.length));
+    const byId = Object.fromEntries(headSteps.map((s) => [s.step_id, s]));
+    const sameList = (a, b) => a.length === b.length && a.every((id, i) => id === b[i]);
+    const headOk = sameList(plain(headSteps), spec.head);
+    const headChips = spec.head.map((id) => chip(id, byId[id] ? byId[id].result : 'none')).join('')
+      + headSteps.filter((s) => !spec.head.includes(s.step_id)).map((s) => chip(s.step_id, s.result === 'fail' ? 'fail extra' : 'extra')).join('');
+    const headFail = headSteps.find((s) => s.result === 'fail');
+    if (first < 0) {
+      const reached = spec.head.filter((id) => byId[id]).length;
+      const summary = headFail
+        ? `<span class="dc-status-err">입력 검사에서 중단: ${esc(headFail.step_id)} (머리 ${reached}/${spec.head.length}) · 항목 처리 없음</span>`
+        : `<span class="dc-status-err">⚠ 항목 단계가 없습니다 (머리 ${reached}/${spec.head.length})</span>`;
+      return { chips: [], summary, innerHtml: `<div class="dc-batch-row"><span class="te-hint">머리</span> ${headChips}</div>` };
+    }
+    const body = steps.slice(first, tailAt >= 0 ? tailAt : steps.length);
+    const items = [];
+    body.forEach((s) => { if (s.step_id === start) items.push([]); items[items.length - 1].push(s); });
+    const results = (record && record.data && record.data.results) || [];
+    const checked = items.map((list, i) => {
+      const fail = list.find((s) => s.result === 'fail');
+      const run = plain(list);
+      const kind = fail ? null : (kinds.find(([, want]) => sameList(run, want)) || [])[0];
+      // 실패 항목: 도식 묶음의 앞부분까지 순서대로 돌다 멈춰야 한다
+      const prefixOk = !!fail && run.length > 0 && kinds.some(([, want]) => run.length <= want.length && run.every((id, j) => id === want[j]));
+      const result = results[i];
+      const resultOk = !!result && result.ok === !fail;  // 응답 결과 줄과 성공·실패가 같아야
+      const why = !result ? '응답 결과 줄 없음' : !resultOk ? `응답은 ${result.ok ? '성공' : '실패'}` : (fail ? (prefixOk ? '' : '실패 전 단계 순서 다름') : (kind ? '' : '단계 순서 다름'));
+      return { list, fail, kind, result, ok: !why, why };
+    });
+    const tailSteps = tailAt >= 0 ? steps.slice(tailAt) : [];
+    const tailOk = sameList(plain(tailSteps), spec.tail);
+    const bad = checked.filter((x) => !x.ok);
+    const countOk = results.length === checked.length;
+    const failed = checked.filter((x) => x.fail).length;
+    const count = {};
+    checked.filter((x) => x.kind).forEach((x) => { count[x.kind] = (count[x.kind] || 0) + 1; });
+    const kindText = Object.entries(count).map(([k, n]) => `${k} ${n}`).concat(failed ? [`실패 ${failed}`] : []).join(' · ');
+    let summary;
+    if (!headOk || !tailOk || bad.length || !countOk) {
+      const where = !headOk ? '머리' : !tailOk ? '꼬리' : bad.length ? `항목 ${bad.map((x) => `${checked.indexOf(x) + 1}(${x.why})`).join(', ')}` : `항목 수(trace ${checked.length} · 응답 ${results.length})`;
+      summary = `<span class="dc-status-err">⚠ 불일치 — ${esc(where)}이(가) 도식(${esc(flowId)})·응답과 다릅니다</span>`;
+    } else {
+      summary = `<span class="dc-status-ok">도식 일치 ✅ 머리 ${spec.head.length} → 항목 ${checked.length}(${esc(kindText)}) → 꼬리 ${spec.tail.length}</span>`;
+      if (failed) summary += ` <span class="te-hint">· 실패 항목은 그 항목만 되돌림(부분 실패)</span>`;
+    }
+    const itemRows = checked.map((x, i) => {
+      const r = x.result || {};
+      const who = r.document_id ? `#${esc(r.document_id)}` : (r.approval_id ? `칸 #${esc(r.approval_id)}` : '');
+      let tag = x.fail
+        ? `${chip('실패', 'fail')} <span class="te-hint">${esc(x.fail.step_id)}${r.error ? ` · ${esc(r.error.code)}` : ''}</span>`
+        : (x.kind ? chip(x.kind, 'pass') : '');
+      if (!x.ok) tag += ` ${chip('불일치', 'fail extra')} <span class="te-hint">${esc(x.why)}</span>`;
+      return `<div class="dc-batch-row" data-item="${i + 1}"><span class="te-hint">항목 ${i + 1}</span> <b class="mono">${who}</b> ${tag}
+        <details class="dc-inner"><summary>단계 ${x.list.length}개</summary><div class="dc-inner-row">${x.list.map((s) => chip(s.step_id, s.result)).join('')}</div></details></div>`;
+    }).join('');
+    const tailChips = spec.tail.map((id) => chip(id, tailSteps.find((s) => s.step_id === id)?.result || 'none')).join('');
+    return {
+      chips: [],
+      summary,
+      innerHtml: `<div class="dc-batch-row"><span class="te-hint">머리</span> ${headChips}</div>${itemRows}<div class="dc-batch-row"><span class="te-hint">꼬리</span> ${tailChips}</div>`,
+    };
+  }
+
   function renderTrace(entry) {
     const { trace, fn } = entry;
     if (!trace) {
@@ -244,7 +353,7 @@
       return;
     }
     const flowId = flowOf(fn, entry.record);
-    const { chips, summary, innerHtml } = compareFlow(flowId, trace.steps);
+    const { chips, summary, innerHtml } = compare(flowId, trace.steps, entry.record);
     $('#dcFlowSummary').innerHTML = `${summary} <span class="te-hint">도식 ${esc(flowId)} · trace ${esc(trace.trace_id)}</span>`;
     $('#dcFlowChips').innerHTML = chips.map((c) => `<span class="dc-chip ${c.cls}" title="${c.cls}">${esc(c.id)}</span>`).join('') + innerHtml;
     const rows = trace.steps.map((s, i) => `
@@ -315,6 +424,21 @@
       return;
     }
     const onlyChanged = $('#dcOnlyChanged').checked;
+    if (entry.multi) {
+      const { ids, before: mb, after: ma } = entry.multi;
+      if (!ids.length) {
+        $('#dcDbTitle').textContent = '';
+        $('#dcDbBody').innerHTML = '<div class="dc-empty">비교할 문서가 없습니다. "④ 비교할 문서 id"에 문서 id를 쉼표로 넣으세요.</div>';
+        return;
+      }
+      $('#dcDbTitle').innerHTML = `${groupLabel(entry)}문서 ${ids.length}건 · document_id = ${ids.map(esc).join(', ')} <span class="te-hint">· 문서마다 실행 전/후</span>`;
+      $('#dcDbBody').innerHTML = ids.map((id) => {
+        const b = (mb[id] && mb[id].tables) || {};
+        const a = (ma[id] && ma[id].tables) || {};
+        return `<div class="dc-doc-block" data-doc-block="${esc(id)}"><div class="dc-sub">document_id = ${esc(id)}</div>${docTables(b, a, onlyChanged)}</div>`;
+      }).join('');
+      return;
+    }
     const { before, after, docId } = entry;
     if (entry.scope !== undefined) {
       const { fn, record } = entry;
@@ -345,9 +469,10 @@
     const b = (before && before.tables) || {};
     const a = (after && after.tables) || {};
     $('#dcDbTitle').innerHTML = `document_id = ${esc(docId)} ${after && after.deleted ? '<span class="dc-deleted-flag">· 논리 삭제됨 (업무 API는 404)</span>' : ''} ${!before || !before.exists ? '<span class="te-hint">· 실행 전 없음</span>' : ''}`;
-    $('#dcDbBody').innerHTML = ['document', 'doc_section', 'document_ref', 'deviation_action', 'deviation_checker', 'approval_request', 'approval', 'document_correction', 'lots', 'document_template', 'staff']
-      .filter((t) => t in a || t in b).map((t) => diffTable(t, b[t], a[t], onlyChanged)).join('');
+    $('#dcDbBody').innerHTML = docTables(b, a, onlyChanged);
   }
+  const docTables = (b, a, onlyChanged) => ['document', 'doc_section', 'document_ref', 'deviation_action', 'deviation_checker', 'approval_request', 'approval', 'document_correction', 'lots', 'document_template', 'staff']
+    .filter((t) => t in a || t in b).map((t) => diffTable(t, b[t], a[t], onlyChanged)).join('');
 
   function scopeTables(before, after, onlyChanged) {
     const sb = (before && before.tables) || {};
@@ -389,7 +514,7 @@
     $('#dcTraceBody').innerHTML = g.entries.map((e, i) => {
       if (!e.trace) return `<div class="dc-line"><span class="te-hint">호출 ${i + 1}</span> trace 없음</div>`;
       const flowId = flowOf(e.fn, e.record);
-      return `<div class="dc-line"><span class="te-hint">호출 ${i + 1}</span>${compareFlow(flowId, e.trace.steps).summary} <span class="te-hint">도식 ${esc(flowId)}</span></div>`;
+      return `<div class="dc-line"><span class="te-hint">호출 ${i + 1}</span>${compare(flowId, e.trace.steps, e.record).summary} <span class="te-hint">도식 ${esc(flowId)}</span></div>`;
     }).join('');
     $('#dcDbTitle').innerHTML = `<span class="badge badge-info">합계</span> ${esc(g.scope.replace('=', ' = '))} <span class="te-hint">· 프리셋 실행 전 → 모든 호출이 끝난 뒤</span>`;
     $('#dcDbBody').innerHTML = scopeTables(g.before, g.after, $('#dcOnlyChanged').checked);
@@ -433,12 +558,13 @@
     }
     return null;
   }
+  // P7: 목록에 육안검사 묶음 줄(kind bundle — 문서 id 없음)이 섞이므로 문서 줄만 본다
   async function findDoc(status, pred = () => true) {
     const r = await quietGet(`documents?status=${status}`);
     let page = 1;
     let items = r ? r.items : [];
     while (items.length) {
-      const hit = items.find(pred);
+      const hit = items.find((x) => x.kind !== 'bundle' && pred(x));
       if (hit) return hit;
       page += 1;
       const next = await quietGet(`documents?status=${status}&page=${page}`);
@@ -449,7 +575,7 @@
   async function docWithRounds(min = 2) {
     const r = await quietGet('documents?status=draft');
     for (const d of (r ? r.items : [])) {
-      if (d.submitted_at) continue;
+      if (d.kind === 'bundle' || d.submitted_at) continue;
       const full = await quietGet(`documents/${d.document_id}`);
       if (full && full.template.type_code === 'CCP_MONITORING' && full.sections.filter((s) => s.section_def === 'rounds').length >= min) return full;
     }
@@ -666,14 +792,22 @@
     if (!hit) throw new Error(`양식 ${code}가 없습니다. ${P4_HINT}.`);
     return hit.template_id;
   }
+  // P7: D03은 목록에서 입고일 묶음 줄(kind bundle)로 온다 → 그 입고일 묶음 조회(REQ-A03)로 문서 id를 푼다
+  async function docIdsOf(item, status) {
+    if (item.kind !== 'bundle') return [item.document_id];
+    const b = await quietGetAs(`incoming-inspections?received_date=${item.work_date}`, 3);
+    return b ? b.lots.filter((l) => l.document && (!status || l.document.status === status)).map((l) => l.document.document_id) : [];
+  }
   async function p4Doc(code, status, pred = () => true) {
     const tid = await templateIdOf(code);
     for (let page = 1; page <= 10; page += 1) {
       const r = await quietGet(`documents?template_id=${tid}&status=${status}&page=${page}`);
       if (!r || !r.items.length) break;
       for (const item of r.items) {
-        const full = await quietGet(`documents/${item.document_id}`);
-        if (full && pred(full)) return full;
+        for (const id of await docIdsOf(item, status)) {
+          const full = await quietGet(`documents/${id}`);
+          if (full && pred(full)) return full;
+        }
       }
     }
     throw new Error(`${code} ${status} 문서가 없습니다. ${P4_HINT}.`);
@@ -919,11 +1053,162 @@
       prepare: async () => ({ func: 'reqLot', body: J(await lotBody(await freeDay(), { inspection: { appearance: '양호', packaging: '양호', labeling: '양호', verdict: 'PASS' } })) }) }),
   );
 
+  // ---------------------------------------------------------------- 프리셋 P7 (document-workflow/p7-s1-screens.md 6장, p7-s2-spec 3.5)
+  // WF-PS-23~33 · DOC-PS-28·29 · REQ-PS-13. 사전 조건은 모두 개발 API(fixtures/d03 — received_date·count·inspector·
+  // submitted_partial·rejected·lot_only)로 불러올 때 만든다(ISS-019). 준비 문서는 프리셋마다 빈 입고일(freeDays)에 만들어
+  // 서로·오늘 묶음과 섞이지 않는다(WF-PS-33은 빈 입고일 2개).
+  // 일괄 쓰기의 ④는 문서마다 실행 전/후(④ 비교할 문서 id = 쉼표 목록). ③은 항목별 묶음 비교(compareBatch).
+  const p7 = (preset) => ({ unit: 'P7', ...preset });
+  // 입고일을 안 주면 프리셋마다 빈 입고일 하나(오늘 묶음·결재함에 콘솔 준비 문서가 섞이지 않게)
+  let p7DayCache = null;
+  async function p7Day() {
+    if (!p7DayCache) [p7DayCache] = await freeDays(1);
+    return p7DayCache;
+  }
+  // count > 1이면 {items}로 온다 → 항상 목록으로
+  async function fixtures(body) {
+    const made = await devPost('/api/dev/fixtures/d03', { received_date: await p7Day(), ...body });
+    const list = made.items || [made];
+    prepared.push(...list);
+    return list;
+  }
+  const one = async (body) => (await fixtures(body))[0];
+  async function freeDays(n) {
+    const out = [];
+    for (let back = 40; back < 400 && out.length < n; back += 1) {
+      const day = localDay(-back);
+      if (!(await reqList('lots', `?date=${day}`)).length) out.push(day);
+    }
+    if (out.length < n) throw new Error('빈 날짜를 찾지 못했습니다.');
+    return out;
+  }
+  async function slotOf(documentId, approver) {
+    const req = await latestRequest(documentId);
+    const slot = req && req.slots.find((x) => x.approver_id === approver && x.state === 'pending');
+    if (!slot) throw new Error(`문서 #${documentId}에 staff ${approver}의 대기 칸이 없습니다.`);
+    return slot.approval_id;
+  }
+  async function quietPostAs(path, body, staff) {
+    const r = await fetch(`/api/v1/${path}`, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-Staff-Id': String(staff) }, body: JSON.stringify(body) });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) throw new Error(`사전 조건을 만들지 못했습니다: ${(data && (data.message || data.code)) || r.status}`);
+    return data;
+  }
+  async function d03TemplateId() {
+    const t = await quietGet('templates');
+    const hit = t && t.items.find((x) => x.type_code === 'D03');
+    if (!hit) throw new Error('D03 양식이 없습니다.');
+    return hit.template_id;
+  }
+  const ids = (list) => list.map((m) => m.document_id).join(',');
+  const items = (list) => list.map((m) => ({ document_id: m.document_id, expected_version: m.version }));
+
+  PRESETS.push(
+    p7({ id: 'WF-PS-23', label: '일괄 승인 정상', expect: '200 · succeeded 3 · ③ WF-BAP 도식 일치(머리 7 → 항목 3: approved 1 · progress 2 → 꼬리) · ④ 문서 3건: approval 3행 approved, 마지막 칸이던 문서 1건만 document approved(나머지 submitted 그대로)',
+      prepare: async () => {
+        const list = [...await fixtures({ state: 'submitted', count: 2 }), await one({ state: 'submitted_partial' })];
+        const slots = await Promise.all(list.map((m) => slotOf(m.document_id, 1)));
+        return { func: 'batchApprove', staff: '1', docId: ids(list), body: J({ approval_ids: slots, comment: '일괄 확인(콘솔)' }) };
+      } }),
+    p7({ id: 'WF-PS-24', label: '일괄 승인 일부 실패', expect: '200 · succeeded 2 · failed 1(REQUEST_CLOSED — 다른 결재자 반려로 회차 종료) · ③ 항목 3(progress 2 · 실패 1) · ④ 성공 2건만 approval approved, 실패 문서 변화 없음',
+      prepare: async () => {
+        const ok = await fixtures({ state: 'submitted', count: 2 });
+        const closed = await one({ state: 'rejected' });
+        const req = await latestRequest(closed.document_id);
+        const mine = req.slots.find((x) => x.approver_id === 3);
+        const slots = [...await Promise.all(ok.map((m) => slotOf(m.document_id, 3))), mine.approval_id];
+        return { func: 'batchApprove', staff: '3', docId: ids([...ok, closed]), body: J({ approval_ids: slots }) };
+      } }),
+    p7({ id: 'WF-PS-25', label: '대상 양식 아님(승인)', expect: '400 INVALID_REQUEST(details not_batchable, path approval_ids[1]) · ③ 입력 검사(WF-BAP-04)에서 중단, 항목 처리 없음 · ④ 변화 없음',
+      prepare: async () => {
+        const d03 = await one({ state: 'submitted' });
+        const other = await pendingItem(2, (x) => x.request.template_id !== undefined);
+        const t = await quietGet(`templates/${other.request.template_id}`);
+        if (t && t.type_code === 'D03') throw new Error('D03이 아닌 결재 대기 칸을 찾지 못했습니다(seed_dev_workflow).');
+        return { func: 'batchApprove', staff: '3', docId: `${d03.document_id},${other.request.document_id}`, body: J({ approval_ids: [await slotOf(d03.document_id, 3), other.approval_id] }) };
+      } }),
+    p7({ id: 'WF-PS-30', label: '대상 양식 아님(상신)', expect: '400 INVALID_REQUEST(not_batchable, path items[1]) · ③ 입력 검사(WF-BSB-04, DOC-BRF)에서 중단 · ④ 변화 없음(D03도 작성완료 그대로)',
+      prepare: async () => {
+        const d03 = await one({ state: 'completed' });
+        const other = need(await findDoc('draft', (d) => d.template.type_code !== 'D03'), 'D03이 아닌 draft');
+        return { func: 'batchSubmit', staff: '3', docId: `${d03.document_id},${other.document_id}`,
+          body: J({ items: [...items([d03]), { document_id: other.document_id, expected_version: other.version }], slots: FIX_SLOTS }) };
+      } }),
+    p7({ id: 'WF-PS-31', label: '일괄 상신 버전 충돌', expect: '[호출 1·2] 작성 재개·작성완료 200(문서 B 버전 +2) → [호출 3] 일괄 상신 200 · succeeded 1 · failed 1(VERSION_CONFLICT, 문서 B) · ④ 문서 A만 submitted + approval_request +1',
+      prepare: async () => {
+        const [a, b] = await fixtures({ state: 'completed', count: 2 });
+        const submit = { func: 'batchSubmit', docId: ids([a, b]), body: J({ items: items([a, b]), slots: FIX_SLOTS }) };
+        return { ...submit, script: async (exec) => {
+          const re = await exec({ func: 'reopen', id: String(b.document_id), body: J({ expected_version: b.version }), staff: '3' });
+          if (!re.record.ok) return;
+          await exec({ func: 'complete', id: String(b.document_id), body: J({ expected_version: re.record.data.version }), staff: '3' });
+          await exec({ ...submit, staff: '3' });
+        } };
+      } }),
+    p7({ id: 'WF-PS-32', label: '남의 칸 섞임', expect: '200 · succeeded 1 · failed 1(NOT_YOUR_SLOT — staff 1 칸) · ③ 항목 2(progress 1 · 실패 1) · ④ 내 칸(staff 3)만 approved',
+      prepare: async () => {
+        const [a, b] = await fixtures({ state: 'submitted', count: 2 });
+        return { func: 'batchApprove', staff: '3', docId: ids([a, b]), body: J({ approval_ids: [await slotOf(a.document_id, 3), await slotOf(b.document_id, 1)] }) };
+      } }),
+    p7({ id: 'WF-PS-33', label: '결재함 입고일 필터(컷 ②)', expect: '200 · APR-INB(template_id = D03 + from = to = 입고일, D-098) · 입고일 다른 결재중 D03 2건 중 그 입고일 1건만 · DB 변화 없음',
+      prepare: async () => {
+        const [day1, day2] = await freeDays(2);
+        await one({ state: 'submitted', received_date: day1 });
+        await one({ state: 'submitted', received_date: day2 });
+        return { func: 'inbox', staff: '3', query: `box=pending&template_id=${await d03TemplateId()}&from=${day1}&to=${day1}` };
+      } }),
+    p7({ id: 'WF-PS-26', label: '건수 초과(51개)', expect: '400 INVALID_REQUEST(details max, path approval_ids) · ③ 입력 형식(WF-BAP-01, API)에서 중단 · DB 변화 없음. 상신·점검자 지정도 같은 상한(S4 테스트)',
+      prepare: async () => ({ func: 'batchApprove', staff: '3', docId: '', body: J({ approval_ids: Array.from({ length: 51 }, (_, i) => 900000 + i) }) }) }),
+    p7({ id: 'WF-PS-27', label: '일괄 상신 정상', expect: '200 · succeeded 2 · ③ WF-BSB 도식 일치(머리 12 → 항목 2: submitted → 꼬리) · ④ 문서마다 completed→submitted, approval_request +1(각 1회차, subject = LOT … · 품명 · 매입처 — ISS-018), approval +2',
+      prepare: async () => {
+        const list = await fixtures({ state: 'completed', count: 2 });
+        return { func: 'batchSubmit', staff: '3', docId: ids(list), body: J({ items: items(list), slots: FIX_SLOTS }) };
+      } }),
+    p7({ id: 'WF-PS-28', label: '일괄 상신 일부 실패', expect: '200 · succeeded 1 · failed 1(DOCUMENT_LOCKED, details code draft — 화면 문구 "작성완료 상태가 아닙니다") · ④ 작성완료 문서만 submitted, 작성중 문서 변화 없음',
+      prepare: async () => {
+        const ok = await one({ state: 'completed' });
+        const draft = await one({ state: 'draft' });
+        return { func: 'batchSubmit', staff: '3', docId: ids([ok, draft]), body: J({ items: items([ok, draft]), slots: FIX_SLOTS }) };
+      } }),
+    p7({ id: 'DOC-PS-28', label: '점검자 일괄 지정', expect: '200 · succeeded 2(changed) · failed 1(DOCUMENT_LOCKED, details code completed) · ③ DOC-BIN 도식 일치(머리 3 → 항목 3: changed 2 · 실패 1 → 꼬리) · ④ 작성중 2건 doc_section info.inspector → 5·version+1, 작성완료 1건 변화 없음',
+      prepare: async () => {
+        const list = [...await fixtures({ state: 'draft', count: 2, inspector: null }), await one({ state: 'completed' })];
+        return { func: 'batchInspector', staff: '3', docId: ids(list), body: J({ items: items(list), inspector_id: 5 }) };
+      } }),
+    p7({ id: 'REQ-PS-13', label: '입고일 묶음 조회', expect: '200 · REQ-BDL 도식 일치(뷰 → N4 → F26 → A8 → A10) · SQL 8개 이하 · lots 4줄(작성중·작성완료·결재중 + 문서 없음 1줄 document null), summary documents 3 · DB 변화 없음',
+      prepare: async () => {
+        const [day] = await freeDays(1);
+        for (const state of ['draft', 'completed', 'submitted']) await one({ state, received_date: day });
+        prepared.push(await devPost('/api/dev/fixtures/d03', { lot_only: true, received_date: day }));  // 문서 없는 LOT
+        return { func: 'incoming', staff: '3', query: `received_date=${day}` };
+      } }),
+    p7({ id: 'DOC-PS-29', label: '문서 목록 묶음 줄', expect: '200 · DOC-LST 도식 일치(01~07) · SQL 6개 이하 · 묶음 줄 1개(kind bundle, count 3, status_counts 작성중·작성완료·결재중 각 1) + CCP 1줄, total 2 · DB 변화 없음',
+      prepare: async () => {
+        const [day] = await freeDays(1);
+        for (const state of ['draft', 'completed', 'submitted']) await one({ state, received_date: day });
+        const ccp = await quietPostAs('documents', { ...ccpBody(await ccpTemplateId(), ['09:00']), work_date: day }, 3);
+        prepared.push({ lot_number: '-', document_id: ccp.document_id, status: `${ccp.status} CCP` });
+        return { func: 'list', staff: '3', query: `from=${day}&to=${day}` };
+      } }),
+    p7({ id: 'WF-PS-29', label: '결재 대상 요약(ISS-018)', expect: '201 · WF-SUB 도식 일치 · 응답 request.subject = "LOT RM-… · 유자 · 콘솔준비농협"(상세 target_summary) · ④ approval_request.subject 같은 값',
+      prepare: async () => {
+        const m = await one({ state: 'completed' });
+        return { func: 'submit', staff: '3', id: String(m.document_id), body: J({ expected_version: m.version, slots: FIX_SLOTS }) };
+      } }),
+  );
+
+  function preparedText(m) {
+    if (m.document_id === null) return `새 LOT ${esc(m.lot_number)} · 문서 없음(작성 요구 안 부름)`;
+    if (m.lot_number === '-') return `문서 #${esc(m.document_id)}(${esc(m.status)})`;
+    return `새 LOT ${esc(m.lot_number)} · D03 문서 #${esc(m.document_id)}(${esc(m.status)}${m.correction ? ' · 정정' : ''})`;
+  }
+
   async function loadPreset() {
     const p = PRESETS.find((x) => x.id === $('#dcPreset').value);
     if (!p) { state.preset = null; $('#dcPresetDesc').textContent = '기능을 고르고 실행하세요. 프리셋을 불러오면 입력이 채워집니다.'; return; }
     $('#dcPresetDesc').textContent = `${p.id} 준비 중…`;
     prepared = [];
+    p7DayCache = null;
     try {
       const spec = await p.prepare();
       $('#dcFunc').value = spec.func;
@@ -935,7 +1220,7 @@
       else if (!api.staffId || api.staffId === '999') { api.setStaff('3'); $('#dcStaff').value = '3'; }
       state.preset = { id: p.id, script: spec.script, groupScope: spec.groupScope, concurrent: spec.concurrent };
       toggleInputs();
-      $('#dcPresetDesc').innerHTML = `<b>${esc(p.id)} ${esc(p.label)}</b><br>기대: ${esc(p.expect)}${spec.script ? '<br><span class="te-hint">여러 호출을 순서/동시에 실행하는 프리셋입니다. [실행]을 누르세요.</span>' : ''}${prepared.length ? `<br><span class="te-hint" id="dcPrepared">준비(불러오기 때 만듦): ${prepared.map((m) => `새 LOT ${esc(m.lot_number)} · D03 문서 #${esc(m.document_id)}(${esc(m.status)}${m.correction ? ' · 정정' : ''})`).join(', ')}</span>` : ''}`;
+      $('#dcPresetDesc').innerHTML = `<b>${esc(p.id)} ${esc(p.label)}</b><br>기대: ${esc(p.expect)}${spec.script ? '<br><span class="te-hint">여러 호출을 순서/동시에 실행하는 프리셋입니다. [실행]을 누르세요.</span>' : ''}${prepared.length ? `<br><span class="te-hint" id="dcPrepared">준비(불러오기 때 만듦): ${prepared.map(preparedText).join(', ')}</span>` : ''}`;
     } catch (error) {
       state.preset = null;
       $('#dcPresetDesc').textContent = `${p.id}: ${error.message}`;
@@ -982,7 +1267,7 @@
     $('#dcStaff').addEventListener('change', (e) => api.setStaff(e.target.value));
     $('#dcFunc').innerHTML = Object.entries(FUNCS).map(([k, f]) => `<option value="${k}">${esc(f.label)}</option>`).join('');
     const group = (unit, label) => `<optgroup label="${label}">${PRESETS.filter((p) => (p.unit || p.id.split('-')[0]) === unit).map((p) => `<option value="${p.id}">${p.id} ${esc(p.label)}</option>`).join('')}</optgroup>`;
-    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)');
+    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)');
     $('#dcFunc').addEventListener('change', () => { state.preset = null; toggleInputs(); });
     ['#dcId', '#dcQuery', '#dcBody', '#dcDocId'].forEach((sel) => $(sel).addEventListener('input', () => { if (state.preset && state.preset.script) state.preset = null; }));
     $('#dcLoadPreset').addEventListener('click', loadPreset);
@@ -990,6 +1275,7 @@
     $('#dcOnlyChanged').addEventListener('change', () => { if (!state.active) return; if (state.active.entries) showTotal(state.active); else renderDb(state.active); });
     const flows = await devGet('/api/dev/flows');
     state.flows = flows ? flows.flows : {};
+    state.batch = (flows && flows.batch) || {};
     toggleInputs();
     renderHistory();
     const traceParam = new URLSearchParams(location.search).get('trace');
@@ -1003,6 +1289,6 @@
     }
   }
 
-  window.DevConsole = { state, run, execute, PRESETS };
+  window.DevConsole = { state, run, execute, PRESETS, compare };
   init();
 })();

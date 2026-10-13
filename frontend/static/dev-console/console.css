@@ -64,3 +64,7 @@ td.dc-cell-changed { background: #fff3cd !important; font-weight: 700; }
 .dc-inner { margin: 0.35rem 0 0.6rem; font-size: 0.78rem; }
 .dc-inner summary { cursor: pointer; color: var(--text-secondary); font-weight: 600; }
 .dc-inner-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; margin-top: 0.3rem; }
+/* P7 일괄 흐름 비교(항목별 묶음)·여러 문서 ④ */
+.dc-batch-row { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; margin: 0.2rem 0; font-size: 0.8rem; }
+.dc-batch-row .dc-inner { margin: 0 0 0 0.4rem; }
+.dc-doc-block { border-top: 1px dashed var(--border-strong); margin-top: 0.6rem; padding-top: 0.4rem; }

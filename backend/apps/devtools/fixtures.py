@@ -17,8 +17,11 @@ POST /api/dev/fixtures/d03 {
   received_date: YYYY-MM-DD      (P7, 기본 오늘 — 같은 날이면 LOT 번호 이어서 RM-MMDD-nn),
   count: 1~10                    (P7, 기본 1),
   inspector: staff id | null     (P7, 기본 4. null이면 점검자 비움 — 작성중(draft)만)
+  lot_only: bool                 (P7 S5, 기본 false. 입고 LOT만 만들고 작성 요구를 부르지 않음 —
+                                  묶음 상세의 "문서 없음" 줄 확인용. 다른 옵션은 received_date만 씀)
 }
 → 201 {document_id, lot_id, lot_number, version, status}
+   lot_only면 {lot_id, lot_number, document_id: null}
    count > 1이면 {items: [{document_id, lot_id, lot_number, version, status}, …]}
 """
 
@@ -206,6 +209,17 @@ def build_d03(
 def d03_fixture(request):
     try:
         body = parse_json_body(request)
+        lot_only = body.get("lot_only", False)
+        if not isinstance(lot_only, bool):
+            raise _bad("lot_only는 true 또는 false입니다.")
+        if lot_only:
+            day, _count, _inspector = _clean_p7(body, "draft")
+            with transaction.atomic():
+                lot_id = _new_lot(day)
+            lot_number = Lot.objects.get(pk=lot_id).lot_number
+            return json_response(
+                {"lot_id": lot_id, "lot_number": lot_number, "document_id": None}, status=201
+            )
         state, verdict, change_to, edited, used = _clean(body)
         day, count, inspector = _clean_p7(body, state)
         made = [

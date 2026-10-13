@@ -1,6 +1,7 @@
 // =============================================
 // 개발 검증 › 작성 요구 (P5 REQ 사용 화면)
 // 화면: REQ-SC-01 작성 요구 테스트 · 02 테스트 입고 모달 · 03 테스트 배치 모달 · 04 호출 결과 패널
+//       05 LOT별 연결 문서(P7: 입고일 → 육안검사 묶음 상세 DOC-SC-10 링크)
 //       REQ-SC-05 LOT별 연결 문서(문서 상세의 LOT 링크로도 들어온다)
 // 설계: dev-notes/doc-requirements/s1-screens.md, API: s2-spec.md 2.2(A01·A02, 개발 D01~D07)
 // 수불·생산이 할 호출(입고 등록·생산 시작 + 작성 요구)을 개발용 가상 데이터로 흉내 낸다.
@@ -394,7 +395,7 @@
           <div class="card">
             <div class="card-header"><div class="te-meta" id="teLotHead">
               <span>품목 <b>${esc(lot.item_name)}</b></span><span>매입처 <b>${esc(lot.supplier_name)}</b></span>
-              <span>입고 <b>${esc((lot.received_date || '').slice(5))}</b></span></div>
+              <span>입고 <b>${lot.received_date ? `<a href="#" class="te-lot-link" id="teBundleLink" title="이 입고일의 육안검사 묶음 상세(DOC-SC-10)">${esc(lot.received_date.slice(5))}</a>` : '-'}</b></span></div>
               <div class="page-actions">${back}</div></div>
             ${documents.length ? `
               <div class="te-table-wrap"><table class="data-table">
@@ -406,6 +407,11 @@
         </div>`;
       T.bindTopBar(this.root, () => this.show(lotId));
       this.bindBack();
+      // P7 REQ-SC-05: 입고일 → 그 입고일 묶음 상세. 묶음 상세의 [뒤로]는 이 화면으로(이 화면의 뒤로도 유지)
+      this.root.querySelector('#teBundleLink')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        T.open('temp-doc', { bundleDay: lot.received_date, origin: { page: 'temp-lot-docs', lotId, back: this.back } });
+      });
       this.root.querySelectorAll('[data-open-doc]').forEach((b) => b.addEventListener('click', () => T.open('temp-doc', { documentId: Number(b.dataset.openDoc) })));
     },
 

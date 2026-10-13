@@ -191,3 +191,15 @@ class WfTraceApiTests(WfApiTestCase):
     def test_tc047_dev_flows_listed(self):
         listed = self.client.get("/api/dev/flows").json()["flows"]
         self.assertTrue({"WF-SUB", "WF-DEC-APPROVED"} <= set(listed))
+
+    def test_p7_s5_dev_flows_batch(self):
+        """P7 S5: 콘솔 항목별 비교용 batch(머리·항목 묶음·꼬리) — 항목 1개면 FLOWS의 흐름과 같다."""
+        data = self.client.get("/api/dev/flows").json()
+        batch, listed = data["batch"], data["flows"]
+        self.assertEqual(set(batch), {"WF-BAP", "WF-BSB", "DOC-BIN"})
+        one = {"WF-BAP": "approved", "WF-BSB": "submitted", "DOC-BIN": "changed"}
+        for flow_id, kind in one.items():
+            spec = batch[flow_id]
+            self.assertEqual(spec["head"] + spec["items"][kind] + spec["tail"], listed[flow_id])
+            starts = {items[0] for items in spec["items"].values()}
+            self.assertEqual(len(starts), 1, flow_id)  # 콘솔은 항목 시작 단계 하나로 끊는다

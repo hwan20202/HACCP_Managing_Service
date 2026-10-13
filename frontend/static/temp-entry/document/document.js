@@ -3,6 +3,8 @@
 // 화면: DOC-SC-01 목록 · 02 양식 선택 · 03 작성/수정 폼 · 04 상세(+ P3 결재 영역) · 05 삭제 확인
 //       P4: 09 작성완료 확인·검사 결과, 이탈·개선조치 영역, 작성 요구 문서 표시
 //       P6: 정정 시작(WF-SC-08)·정정 배너·정정 취소(WF-SC-10), D03 작성완료의 판정 전달(DOC-SC-09)
+//       P7: 목록 묶음 줄(DOC-SC-01)·육안검사 묶음 상세(DOC-SC-10)·점검자 일괄 지정(DOC-SC-11)·최종판정 강조(DOC-SC-03·04)
+//           — dev-notes/document-workflow/p7-s1-screens.md 3장, API p7-s2-spec.md 3.2·3.4
 // 설계: dev-notes/document/s1-screens.md, p4-s1-screens.md, document-workflow/p6-s1-screens.md(+ p6a 3.2)
 //       API: s2-spec.md 4장, p4-s2-spec.md, p6-s2-spec.md
 // 파일 영역(SC-07·08)은 스프린트 3(D-058)
@@ -113,19 +115,35 @@
   // 정정 진행 중이면 배지 옆 `정정` 꼬리표(정정 중 상태는 배지 자체가 "정정 중", DOC-SC-01·04)
   const correctionTag = (status, correcting) => (correcting && status !== 'correcting' ? ' <span class="badge te-chip-fix">정정</span>' : '');
   const statusCell = (status, correcting) => `${T.statusBadge(status)}${correctionTag(status, correcting)}`;
-  // P7 S4: 목록 묶음 줄(DOC-F04 변경, D03 작업일마다 1줄)이 화면을 깨지 않게 하는 최소 표시.
-  // 묶음 줄 화면(DOC-SC-01·10)은 P7 S5에서 만든다.
+  // P7 묶음 상태 칸: 상태별 개수(0 생략, 순서 고정) + 정정 진행 수는 맨 뒤 따로 "정정 n"(P7-S5-Q3 a — 서버 status_counts 그대로)
+  const STATUS_ORDER = ['draft', 'completed', 'submitted', 'approved', 'rejected', 'correcting'];
+  const statusSummary = (counts, correcting) => STATUS_ORDER.filter((k) => counts[k])
+    .map((k) => `<span class="te-count">${T.statusBadge(k)} ${counts[k]}</span>`).join(' ')
+    + (correcting ? ` <span class="te-count"><span class="badge te-chip-fix">정정</span> ${correcting}</span>` : '');
+  const mmdd = (day) => String(day || '').slice(5);
+  // DOC-SC-01 묶음 줄(P7 Q7): 육안검사(D03)는 입고일마다 1줄. 필터 중이면 "D03 필터 n / 전체 m건"(검토 A3 — S5에서 판단)
   const bundleRow = (b) => `
-            <tr class="te-row-bundle">
-              <td>묶음</td>
-              <td>${esc(b.template_name)}</td>
-              <td>입고 ${b.count}건${b.count !== b.total ? ` (전체 ${b.total})` : ''}</td>
+            <tr class="te-row-link te-row-bundle" data-bundle="${b.work_date}">
+              <td><span class="badge te-chip-bundle">묶음</span></td>
+              <td>${esc(b.template_name)} <span class="te-hint">(묶음)</span></td>
+              <td>입고일 ${mmdd(b.work_date)} · ${b.count !== b.total ? `${esc(b.type_code)} 필터 ${b.count} / 전체 ${b.total}건` : `${esc(b.type_code)} ${b.count}건`}</td>
               <td>${b.work_date}</td>
-              <td>-</td>
-              <td>${Object.entries(b.status_counts).map(([k, n]) => `${T.statusBadge(k)} ${n}`).join(' ')}${b.correcting_count ? ` (정정 ${b.correcting_count})` : ''}</td>
-              <td><span class="te-req">${REQUIREMENT[b.requirement]}</span></td>
-              <td>-</td>
+              <td><span class="te-hint">–</span></td>
+              <td>${statusSummary(b.status_counts, b.correcting_count)}</td>
+              <td>${b.requirement ? `<span class="te-req">${REQUIREMENT[b.requirement]}</span>` : '<span class="te-hint">–</span>'}</td>
+              <td><span class="te-hint">–</span></td>
             </tr>`;
+  // D03 최종판정 강조(DOC-SC-03·04, P7 Q4): 검사 항목에 "불량"이 있는데 최종판정이 적합이면 안내(저장·작성완료는 막지 않음)
+  const VERDICT_FOCUS_TYPES = ['D03'];
+  const verdictFocus = (typeCode, field) => VERDICT_FOCUS_TYPES.includes(typeCode) && field.key === 'verdict';
+  const verdictWarn = (section, values) => values.verdict === 'PASS'
+    && section.fields.some((fd) => fd.type === 'select' && (fd.options || []).includes('불량') && values[fd.key] === '불량');
+  const VERDICT_HINT = 'ⓘ 검사 항목에 "불량"이 있습니다 — 최종판정을 확인하세요';
+  function shiftDay(day, n) {
+    const d = new Date(`${day}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+  }
   const requirementChip = (d) => (d.requirement ? `<span class="badge te-chip-req">${REQUIREMENT[d.requirement]} 작성 요구</span>` : '');
 
   const Doc = {
@@ -139,7 +157,9 @@
     start(root) {
       this.root = root;
       const intent = T.takeIntent();
-      if (intent && intent.documentId) this.showDetail(intent.documentId);
+      this.detailBack = null;
+      if (intent && intent.bundleDay) this.showBundle(intent.bundleDay, intent.origin || { page: 'list' });
+      else if (intent && intent.documentId) this.showDetail(intent.documentId);
       else this.showList();
     },
 
@@ -157,6 +177,7 @@
 
     // ================================================= DOC-SC-01 목록
     async showList() {
+      this.detailBack = null;
       const f = this.filters;
       const templates = await this.loadTemplates();
       const statusOptions = ['', 'draft', 'completed', 'submitted', 'approved', 'rejected', 'correcting']
@@ -164,8 +185,8 @@
       const templateOptions = ['<option value="">전체</option>']
         .concat(templates.map((t) => `<option value="${t.template_id}" ${String(f.template_id) === String(t.template_id) ? 'selected' : ''}>${esc(t.name)} v${t.version}</option>`))
         .join('');
-      // 육안검사 오늘 빠른 필터(P6a-S1-Q6): 그날 육안검사 묶음 화면(P7) 전까지 목록으로 본다. D03 중 최신 버전
-      const d03 = templates.filter((t) => t.type_code === 'D03').sort((a, b) => b.version - a.version)[0];
+      // [육안검사 오늘](P7 DOC-SC-01): 오늘 묶음 상세(DOC-SC-10)를 연다(P6a-S1-Q6 목록 필터 대체)
+      const d03 = templates.find((t) => t.type_code === 'D03');
       this.root.innerHTML = `
         <div class="fade-in" id="teDocList">
           ${T.topBar('문서 작성', '문서 도메인 사용 화면 — 작성·조회·수정·삭제, 작성완료(P4)')}
@@ -180,7 +201,7 @@
               <label class="te-check"><input type="checkbox" id="fAssigned" ${f.assigned ? 'checked' : ''}> 내 담당</label>
               <label class="te-check" title="정정 중 + 정정 꼬리표가 붙은 작성완료·결재중"><input type="checkbox" id="fCorrecting" ${f.correcting ? 'checked' : ''}> 정정 진행 중 전체</label>
               <button class="btn btn-secondary" id="fSearch">조회</button>
-              ${d03 ? '<button class="btn btn-secondary" id="fD03Today" title="작업일 = 오늘 · 양식 = 육안검사(D03)">육안검사 오늘</button>' : ''}
+              ${d03 ? '<button class="btn btn-secondary" id="fD03Today" title="오늘 입고된 LOT의 육안검사 묶음 상세">육안검사 오늘</button>' : ''}
               <span style="flex:1"></span>
               <button class="btn btn-primary" id="btnNew">+ 새 문서</button>
             </div>
@@ -199,10 +220,7 @@
       };
       $('#fSearch').addEventListener('click', search);
       if (d03) {
-        $('#fD03Today').addEventListener('click', () => {
-          Object.assign(f, { from: today(0), to: today(0), template_id: String(d03.template_id), status: '', target: '', mine: false, assigned: false, correcting: false, page: 1 });
-          this.showList();
-        });
+        $('#fD03Today').addEventListener('click', () => this.showBundle(today(0), { page: 'list' }));
       }
       $('#fTarget').addEventListener('keydown', (e) => { if (e.key === 'Enter') search(); });
       $('#btnNew').addEventListener('click', () => this.showPicker());
@@ -267,8 +285,204 @@
         </div>`;
       body.querySelectorAll('tr[data-id]').forEach((tr) =>
         tr.addEventListener('click', () => this.showDetail(Number(tr.dataset.id))));
+      body.querySelectorAll('tr[data-bundle]').forEach((tr) =>
+        tr.addEventListener('click', () => this.showBundle(tr.dataset.bundle, { page: 'list' })));
       body.querySelectorAll('button[data-page]').forEach((b) =>
         b.addEventListener('click', () => { f.page = Number(b.dataset.page); this.loadList(); }));
+    },
+
+    // 문서 상세 [뒤로/목록]: 묶음 상세에서 열었으면 그 묶음으로(P6a S6a-4 규칙 — 연 곳으로)
+    goBack() {
+      const back = this.detailBack;
+      if (back && back.bundleDay) this.showBundle(back.bundleDay, back.origin);
+      else this.showList();
+    },
+    openFromBundle(documentId) {
+      this.detailBack = { bundleDay: this.bundle.day, origin: this.bundle.origin };
+      this.showDetail(documentId);
+    },
+
+    // ================================================= DOC-SC-10 육안검사 묶음 상세 (P7)
+    // 진입: 목록 묶음 줄·[육안검사 오늘](origin list), LOT별 연결 문서의 입고일 링크(origin temp-lot-docs).
+    // 데이터: REQ-A03 GET incoming-inspections?received_date= (X-Staff-Id 필수 — 내 차례 계산)
+    async showBundle(day, origin) {
+      this.detailBack = null;
+      const keep = this.bundle && this.bundle.day === day ? this.bundle.selected : new Set();
+      this.bundle = { day, origin: origin || (this.bundle && this.bundle.origin) || { page: 'list' }, selected: keep, data: null };
+      const B = window.TempEntryApproval && window.TempEntryApproval.batch;
+      const head = `
+        <div class="te-bundle-nav">
+          <button class="btn btn-secondary btn-sm" id="bdPrev">◀ 전날</button>
+          <b class="te-bundle-day">입고일 ${esc(day)}</b>
+          <button class="btn btn-secondary btn-sm" id="bdNext">다음날 ▶</button>
+          <span style="flex:1"></span>
+          <button class="btn btn-secondary btn-sm" id="bdBack">뒤로</button>
+        </div>`;
+      this.root.innerHTML = `
+        <div class="fade-in" id="teBundle">
+          ${T.topBar('육안검사일지 묶음', '같은 입고일 LOT들의 육안검사(D03) — 일괄 상신·승인·점검자 지정')}
+          <div class="card">${head}<div id="bdBody">${this.skeleton()}</div></div>
+        </div>`;
+      this.rerenderTopBar(() => this.showBundle(day, this.bundle.origin));
+      const $ = (sel) => this.root.querySelector(sel);
+      $('#bdPrev').addEventListener('click', () => this.showBundle(shiftDay(day, -1), this.bundle.origin));
+      $('#bdNext').addEventListener('click', () => this.showBundle(shiftDay(day, 1), this.bundle.origin));
+      $('#bdBack').addEventListener('click', () => {
+        const o = this.bundle.origin;
+        if (o.page === 'temp-lot-docs') T.open('temp-lot-docs', { lotId: o.lotId, back: o.back });
+        else this.showList();
+      });
+      const body = $('#bdBody');
+      if (!api.staffId) { body.innerHTML = '<div class="te-empty">현재 사용자를 선택하세요. 묶음 상세는 현재 사용자 기준으로 내 결재 대기를 보입니다.</div>'; return; }
+      const [r, cfg] = await Promise.all([api.get(`incoming-inspections?received_date=${day}`), B ? B.config() : { max_items: 50 }]);
+      if (!this.root.contains(body)) return;
+      if (!r.ok) {
+        T.toast(T.errorText(r), 'error');
+        body.innerHTML = `<div class="te-empty">${esc(T.errorText(r))}</div>`;
+        return;
+      }
+      this.bundle.data = r.data;
+      this.bundle.max = cfg.max_items;
+      this.renderBundle();
+    },
+
+    // 줄 → 일괄 모달 줄(approval.js Batch 모양)
+    bundleRows() {
+      const { data } = this.bundle;
+      return data.lots.filter((l) => l.document).map((l) => {
+        const x = l.document;
+        return {
+          document_id: x.document_id, lot: `${l.lot_number} · ${l.item_name}`, lot_number: l.lot_number,
+          status: x.status, correcting: x.correcting, version: x.version, verdict: x.verdict, nonconforming: x.nonconforming,
+          inspector_id: x.inspector_id, attempt: x.progress ? x.progress.attempt : null, my_slot: x.my_slot, progress: x.progress,
+        };
+      });
+    },
+
+    renderBundle() {
+      const { data, selected, max } = this.bundle;
+      const body = this.root.querySelector('#bdBody');
+      const lots = data.lots;
+      if (!lots.length) {
+        body.innerHTML = '<div class="te-empty" id="bdEmpty">이 날 입고된 LOT이 없습니다</div>';
+        return;
+      }
+      const rows = this.bundleRows();
+      const ids = new Set(rows.map((x) => x.document_id));
+      [...selected].forEach((id) => { if (!ids.has(id)) selected.delete(id); });
+      const picked = rows.filter((x) => selected.has(x.document_id));
+      const n = {
+        inspector: picked.filter((x) => EDITABLE.includes(x.status)).length,
+        submit: picked.filter((x) => x.status === 'completed').length,
+        approve: picked.filter((x) => x.my_slot).length,
+      };
+      const over = picked.length > max;
+      const btn = (id, label, count) => `<button class="btn ${count ? 'btn-primary' : 'btn-secondary'} btn-sm" id="${id}" ${!count || over ? 'disabled' : ''}>${label} (${count})</button>`;
+      const s = data.summary;
+      const approval = (x) => {
+        if (x.status === 'approved') return '완료';
+        if (x.status === 'submitted' && x.progress) return `승인 ${x.progress.approved}/${x.progress.total}${x.my_slot ? ' · <b class="te-my-turn">▸ 내 차례</b>' : ''}`;
+        if (x.status === 'rejected') return '<span class="te-hint">반려</span>';
+        return '<span class="te-hint">–</span>';
+      };
+      const missing = lots.filter((l) => !l.document);
+      body.innerHTML = `
+        <div class="te-bundle-summary" id="bdSummary">
+          <span>D03 ${s.documents}건:</span> ${statusSummary(s.status_counts, s.correcting_count) || '<span class="te-hint">문서 없음</span>'}
+          <span style="flex:1"></span><span>내 결재 대기 <b>${s.my_pending}</b></span>
+        </div>
+        <div class="te-bundle-actions">
+          ${btn('bdInspector', '점검자 지정', n.inspector)} ${btn('bdSubmit', '선택 상신', n.submit)} ${btn('bdApprove', '선택 승인', n.approve)}
+          <span class="te-hint" id="bdPicked">선택 ${picked.length}건${over ? ` — <span class="te-error-text">한 번에 ${max}건까지</span>` : ''}</span>
+          <span style="flex:1"></span>
+          <button class="btn btn-secondary btn-sm" disabled title="입고일 묶음 출력(DOC-SC-12)은 스프린트 3">출력 미리보기 <span class="te-hint">(스프린트 3)</span></button>
+        </div>
+        <div class="te-table-wrap"><table class="data-table" id="bdTable">
+          <thead><tr><th class="te-check-col"><input type="checkbox" id="bdAll" ${rows.length && picked.length === rows.length ? 'checked' : ''} ${rows.length ? '' : 'disabled'} title="보이는 줄 전체"></th>
+            <th>LOT</th><th>품목·매입처</th><th>수량</th><th>문서</th><th>상태</th><th>점검자</th><th>판정(현재)</th><th>승인본 판정</th><th>결재</th></tr></thead>
+          <tbody>${lots.filter((l) => l.document).map((l) => {
+            const x = l.document;
+            return `<tr data-lot-row="${l.lot_id}" class="${selected.has(x.document_id) ? 'te-row-picked' : ''}">
+              <td class="te-check-col"><input type="checkbox" data-pick="${x.document_id}" ${selected.has(x.document_id) ? 'checked' : ''}></td>
+              <td class="mono">${esc(l.lot_number)}</td>
+              <td>${esc(l.item_name)} · ${esc(l.supplier_name)}${l.material_kind ? ` <span class="te-hint">${esc(l.material_kind)}</span>` : ''}</td>
+              <td>${esc(l.quantity || '-')}</td>
+              <td><a href="#" class="te-lot-link" data-open-doc="${x.document_id}">#${x.document_id}</a></td>
+              <td>${statusCell(x.status, x.correcting)}</td>
+              <td>${x.inspector_id ? `staff ${esc(x.inspector_id)}` : '<span class="te-hint">-</span>'}</td>
+              <td>${x.verdict ? `<span class="${x.verdict === 'FAIL' ? 'te-judge-ng' : ''}">${x.verdict === 'FAIL' ? '부적합' : '적합'}</span>` : '<span class="te-hint">–</span>'}</td>
+              <td>${x.approved_verdict ? `${x.approved_verdict === 'FAIL' ? '<span class="te-judge-ng">부적합</span>' : '적합'} <span class="te-hint">${x.approved ? `${x.approved.attempt}회차` : ''}</span>` : '<span class="te-hint">–</span>'}</td>
+              <td>${approval(x)}</td>
+            </tr>`;
+          }).join('') || '<tr><td colspan="10" class="te-hint">육안검사 문서가 없습니다.</td></tr>'}</tbody>
+        </table></div>
+        ${missing.length ? `<div class="te-bundle-missing" id="bdMissing">문서 없음: ${missing.map((l) => `<b class="mono">${esc(l.lot_number)}</b>`).join(', ')} <span class="te-hint">(작성 요구 미호출 — 작성 요구 화면에서 [다시 호출])</span></div>` : ''}`;
+      const $ = (sel) => body.querySelector(sel);
+      body.querySelectorAll('[data-pick]').forEach((c) => c.addEventListener('change', () => {
+        const id = Number(c.dataset.pick);
+        if (c.checked) selected.add(id); else selected.delete(id);
+        this.renderBundle();
+      }));
+      $('#bdAll').addEventListener('change', (e) => {
+        rows.forEach((x) => { if (e.target.checked) selected.add(x.document_id); else selected.delete(x.document_id); });
+        this.renderBundle();
+      });
+      body.querySelectorAll('[data-open-doc]').forEach((a) => a.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.openFromBundle(Number(a.dataset.openDoc));
+      }));
+      const B = window.TempEntryApproval.batch;
+      // P7 S5-16(사용자 결정): 일괄 처리 뒤 결과 [닫기]로 다시 읽을 때 선택을 비운다
+      const after = {
+        onDone: () => { this.bundle.selected = new Set(); this.showBundle(this.bundle.day, this.bundle.origin); },
+        openDoc: (id) => { this.bundle.selected = new Set(); this.openFromBundle(id); },
+      };
+      $('#bdApprove').addEventListener('click', () => B.openApprove(picked, { origin: 'bundle', ...after }));
+      $('#bdSubmit').addEventListener('click', () => B.openSubmit(picked, data.default_slots, after));
+      $('#bdInspector').addEventListener('click', () => B.guardOpen(async () => this.openInspector(picked, after)));
+    },
+
+    // ================================================= DOC-SC-11 점검자 일괄 지정 (P7, 컷 ①)
+    openInspector(rows, after) {
+      const B = window.TempEntryApproval.batch;
+      const max = this.bundle.max || 50;
+      const targets = rows.filter((x) => EDITABLE.includes(x.status));
+      const why = (x) => (x.status === 'completed' ? '작성완료 — 수정하려면 작성 재개' : '결재 중이거나 승인됨');
+      const excluded = rows.filter((x) => !EDITABLE.includes(x.status)).map((row) => ({ row, why: `(${why(row)})` }));
+      const m = B.modal(`점검자 지정 · ${targets.length}건`);
+      const state = { inspector: '', busy: false, error: '' };
+      const render = () => {
+        const options = ['<option value="">선택</option>'].concat((T.staff || []).map((id) => `<option value="${id}" ${String(id) === state.inspector ? 'selected' : ''}>staff ${id}</option>`)).join('');
+        m.body.innerHTML = `
+          <p class="te-hint">기본정보의 점검자를 한 번에 바꿉니다(문서마다 저장, 버전 확인). 이미 같은 점검자인 문서는 "변화 없음"입니다.</p>
+          ${state.error}
+          <ul class="te-target-list" id="bxTargets">${targets.map((x) => `<li data-target="${x.document_id}">${B.rowName(x)} <span class="te-hint">(지금: ${x.inspector_id ? `staff ${esc(x.inspector_id)}` : '-'})</span></li>`).join('')
+            || '<li class="te-hint">수정 가능한(작성중·반려·정정 중) 문서가 없습니다.</li>'}</ul>
+          ${B.excludedHtml(excluded)}
+          ${B.overLimit(targets.length, max)}
+          <div class="form-group" style="margin-top:.75rem"><label class="form-label">점검자 *</label><select class="form-control" id="bxInspector">${options}</select></div>`;
+        const can = api.staffId && targets.length && targets.length <= max && state.inspector && !state.busy;
+        m.footer.innerHTML = `<button class="btn btn-secondary" id="bxCancel">취소</button>
+          <button class="btn btn-primary" id="bxGo" ${can ? '' : 'disabled'}>${state.busy ? '처리 중…' : `${targets.length}건 지정`}</button>`;
+        m.body.querySelector('#bxInspector').addEventListener('change', (e) => { state.inspector = e.target.value; render(); });
+        m.footer.querySelector('#bxCancel').addEventListener('click', m.close);
+        m.footer.querySelector('#bxGo').addEventListener('click', go);
+      };
+      const go = async () => {
+        state.busy = true;
+        state.error = '';
+        render();
+        const inspectorId = Number(state.inspector);
+        const res = await api.post('documents/batch-inspector', {
+          items: targets.map((x) => ({ document_id: x.document_id, expected_version: x.version })), inspector_id: inspectorId,
+        });
+        state.busy = false;
+        if (res.ok) { B.showResult(m, 'inspector', res.data, targets, { ...after, extra: { inspectorId } }); return; }
+        state.error = `<div class="te-error-box" id="bxError"><strong>${esc(T.errorText(res))}</strong> 아무것도 처리하지 않았습니다.</div>`;
+        T.toast(T.errorText(res), 'error');
+        render();
+      };
+      render();
     },
 
     // ================================================= DOC-SC-02 양식 선택
@@ -499,9 +713,13 @@
           const row = rows[0];
           const ng = row && isNonconforming(s, row.values) ? ' te-section-ng' : '';
           return `<div class="te-section${ng}" ${s.nonconforming && row ? `data-ng-section="${row.uid}"` : ''}><div class="te-section-head"><span class="te-section-title">${esc(s.label)}</span><span class="te-hint">행 1개</span></div>${sectionErr}
-            <div class="te-grid">${s.fields.map((fd) => `
-              <div class="form-group"><label class="form-label">${esc(fd.label)}${fd.required ? ' *' : ''}${fd.unit ? ` (${esc(fd.unit)})` : ''}</label>
-                ${this.fieldInput(fd, row.values[fd.key], row)}${this.errorFor(row.uid, fd.key)}</div>`).join('')}</div></div>`;
+            <div class="te-grid">${s.fields.map((fd) => {
+              const focus = verdictFocus(f.template.type_code, fd);
+              return `
+              <div class="form-group${focus ? ' te-verdict-field' : ''}"><label class="form-label">${esc(fd.label)}${fd.required ? ' *' : ''}${fd.unit ? ` (${esc(fd.unit)})` : ''}</label>
+                ${this.fieldInput(fd, row.values[fd.key], row)}${this.errorFor(row.uid, fd.key)}
+                ${focus ? `<div class="te-verdict-hint" data-verdict-hint="${row.uid}" ${verdictWarn(s, row.values) ? '' : 'hidden'}>${esc(VERDICT_HINT)}</div>` : ''}</div>`;
+            }).join('')}</div></div>`;
         }
         const legacy = this.legacyJudge(s);
         const limits = s.fields.filter((fd) => fd.limit).map((fd) => `${fd.label} ${fd.limit.min !== undefined ? `${fd.limit.min}${fd.unit || ''} 이상` : ''}${fd.limit.max !== undefined ? ` ${fd.limit.max}${fd.unit || ''} 이하` : ''}`).join(', ');
@@ -576,6 +794,8 @@
           const tr = root.querySelector(`tr[data-tr="${row.uid}"]`);
           if (tr) tr.className = `te-row-${this.rowState(row) || 'same'}${isNonconforming(section, row.values) ? ' te-row-ng' : ''}`;
           root.querySelector(`[data-ng-section="${row.uid}"]`)?.classList.toggle('te-section-ng', isNonconforming(section, row.values));
+          const vh = root.querySelector(`[data-verdict-hint="${row.uid}"]`);
+          if (vh) vh.hidden = !verdictWarn(section, row.values);
           const judge = root.querySelector(`[data-judge="${row.uid}"]`);
           if (judge) judge.innerHTML = this.judgeCell(section, row.values);
           const computed = withComputed(section, row.values);
@@ -751,7 +971,7 @@
       if (!r.ok) {
         this.root.innerHTML = `<div class="fade-in">${T.topBar('문서 상세', '')}<div class="card te-empty">${r.status === 404 ? '문서를 찾을 수 없습니다 (삭제되었을 수 있습니다).' : esc(T.errorText(r))}<br><br><button class="btn btn-secondary" id="btnBack">목록</button></div></div>`;
         this.rerenderTopBar(() => this.showDetail(id));
-        this.root.querySelector('#btnBack').addEventListener('click', () => this.showList());
+        this.root.querySelector('#btnBack').addEventListener('click', () => this.goBack());
         return;
       }
       const d = r.data;
@@ -791,7 +1011,7 @@
             <div class="card-header">
               <div class="card-title">${statusCell(d.status, !!fixing)} ${requirementChip(d)}</div>
               <div class="page-actions">
-                <button class="btn btn-secondary btn-sm" id="btnList">목록</button>
+                <button class="btn btn-secondary btn-sm" id="btnList">${this.detailBack ? '뒤로' : '목록'}</button>
                 ${canEdit ? `<button class="btn btn-primary btn-sm" id="btnEdit" ${api.staffId ? '' : 'disabled'}>수정</button>` : ''}
                 ${canComplete ? `<button class="btn btn-primary te-btn-complete btn-sm" id="btnComplete" ${api.staffId ? '' : 'disabled'}>작성완료</button>` : ''}
                 ${canReopen ? `<button class="btn btn-secondary btn-sm" id="btnReopen" ${api.staffId ? '' : 'disabled'}>작성 재개</button>` : ''}
@@ -820,7 +1040,7 @@
         </div>`;
       this.rerenderTopBar(() => this.showDetail(id));
       const $ = (sel) => this.root.querySelector(sel);
-      $('#btnList').addEventListener('click', () => this.showList());
+      $('#btnList').addEventListener('click', () => this.goBack());
       $('#btnEdit')?.addEventListener('click', () => this.openForm({ document: d }));
       $('#btnDelete')?.addEventListener('click', () => this.confirmDelete(d));
       $('#btnComplete')?.addEventListener('click', () => this.confirmComplete(d, schema));
@@ -854,7 +1074,7 @@
           const ng = !!rows[0] && isNonconforming(s, v);
           const add = ng && detail && api.staffId ? ` <button class="btn btn-secondary btn-sm te-dev-add" data-dev-for="" data-dev-text="${esc(`${s.label} 부적합`)}">개선조치 추가</button>` : '';
           return `<div class="te-section${ng ? ' te-section-ng' : ''}"><div class="te-section-title">${esc(s.label)}${ng ? ' <span class="te-judge-ng">⚠ 부적합</span>' : ''}${add}</div>
-            <dl class="te-kv">${s.fields.map((fd) => `<div><dt>${esc(fd.label)}</dt><dd>${this.display(fd, withComputed(s, v)[fd.key])}</dd></div>`).join('')}</dl></div>`;
+            <dl class="te-kv">${s.fields.map((fd) => `<div${verdictFocus(d.template && d.template.type_code, fd) ? ' class="te-verdict-kv"' : ''}><dt>${esc(fd.label)}</dt><dd>${this.display(fd, withComputed(s, v)[fd.key])}</dd></div>`).join('')}</dl></div>`;
         }
         const legacy = this.legacyJudge(s);
         const canDev = detail && api.staffId && !!s.nonconforming;
@@ -1229,5 +1449,6 @@
   };
 
   T.register('temp-doc', Doc);
+  Doc.targetText = targetText;  // WF-SC-04 대상(ISS-018 — 예전 요청은 스냅샷으로 계산)
   window.TempEntryDocument = Doc;
 })();

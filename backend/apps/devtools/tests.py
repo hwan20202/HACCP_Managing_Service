@@ -1,5 +1,7 @@
 """개발 콘솔 화면(/dev/) 노출 조건."""
 
+import datetime
+
 from django.conf import settings
 from django.test import SimpleTestCase, TestCase, override_settings
 
@@ -177,6 +179,20 @@ class D03FixtureTests(TestCase):
         ):
             with self.subTest(body=body):
                 self.assertEqual(self.post(body).status_code, 400)
+
+    def test_p7_s5_lot_only(self):
+        """P7 S5: 작성 요구 없이 입고 LOT만(묶음 상세 "문서 없음" 줄)."""
+        from apps.doc_requirements import services as req
+
+        res = self.post({"lot_only": True, "received_date": "2026-10-22"})
+        self.assertEqual(res.status_code, 201, res.content)
+        self.assertEqual(res.json()["lot_number"], "RM-1022-01")
+        self.assertIsNone(res.json()["document_id"])
+        bundle = req.incoming_bundle(3, datetime.date(2026, 10, 22))
+        self.assertEqual(
+            [(x["lot_number"], x["document"]) for x in bundle["lots"]], [("RM-1022-01", None)]
+        )
+        self.assertEqual(self.post({"lot_only": "yes"}).status_code, 400)
 
     def test_p7_states_and_inspector(self):
         from apps.documents import services as doc

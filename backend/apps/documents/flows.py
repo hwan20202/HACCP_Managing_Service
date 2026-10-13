@@ -50,6 +50,19 @@ FLOWS = {
     "DOC-FNL": ["DOC-FNL-01"],
 }
 
+# P7 S5: 개발 콘솔의 항목별 비교(WF BATCH와 같은 모양: 머리 → 항목 × n → 꼬리).
+# 끝이 a인 단계는 비교에서 빠지므로 같은 값(05 → 05a 성공)은 "same" = 04·05
+BATCH = {
+    "DOC-BIN": {
+        "head": ["DOC-BIN-01", "DOC-BIN-02", "DOC-BIN-03"],
+        "items": {
+            "changed": ["DOC-BIN-04", "DOC-BIN-05", "DOC-BIN-06"],
+            "same": ["DOC-BIN-04", "DOC-BIN-05"],
+        },
+        "tail": ["DOC-BIN-07"],
+    },
+}
+
 
 def _group(step_id):
     return step_id.rsplit("-", 1)[0]  # DOC-CMP-03 → DOC-CMP

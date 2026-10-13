@@ -8,7 +8,9 @@ from apps.approvals.flows import FLOWS as APR_FLOWS
 from apps.approvals.models import Approval, ApprovalRequest
 from apps.doc_effects.flows import FLOWS as EFF_FLOWS
 from apps.doc_requirements.flows import FLOWS as REQ_FLOWS
+from apps.document_workflow.flows import BATCH as WF_BATCH
 from apps.document_workflow.flows import FLOWS as WF_FLOWS
+from apps.documents.flows import BATCH as DOC_BATCH
 from apps.documents.flows import FLOWS as DOC_FLOWS
 from apps.documents.models import (
     DeviationAction,
@@ -23,6 +25,7 @@ from apps.documents.models import (
 from .middleware import recall
 
 FLOWS = {**DOC_FLOWS, **APR_FLOWS, **WF_FLOWS, **REQ_FLOWS, **EFF_FLOWS}
+BATCH = {**DOC_BATCH, **WF_BATCH}
 
 
 def _plain(value):
@@ -216,7 +219,8 @@ def snapshot(request):
 @require_safe
 def flows(request, flow_id=None):
     if flow_id is None:
-        return _json({"flows": FLOWS})
+        # batch: P7 일괄 흐름의 머리·항목 묶음·꼬리(콘솔 항목별 비교, NFR-05)
+        return _json({"flows": FLOWS, "batch": BATCH})
     if flow_id not in FLOWS:
         return _json({"code": "NOT_FOUND", "message": "알 수 없는 흐름입니다."}, 404)
     return _json({"flow_id": flow_id, "steps": FLOWS[flow_id]})
