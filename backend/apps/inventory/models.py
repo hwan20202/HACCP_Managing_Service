@@ -449,9 +449,10 @@ class BatchStatus(models.TextChoices):
 
 
 class Shift(models.TextChoices):
-    DAY = "A", "주간"
-    NIGHT = "B", "야간"
-    AFTERNOON = "C", "오후"
+    """근무조: A조·B조 (둘 다 주간). DB CHECK 는 'C' 도 허용하지만 예비로 두고 쓰지 않는다."""
+
+    A = "A", "A조"
+    B = "B", "B조"
 
 
 class ProductionBatch(models.Model):

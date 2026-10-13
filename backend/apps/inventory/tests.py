@@ -457,7 +457,7 @@ class LotNumberTests(TestCase):
         self.assertEqual(self.draw(second, kind=produced, shift="A"), "261009A")
         self.assertEqual(self.draw(first, kind=produced, shift="A"), "261009A-2")
         self.assertEqual(self.draw(first, kind=produced, shift="B"), "261009B")
-        for shift in [None, "D"]:
+        for shift in [None, "C", "D"]:
             with self.subTest(shift=shift), self.assertRaises(LotNumberError):
                 self.draw(first, kind=produced, shift=shift)
 

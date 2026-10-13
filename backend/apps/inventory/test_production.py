@@ -208,7 +208,7 @@ class BatchFlowTests(ProductionTestCase):
         with self.assertRaises(InventoryError):
             self.batch(self.semi, process="MIXING")
         with self.assertRaises(InventoryError):
-            self.batch(self.semi, shift="D")
+            self.batch(self.semi, shift="C")
         with self.assertRaises(NotFound):
             create_batch(item_id=999999, process_type="MANUFACTURE", staff_id=self.staff.pk)
         self.batch(self.semi)

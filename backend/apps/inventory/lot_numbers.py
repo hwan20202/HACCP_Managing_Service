@@ -9,7 +9,7 @@ Pattern tokens
     {item_code}          items.item_code
     {short_code}         items.short_code (LOT 약어: A** 원료, B** 반제품, C** 포장재)
     {item_type}          items.item_type (RAW, PACKAGING, ...)
-    {shift}              근무조 A 주간 / B 야간 / C 오후 (passed by the caller)
+    {shift}              근무조 A조 / B조 (passed by the caller)
     {date:FMT}           the base date: received date for INCOMING, manufacturing date for
                          PRODUCED. FMT tokens: yyyy, yy, MM, dd  e.g. {date:yyMMdd} -> 261009
     {received:FMT}       same as {date:FMT} (older name, kept for existing rules)
@@ -41,7 +41,7 @@ _DATE_PART = re.compile(r"yyyy|yy|MM|dd")
 _MAX_SKIPS = 1000
 
 
-SHIFTS = {"A": "주간", "B": "야간", "C": "오후"}
+SHIFTS = {"A": "A조", "B": "B조"}  # 둘 다 주간. C 는 DB 에서만 예비로 허용
 
 
 class LotNumberError(InventoryError):
@@ -99,8 +99,7 @@ def render(pattern, *, item, base_date, seq=None, shift=None):
         if name == "shift":
             if shift not in SHIFTS:
                 raise LotNumberError(
-                    "근무조를 선택하세요 (A 주간 / B 야간 / C 오후)."
-                    + (f" (입력: {shift!r})" if shift else "")
+                    "근무조를 선택하세요 (A조 / B조)." + (f" (입력: {shift!r})" if shift else "")
                 )
             return shift
         if name in {"date", "received"}:

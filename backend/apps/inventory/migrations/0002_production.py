@@ -121,7 +121,7 @@ class Migration(migrations.Migration):
                     "shift",
                     models.TextField(
                         blank=True,
-                        choices=[("A", "주간"), ("B", "야간"), ("C", "오후")],
+                        choices=[("A", "A조"), ("B", "B조")],
                         null=True,
                     ),
                 ),

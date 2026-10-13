@@ -85,7 +85,7 @@ def _shift(value):
     if value in (None, ""):
         return None
     if value not in Shift.values:
-        raise InventoryError("근무조는 A(주간) / B(야간) / C(오후) 중 하나입니다.")
+        raise InventoryError("근무조는 A조 / B조 중 하나입니다.")
     return value
 
 

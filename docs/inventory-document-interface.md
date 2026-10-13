@@ -22,7 +22,7 @@
 | `staff` | `id`, `staff_code`(UNIQUE), `name`, `is_active` | 작성자·결재자 등은 `staff.id` 참조 |
 | `items` | `id`, `item_code`(UNIQUE), `short_code`(LOT 약어), `name`, `item_type`, `base_unit`, `unit_weight_mg`, `origin_country`, `shelf_life_months` / `shelf_life_days` | `item_type`: RAW 원료 / PACKAGING 포장재 / SEMI 반제품 / FINISHED 완제품 |
 | `lots` | `id`, `lot_number`(**품목 안에서 UNIQUE**), `item_id`, `lot_kind`, `status`, `manufactured_date`, `expiration_date` | `lot_kind`: INCOMING / PRODUCED |
-| `production_batches` | `id`, `batch_number`(UNIQUE), `process_type`, `item_id`, `status`, `manufactured_date`, `shift`, … | `process_type`: MANUFACTURE / PACKAGING, `shift`: A 주간 / B 야간 / C 오후 |
+| `production_batches` | `id`, `batch_number`(UNIQUE), `process_type`, `item_id`, `status`, `manufactured_date`, `shift`, … | `process_type`: MANUFACTURE / PACKAGING, `shift`: A조 / B조 (둘 다 주간) |
 
 **LOT 번호** (BOM v4 멘토안): 원료·포장재 `LOT 약어 + 입고일` (`AHN261005`), 반제품 `LOT 약어 + 제조일` (`BNY261007`), 완제품 `제조일 + 근무조` (`261011A`). 같은 날 같은 품목이 또 생기면 `-2`, `-3`.
 완제품은 제품이 달라도 번호가 같을 수 있으므로 **LOT 은 `lot_id` 로 식별**하고, 화면·라벨에는 품목코드와 함께 표시합니다 (`4000001 / 261011A`). `document_ref.label` 같은 표시용 값으로 LOT 을 찾지 마세요.
@@ -79,7 +79,7 @@
 |---|---|
 | `production_batch_id` | `production_batches.id` |
 | `batch_number`, `process_type`, `status` | 배치 번호, MANUFACTURE / PACKAGING, 상태 |
-| `shift` | 근무조 A 주간 / B 야간 / C 오후 (NULL 가능) |
+| `shift` | 근무조 A조 / B조 (둘 다 주간, NULL 가능) |
 | `item_id`, `item_code`, `item_name`, `item_type`, `base_unit` | 산출 품목 |
 | `unit_weight_mg` | 기준단위 1개 무게(mg, NULL 가능). kg 환산: 개수 × `unit_weight_mg` ÷ 1,000,000 (예: 환 10,000개 × 4,000mg = 40kg). 문서 요청 V1 |
 | `bom_id`, `bom_version` | 기준 BOM (없으면 NULL) |

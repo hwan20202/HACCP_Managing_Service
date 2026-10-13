@@ -118,7 +118,7 @@ CREATE TABLE production_batches (
     planned_date         TEXT    CHECK (planned_date IS NULL OR planned_date IS date(planned_date)),
     planned_quantity_e6  INTEGER CHECK (planned_quantity_e6 IS NULL OR planned_quantity_e6 > 0),
     manufactured_date    TEXT    CHECK (manufactured_date IS NULL OR manufactured_date IS date(manufactured_date)),   -- 생산 LOT 채번 기준일
-    shift                TEXT    CHECK (shift IS NULL OR shift IN ('A', 'B', 'C')),   -- 근무조 A 주간 / B 야간 / C 오후. 완제품 LOT 채번에 사용
+    shift                TEXT    CHECK (shift IS NULL OR shift IN ('A', 'B', 'C')),   -- 근무조 A조 / B조 (둘 다 주간, C 는 예비). 완제품 LOT 채번에 사용
     started_at           TEXT    CHECK (started_at   IS NULL OR started_at   IS datetime(started_at)),
     completed_at         TEXT    CHECK (completed_at IS NULL OR completed_at IS datetime(completed_at)),
     staff_id             INTEGER NOT NULL REFERENCES staff(id),        -- 작업 책임자 / 기록자
