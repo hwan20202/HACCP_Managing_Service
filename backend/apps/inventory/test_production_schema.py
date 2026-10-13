@@ -252,12 +252,14 @@ class ProductionSchemaTests(SimpleTestCase):
                 "4000001 가상완제품 / B-4000001-261009A / 2026-10-09",
             ),
         )
+        self.db.execute("UPDATE items SET unit_weight_mg = 4000 WHERE id = ?", (self.fin,))
         self.assertEqual(
             self.one(
-                "SELECT status, base_unit FROM v_doc_batch WHERE production_batch_id = ?",
+                "SELECT status, base_unit, unit_weight_mg FROM v_doc_batch"
+                " WHERE production_batch_id = ?",
                 self.pack,
             ),
-            ("COMPLETED", "개"),
+            ("COMPLETED", "개", 4000),
         )
         ledger = self.db.execute(
             "SELECT movement_code, lot_id, item_id, batch_id FROM v_stock_ledger"

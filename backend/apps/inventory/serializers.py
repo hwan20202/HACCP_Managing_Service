@@ -42,6 +42,7 @@ def item(obj):
         "base_unit": obj.base_unit,
         "short_code": obj.short_code,
         "unit_weight_mg": obj.unit_weight_mg,
+        "shelf_life_months": obj.shelf_life_months,
         "shelf_life_days": obj.shelf_life_days,
         "origin_country": obj.origin_country,
         "food_type": obj.food_type,

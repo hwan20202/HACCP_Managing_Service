@@ -19,8 +19,8 @@
 | 10/12 | `b6a1fa2` | 10/11 ERD 반영: 0001 수정(LOT 번호 전체 UNIQUE, LOT 상태 3개, `deviation_action_id`·`domain_event_inbox` 삭제, 문서 뷰), 0002 확정·마이그레이션 연결, 입고 시 판정 동시 반영 |
 | 10/12 | `076d681` | 문서 연동 인터페이스 문서 [inventory-document-interface.md](inventory-document-interface.md), 뷰 확인 명령 `show_view` |
 | 10/12 | `076d681` | LOT 번호 BOM v4 멘토안 채택: `{short_code}`·`{shift}`·`{seq:-N}` 토큰, 기본 규칙 3개, `UNIQUE(item_id, lot_number)` 로 되돌림, `production_batches.shift` |
-| 10/13 | (다음 커밋) | 문서 ERD v7 요청 V1: `v_doc_batch` 에 `unit_weight_mg` 추가 (main 병합 전) |
-| 10/13 | (다음 커밋, `feature/inventory-production`) | 생산 서비스: 배치 등록·시작·완료·취소, 투입, 산출 LOT, FEFO 추천, BOM 표준 소요량 |
+| 10/13 | `64dcce7` | 문서 ERD v7 요청 V1: `v_doc_batch` 에 `unit_weight_mg` 추가, 품목 소비기한 개월 `shelf_life_months` + `shelf_life.py` (main 병합 전. `b19cb3f` 에서 스키마가 빠져 재반영) |
+| 10/13 | `15d6b88` (`feature/inventory-production`) | 생산 서비스: 배치 등록·시작·완료·취소, 투입, 산출 LOT, FEFO 추천, BOM 표준 소요량 |
 
 ## 한눈에 보기
 
@@ -101,7 +101,7 @@
 | 0002 스키마 (BOM, 제조배치, 투입, 산출, 추적 뷰) | ✅ 10/12 확정 | `sql/0002_production.sql`, `migrations/0002_production.py`, 모델 5개(`managed=False`), 검증 테스트 `test_production_schema.py` |
 | 제조배치 등록·상태 (계획 → 진행 → 완료 / 취소) | ✅ 서비스 10/13 | `production.py`. 계획 없이 바로 완료 가능(사후 입력). API·화면 다음 |
 | 자재 투입 (사용 가능 LOT만, FEFO 추천, 실제 투입량) | ✅ 서비스 10/13 | 검사대기·부적합·보류·소비기한 경과 LOT 거부, `fefo_candidates`, BOM 표준량 `standard_requirements` |
-| 산출 LOT 생성 (제조일 기준 채번, 소비기한 계산) | ✅ 서비스 10/13 | 반제품 약어+제조일, 완제품 제조일+근무조. 소비기한 = 제조일 + 유통기한 일수(가정) |
+| 산출 LOT 생성 (제조일 기준 채번, 소비기한 계산) | ✅ 서비스 10/13 | 반제품 약어+제조일, 완제품 제조일+근무조. 소비기한 = 제조일 + 품목 소비기한(개월·일, `shelf_life.py`) |
 | 포장 작업 (반제품 + 포장재 → 완제품) | ⛔ | 포장 시 LOT 번호 유지 / 새 발급 (스키마 영향 없음) |
 | 추적 (원료 → 배치 → 반제품 → 포장 → 완제품, 정·역방향) | 🟢 | 투입·산출 테이블로 계산 |
 | 수율 | ⬜ 후순위 | KPI 아님 (9/30) |

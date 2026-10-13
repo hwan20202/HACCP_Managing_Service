@@ -18,8 +18,6 @@ idempotent per idempotency_key: the same request again returns the first row.
 Messages in InventoryError are shown to users, so they are in Korean.
 """
 
-import datetime
-
 from django.db import connection, transaction
 
 from . import document_bridge
@@ -52,6 +50,7 @@ from .movements import (
     _staff,
     current_stock_e6,
 )
+from .shelf_life import expiration_for
 
 OPEN_STATUSES = {BatchStatus.PLANNED, BatchStatus.IN_PROGRESS}
 PRODUCIBLE_ITEM_TYPES = {"SEMI", "FINISHED"}
@@ -356,7 +355,7 @@ def add_output(
 
     LOT number: the PRODUCED rule (반제품 약어 + 제조일, 완제품 제조일 + 근무조) unless one is
     given. The base date is the batch's manufacturing date (set from the output time if empty).
-    Expiration: given, else manufacturing date + items.shelf_life_days (가정), else none.
+    Expiration: given, else manufacturing date + the item's shelf life (shelf_life.py), else none.
     The new LOT is AVAILABLE (no product inspection flow yet).
     """
     quantity_e6 = _quantity_e6(quantity)
@@ -384,8 +383,8 @@ def add_output(
             lot_number = next_lot_number(
                 lot_kind=LotKind.PRODUCED, item=item, base_date=made, shift=batch.shift
             )
-        if expiration_date is None and item.shelf_life_days:
-            expiration_date = made + datetime.timedelta(days=item.shelf_life_days)
+        if expiration_date is None:
+            expiration_date = expiration_for(item, made)
         if expiration_date and expiration_date < made:
             raise InventoryError("소비기한이 제조일보다 빠를 수 없습니다.")
         lot = Lot.objects.create(

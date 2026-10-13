@@ -152,11 +152,13 @@ CREATE TABLE items (
     base_unit         TEXT    NOT NULL,                 -- kg / g / 개 / 장 …
     unit_weight_mg    INTEGER CHECK (unit_weight_mg IS NULL OR unit_weight_mg > 0),   -- 1 base_unit 표준 중량. 환 4g = 4000
     shelf_life_days   INTEGER CHECK (shelf_life_days IS NULL OR shelf_life_days > 0),
+    shelf_life_months INTEGER CHECK (shelf_life_months IS NULL OR shelf_life_months > 0),   -- 소비기한 개월 (제조방법설명서 '제조일로부터 24개월'). 일수와 둘 중 하나만
     origin_country    TEXT,
     food_type         TEXT,
     minimum_stock_e6  INTEGER NOT NULL DEFAULT 0 CHECK (minimum_stock_e6 >= 0),
     is_active         INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
-    created_at        TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+    created_at        TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    CHECK (shelf_life_days IS NULL OR shelf_life_months IS NULL)
 ) STRICT;
 
 CREATE INDEX ix_items_type ON items (item_type);

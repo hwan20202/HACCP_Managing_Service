@@ -35,6 +35,7 @@ from .models import (
 )
 from .quantity import from_e6, to_e6
 from .receiving import ReceiptInput, ReceivingError, cancel_receipt, register_receipt
+from .shelf_life import add_months, expiration_for
 from .sql_runner import read_sql, split_statements
 
 CORE_TABLES = {
@@ -728,3 +729,40 @@ class ReceivingTests(TestCase):
             cancel_receipt(receipt_id=receipt.pk, staff_id=self.staff.pk, reason="x")
         receipt.refresh_from_db()
         self.assertEqual(receipt.receipt_status, ReceiptStatus.COMPLETED)
+
+
+class ShelfLifeTests(SimpleTestCase):
+    def test_months_keep_the_day_and_clamp_month_end(self):
+        item = Item(shelf_life_months=24)
+        self.assertEqual(
+            expiration_for(item, datetime.date(2026, 10, 13)), datetime.date(2028, 10, 13)
+        )
+        self.assertEqual(add_months(datetime.date(2026, 1, 31), 1), datetime.date(2026, 2, 28))
+        self.assertEqual(add_months(datetime.date(2027, 2, 28), 12), datetime.date(2028, 2, 28))
+
+    def test_days_and_missing(self):
+        made = datetime.date(2026, 10, 13)
+        self.assertEqual(
+            expiration_for(Item(shelf_life_days=10), made), datetime.date(2026, 10, 23)
+        )
+        self.assertIsNone(expiration_for(Item(), made))
+        self.assertIsNone(expiration_for(Item(shelf_life_months=1), None))
+
+
+class ShelfLifeMasterTests(TestCase):
+    def test_months_or_days_not_both(self):
+        call_command("seed_master", "--sample", stdout=StringIO())
+        finished = Item.objects.get(item_code="4000001")
+        self.assertEqual((finished.shelf_life_months, finished.shelf_life_days), (24, None))
+        row = {
+            "item_code": "1000099",
+            "item_type": "RAW",
+            "name": "x",
+            "base_unit": "kg",
+            "shelf_life_months": "12",
+            "shelf_life_days": "30",
+        }
+        with self.assertRaises(MasterImportError):
+            import_items([row])
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Item.objects.filter(pk=finished.pk).update(shelf_life_days=30)

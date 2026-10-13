@@ -37,6 +37,7 @@ from .production import (
 )
 from .quantity import to_e6
 from .receiving import ReceiptInput, register_receipt
+from .shelf_life import add_months
 
 
 class ProductionTestCase(TestCase):
@@ -45,7 +46,7 @@ class ProductionTestCase(TestCase):
         call_command("seed_master", "--sample", stdout=StringIO())
         cls.raw = Item.objects.get(item_code="1000001")  # LOT 약어 AGA
         cls.pouch = Item.objects.get(item_code="2000001")  # CGP
-        cls.finished = Item.objects.get(item_code="4000001")  # shelf_life_days 730
+        cls.finished = Item.objects.get(item_code="4000001")  # shelf_life_months 24
         cls.semi = Item.objects.create(
             item_type_id="SEMI",
             item_code="3000001",
@@ -131,6 +132,7 @@ class BatchFlowTests(ProductionTestCase):
         first = self.output(pack, "100", "o2").lot
         second = self.output(pack, "100", "o3").lot
         self.assertEqual((first.lot_number, second.lot_number), (f"{day}A", f"{day}A-2"))
+        self.assertEqual(first.expiration_date, add_months(self.today, 24))  # 24개월 품목
         done = complete_batch(batch_id=pack.pk, staff_id=self.staff.pk)
         self.assertEqual(done.status, BatchStatus.COMPLETED)
         self.assertIsNotNone(done.completed_at)

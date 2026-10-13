@@ -29,6 +29,7 @@
        → 문서 앱 마이그레이션은 inventory 0002 에 의존. 배치 없는 독립 CCP 점검은 문서 쪽이 process_code 만으로 기록
    D2. 문서 쪽 읽기 창구 v_doc_batch: 컬럼 이름은 문서 쪽 요청에 맞춤 (production_batch_id, status)
        수량은 *_e6 + base_unit (S3). 완제품은 단위가 '개' 일 수 있어 kg 로 주지 않는다
+       kg 환산이 필요하면 unit_weight_mg 사용 (수량 × unit_weight_mg ÷ 1,000,000 g, 10/13 문서 요청 V1)
    D3. 문서 쪽은 status = 'CANCELLED' 배치에 문서를 만들지 않는다
 
    [이 파일에 없는 것 — 스키마 영향이 없거나 이후 마이그레이션]
@@ -331,6 +332,7 @@ SELECT b.id                        AS production_batch_id,
        i.name                      AS item_name,
        i.item_type,
        i.base_unit,
+       i.unit_weight_mg,           -- 기준단위 1개 무게(mg). base_unit 이 '개' 등일 때 kg 환산용 (문서 요청 V1)
        b.bom_id,
        bm.version                  AS bom_version,
        b.planned_date,
