@@ -443,3 +443,44 @@ class ProductionApiTests(ApiTestCase):
         self.assertEqual(cancelled.json()["status"], "CANCELLED")
         self.assertEqual(self.get("/batches/", status="NOPE").status_code, 400)
         self.assertEqual(self.get("/batches/fefo/", item_id=self.raw.pk).status_code, 400)
+
+    def test_holds(self):
+        lot_id = self.receive_pass("r1", "10")
+        held = self.post(
+            "/holds/",
+            {
+                "lot_id": lot_id,
+                "source_type": "manual",
+                "reason": "이물 의심",
+                "staff_id": self.staff.pk,
+            },
+        )
+        self.assertEqual(held.status_code, 201, held.content.decode())
+        hold = held.json()
+        self.assertEqual((hold["target"], hold["is_open"]), ("lot", True))
+        stock = self.get("/stock/lots/", item_id=self.raw.pk).json()["results"][0]
+        self.assertEqual((stock["is_usable"], stock["active_hold_count"]), (False, 1))
+        both = self.post(
+            "/holds/",
+            {
+                "lot_id": lot_id,
+                "batch_id": 1,
+                "source_type": "MANUAL",
+                "reason": "x",
+                "staff_id": self.staff.pk,
+            },
+        )
+        self.assertEqual(both.status_code, 400)
+        ccp = self.post(
+            "/holds/",
+            {"lot_id": lot_id, "source_type": "CCP", "reason": "x", "staff_id": self.staff.pk},
+        )
+        self.assertEqual(ccp.status_code, 400)
+        self.assertEqual(self.get("/holds/", open=1).json()["count"], 1)
+        released = self.post(
+            f"/holds/{hold['id']}/release/",
+            {"disposition": "release", "reason": "이상 없음", "staff_id": self.staff.pk},
+        ).json()
+        self.assertEqual((released["is_open"], released["disposition"]), (False, "RELEASE"))
+        self.assertEqual(self.get("/holds/", open=1).json()["count"], 0)
+        self.assertEqual(self.get("/holds/999999/").status_code, 404)

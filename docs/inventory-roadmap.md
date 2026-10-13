@@ -20,6 +20,7 @@
 | 10/12 | `076d681` | 문서 연동 인터페이스 문서 [inventory-document-interface.md](inventory-document-interface.md), 뷰 확인 명령 `show_view` |
 | 10/12 | `076d681` | LOT 번호 BOM v4 멘토안 채택: `{short_code}`·`{shift}`·`{seq:-N}` 토큰, 기본 규칙 3개, `UNIQUE(item_id, lot_number)` 로 되돌림, `production_batches.shift` |
 | 10/13 | `64dcce7` | 문서 ERD v7 요청 V1: `v_doc_batch` 에 `unit_weight_mg` 추가, 품목 소비기한 개월 `shelf_life_months` + `shelf_life.py` (main 병합 전. `b19cb3f` 에서 스키마가 빠져 재반영) |
+| 10/13 | (다음 커밋, `feature/inventory-production`) | 보류: 0003 `holds`(LOT·배치 공용, 배치 → 산출 LOT 전파), `holds.py`, `/holds/` API, 보류 중 배치 투입·산출 차단 |
 | 10/13 | (다음 커밋, `feature/inventory-production`) | 생산 API: `/batches/`(목록·등록·상세·시작·투입·산출·완료·취소), `/batches/fefo/`, `/boms/`, 배치 상세에 BOM 표준 대비 실제 |
 | 10/13 | `15d6b88` (`feature/inventory-production`) | 생산 서비스: 배치 등록·시작·완료·취소, 투입, 산출 LOT, FEFO 추천, BOM 표준 소요량 |
 
@@ -31,7 +32,7 @@
 | 2. 기준정보 | ✅ (BOM 제외) | BOM | 포장재·판매 규격 데이터 |
 | 3. 입고 | 🟡 입고 시 판정 동시 반영까지 완료 | 통합 입고 (체크리스트) | 문서 쪽 검사 함수 형식 |
 | 4. 재고·수불 | ✅ | 출력 양식 | 현업 양식 |
-| 5. 품질 보류 (HOLD) | ⛔ | — | 배치 HOLD 방식 (10/11 미결) |
+| 5. 품질 보류 (HOLD) | 🟡 서비스·API ('다' 안 가정) | 문서 쪽 호출 연결 | CCP 이탈 시 호출 주체·해제 조건 합의 |
 | 6. 생산 | 🟡 0002 확정·연결 | 서비스 (배치·투입·산출·추적) | 포장 LOT 기준, 배치 번호 형식 (서비스 로직) |
 | 7. 출하 | — 범위 밖 | — | MVP 제외 (생산 이력·HACCP 중심) |
 | 8. 문서 연동 | 🟡 방식·뷰 형식 확정 | 문서 쪽에 0002 생성 공유, 문서 쪽 함수 연결 | 문서 쪽 검사 함수 형식 |
@@ -91,8 +92,9 @@
 
 | 기능 | 상태 | 비고 |
 |---|---|---|
-| LOT HOLD 생성·해제 | ⛔ | 배치 HOLD 위치, 전파 방식. 개선조치는 문서 내부 (10/11 확정) |
-| 배치 HOLD → 산출 LOT 전파 | ⛔ | CCP 이탈은 배치 단위 (10/7 확인). 정해지면 새 마이그레이션 |
+| LOT HOLD 생성·해제 | ✅ 10/13 | `holds.py`, `/holds/`, 0003 에서 `lot_holds` → `holds` |
+| 배치 HOLD → 산출 LOT 전파 | ✅ 10/13 | 보류 중 배치는 투입·산출 불가, 해제 시 전파 보류도 해제 |
+| 문서 쪽 CCP 이탈 연결, 해제 조건 | ⬜ | 문서 브랜치 병합 후 합의 |
 | 사용 가능 판단 (I5) | ✅ | `v_lot_availability`, 재고 조회에 반영 |
 
 ## 6. 생산
@@ -179,7 +181,7 @@
 | `production_material_usages` | 실제 투입: 배치, 투입 LOT, 수량, 수불 기록 | BOM 표준량과 분리 |
 | `production_outputs` | 산출: 배치, 산출 LOT, 수량, 수불 기록 | **1:N 구조** — 1:1 이어도 한 줄만 사용 |
 | 추적 뷰 | 투입·산출을 재귀로 따라가는 정·역추적 | 완제품 재투입까지 이어짐 |
-| 배치 HOLD | (가) 배치 상태 + `lot_holds` 전파 / (나) `batch_holds` / (다) HOLD 테이블 일원화 | 미결 → 새 마이그레이션 |
+| 배치 HOLD | (다) HOLD 테이블 일원화 (`holds`) | ✅ 10/13 가정 채택, 0003 |
 
 ## 결정이 필요한 것
 
@@ -187,7 +189,7 @@
 
 | # | 질문 | 결과 |
 |---|---|---|
-| 1 | 배치 HOLD 를 어디서 관리하고, 산출 LOT 로 어떻게 전파하나 | ⛔ 미결. 0002 생성을 막지 않음 → 정해지면 새 마이그레이션 |
+| 1 | 배치 HOLD 를 어디서 관리하고, 산출 LOT 로 어떻게 전파하나 | ✅ 10/13 '다' 안 가정 채택 (0003 `holds`). 문서 쪽 호출 시점·해제 조건은 합의 필요 |
 | 2 | 개선조치 테이블 이름·PK, HOLD 해제와 개선조치 완료의 관계 | ✅ 개선조치는 문서 내부(`deviation_action`), 수불은 문서 참조까지만 → `deviation_action_id` 삭제. HOLD 해제 조건은 HOLD 서비스 때 |
 | 3 | 문서 대상에 `BATCH` 추가, 배치 없는 독립 CCP 점검의 대상 | ✅ 문서 쪽 `document_ref` (`production_batch_id` + `process_code`) |
 | 4 | 포장 시 완제품 LOT 번호를 반제품에서 이어받나, 새로 발급하나 | ✅ 멘토안: 완제품은 제조일 + 근무조로 새로 발급. 제조일을 포장일로 볼지 반제품 제조일로 볼지는 미결 |

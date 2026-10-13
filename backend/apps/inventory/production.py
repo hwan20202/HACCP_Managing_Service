@@ -10,6 +10,8 @@ Flow (사후 입력 중심 — a batch can be created and completed on the same 
                                     tells the document app, as start_batch would have
     cancel_batch()     CANCELLED    only when every usage / output has been corrected to 0
 
+A batch on hold (holds.py) takes no new usage or output until the hold is released.
+
 Usage and output rows are append-only (DB triggers). A wrong entry is fixed by correcting its
 stock movement with movements.correct_movement(); the views net it out (v_batch_usages).
 
@@ -23,6 +25,7 @@ from django.db import connection, transaction
 from . import document_bridge
 from .errors import InventoryError, NotFound
 from .fields import kst_now
+from .holds import open_batch_hold
 from .lot_numbers import _next_seq, next_lot_number, seq_to_letters
 from .models import (
     AuditLog,
@@ -69,6 +72,11 @@ def _batch(batch_id, *, lock_open=False):
         raise InventoryError(
             f"배치 {batch.batch_number}은(는) {batch.get_status_display()} 상태라 "
             "투입·산출을 추가할 수 없습니다."
+        )
+    if lock_open and (hold := open_batch_hold(batch)):
+        raise InventoryError(
+            f"배치 {batch.batch_number}은(는) 보류 중이라 투입·산출을 추가할 수 없습니다. "
+            f"(보류 사유: {hold.reason})"
         )
     return batch
 

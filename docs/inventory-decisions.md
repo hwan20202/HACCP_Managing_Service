@@ -8,7 +8,7 @@
 |---|---|---|
 | 프로젝트 구조 | 한 Django 프로젝트·한 SQLite DB. 테이블은 `sql/0001_core.sql`·`sql/0002_production.sql` 이 만들고 모델은 `managed=False` | 질의 1 |
 | 공통 모델 소유 | `staff`, `lots`, `items`, `production_batches` 는 inventory 앱 소유. 문서 앱은 `("inventory", "0002_production")` 에 의존하고 `inventory.Staff`·`Lot`·`Item`·`ProductionBatch` 로 FK. 문서 쪽 임시 `staff` 는 수불 스키마로 옮길 예정 (문서는 staff id 만 사용) | 질의 1, 10/11 ERD |
-| HOLD 근거 문서 | `lot_holds.source_document_id` = 문서 `document.document_id` (버전·스냅샷 아님). 마이그레이션 순환을 피해 FK 미설정. 최신 내용·승인본은 문서 쪽 메소드로 조회 | 질의 2, 10/11 ERD |
+| HOLD 근거 문서 | `holds.source_document_id` = 문서 `document.document_id` (버전·스냅샷 아님). 마이그레이션 순환을 피해 FK 미설정. 최신 내용·승인본은 문서 쪽 메소드로 조회 | 질의 2, 10/11 ERD |
 | 개선조치 | 문서 영역 내부(`deviation_action`)에서만 관리. 수불은 문서 참조까지만 → `lot_holds.deviation_action_id` 삭제 | 10/11 ERD |
 | 문서 ↔ 업무 대상 | 문서 쪽 `document_ref` 테이블이 `lot_id`·`production_batch_id`·`item_id` 를 종류별 FK 로 가짐 (`subject_type`/`subject_id` 방식 폐기) | 10/11 ERD |
 | LOT 번호 형식 | BOM v4 멘토안 채택. 원료·포장재 = LOT 약어 + 입고일 (`AHN261005`), 반제품 = LOT 약어 + 제조일 (`BNY261007`), 완제품 = 제조일 + 근무조 (`261011A`, A 주간 / B 야간 / C 오후, 완제품코드와 함께 읽음). LOT 약어는 `items.short_code` (A** 원료 / B** 반제품 / C** 포장재), 근무조는 `production_batches.shift` | 10/12, BOM v4 (10/5 멘토 피드백) |
@@ -45,6 +45,7 @@
 | 배치 번호 | `B-{품목코드}-{제조일 yyMMdd}{A,B..}` (10/11 미팅 A4 제안) | `production._next_batch_number` |
 | 산출 LOT 상태 | 바로 AVAILABLE (완제품 실험·출하 검사 흐름은 아직 없음) | `production.add_output` |
 | 산출 LOT 소비기한 | 입력값, 없으면 배치 제조일 + 품목 소비기한(개월 또는 일, 아래 행) | `production.add_output` |
+| 보류 구조 | 10/11 A1 '다' 안: `holds` 테이블 하나(LOT 또는 배치). 배치 보류 → 산출 LOT 전파(PROPAGATED), 보류 중 배치는 투입·산출 불가(완료는 가능), 배치 보류 해제 시 열린 전파 보류도 같은 처분으로 해제, LOT 별 먼저 해제 가능. 근거 필요 사유는 `source_document_id` 필수. 이미 쓰인 하위 LOT(다음 배치 투입분)으로는 전파 안 함 | `holds.py`, `sql/0003_holds.sql` |
 | 소비기한 계산 | `items.shelf_life_months`(개월, 제조방법설명서 "제조일로부터 24개월") 또는 `shelf_life_days`(일) 중 하나. 제조일 + 개월, 같은 날짜(말일은 그 달 마지막 날). 표시일이 하루 전인지 PM 확인 대기 | `shelf_life.END_DAY_OFFSET` |
 | 투입 가능 LOT | AVAILABLE·보류 없음·투입일 기준 소비기한 안 지남·산출 품목과 다른 품목. 소급 투입은 그 시점 이후 잔량 검사 | `production.add_usage` |
 | 배치 완료 | 산출(정정 반영) 1건 이상 필요. 계획 상태에서 바로 완료 가능(사후 입력) | `production.complete_batch` |
@@ -69,7 +70,7 @@
 |---|---|---|
 | 문서 쪽 훅 내용 | 문서 앱 함수 제공 | `document_bridge.incoming_received(lot_id)`, `incoming_receipt_cancelled(lot_id, reason, staff_id)` — 지금은 아무것도 안 함 |
 | 통합 입고 (육안검사 동시 저장) | 문서 쪽 `get_incoming_inspection_form()`, `create_incoming_inspection(...)` 형식 합의 | 판정 동시 반영(`ReceiptInput.judgment`)은 완료. 체크리스트 저장은 문서 함수 대기 |
-| 배치 HOLD·HOLD 서비스 | 배치 HOLD 위치와 산출 LOT 전파 방식 (A1 안: HOLD 테이블 하나로 LOT·배치 공용) | `lot_holds` 테이블만 있음. 정해지면 새 마이그레이션에서 재정의 (사용처 없음) |
+| CCP 이탈 보류 연결 | 문서 쪽이 이탈 기록 때 `hold_batch` 를 부를지, 해제 조건(개선조치 완료·근거 문서 승인) | 수불 함수·API 준비됨 (`holds.py`, `/holds/`) |
 | 결재 후 과거 수불 정정 | 승인된 달의 소급 수불을 막고 정정 이동으로만 받을지 (기간 잠금 안), 문서 쪽 "월별 D04 승인 여부" 함수 필요 | 미정 (10/11 ERD Q5-3) |
 | 수불대장 결재·스냅샷 | 문서 쪽 담당 | 조회·CSV 만 제공 |
 | BOM·제조배치·투입 서비스, CCP | 생산 서비스 개발 | 스키마 0002 확정·마이그레이션 연결 완료, 서비스 미착수 |
@@ -108,6 +109,8 @@
 | `batches/<id>/usages/`, `outputs/` | POST | 투입(`lot_id`, `quantity`, `bom_line_id` 선택) / 산출(`quantity`, `lot_number`·`expiration_date` 선택). `idempotency_key` 필수 |
 | `batches/fefo/` | GET | 투입 LOT 추천 (`item_id`, `quantity`, `on_date`) — 소비기한 빠른 순, 부족분 `shortfall` |
 | `boms/` | GET | BOM 조회 (`item_id`, `include_inactive`) — 등록은 데이터 이관으로 |
+| `holds/` | GET, POST | 보류 목록(`open`, `lot_id`, `batch_id`, `parent_hold_id`) / 보류(`lot_id` 또는 `batch_id`, `source_type`, `reason`, `staff_id`, `source_document_id`) |
+| `holds/<id>/`, `holds/<id>/release/` | GET / POST | 보류 상세 / 해제(`disposition`, `reason`, `staff_id`) |
 
 ## 운영 명령
 

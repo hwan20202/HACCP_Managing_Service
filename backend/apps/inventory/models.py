@@ -316,12 +316,16 @@ class IncomingReceipt(models.Model):
 
 
 # ---------------------------------------------------------------------------
-# 6. LOT holds (I5)
+# 6. Holds (I5) — sql/0003_holds.sql. One table for LOT and batch holds; a batch hold is
+#    propagated to the batch's output LOTs (source_type PROPAGATED, parent_hold). See holds.py.
 # ---------------------------------------------------------------------------
 
 
-class LotHold(models.Model):
-    lot = models.ForeignKey(Lot, models.PROTECT, related_name="holds")
+class Hold(models.Model):
+    lot = models.ForeignKey(Lot, models.PROTECT, null=True, blank=True, related_name="holds")
+    batch = models.ForeignKey(
+        "ProductionBatch", models.PROTECT, null=True, blank=True, related_name="holds"
+    )
     source_type = models.ForeignKey(
         HoldSourceType,
         models.PROTECT,
@@ -362,7 +366,11 @@ class LotHold(models.Model):
 
     class Meta:
         managed = False
-        db_table = "lot_holds"
+        db_table = "holds"
+
+    @property
+    def is_open(self):
+        return self.released_at is None
 
 
 # ---------------------------------------------------------------------------

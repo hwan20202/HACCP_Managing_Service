@@ -132,6 +132,24 @@ apply_incoming_judgment(
 
 승인본 이후 대장이 바뀌었는지 확인. `since`(승인 시각) 이후 기록된 수불 중 그 기간 대장에 영향을 주는 것을 `list[LedgerChange]` 로 반환. `affects` 가 `OPENING`(기간 이전 → 이월 변경) 또는 `PERIOD`.
 
+### 보류 (`apps.inventory.holds`, 0003 — 10/11 미팅 A1 '다' 안, 가정)
+
+CCP 이탈 등으로 배치·LOT 를 보류할 때 문서 쪽이 부를 수 있는 함수입니다 (호출 시점은 합의 필요).
+
+```python
+hold_batch(
+    batch_id=..., source_type="CCP", reason="금속검출 이탈", staff_id=..., source_document_id=...
+)
+hold_lot(lot_id=..., source_type="CCP", reason=..., staff_id=..., source_document_id=...)
+release_hold(hold_id=..., disposition="RELEASE", reason=..., staff_id=...)
+```
+
+- 보류 테이블 하나(`holds`)에 대상은 LOT 또는 배치. 배치를 보류하면 그 배치의 산출 LOT 에 전파 보류가 생기고, 보류 중인 배치에는 투입·산출을 추가할 수 없음
+- `source_type`: CCP / INCOMING_INSPECTION / FINISHED_INSPECTION 은 `source_document_id`(document_id) 필수, MANUAL 은 선택
+- `disposition`: RELEASE / REWORK / RETURN / DISPOSE. 처분은 기록이고 반품·폐기 재고 차감은 수불 이동으로 따로
+- 배치 보류 해제 시 열린 전파 보류도 같이 해제. LOT 별로 먼저 해제 가능
+- 이미 열린 보류가 있으면 새로 만들지 않고 그 보류를 돌려줌
+
 ## 5. 수불 → 문서 호출 (문서 쪽 함수 요청)
 
 `apps/inventory/document_bridge.py` 에서 호출합니다. 수불 트랜잭션 안에서 불리므로 문서 쪽에서 오류가 나면 입고·취소도 롤백됩니다. 지금은 빈 함수이고, 문서 쪽 함수가 정해지면 연결합니다.
@@ -141,7 +159,7 @@ apply_incoming_judgment(
 | 입고 화면 그리기 | — | `get_incoming_inspection_form()` — 체크리스트 항목·검증 기준 |
 | 입고 등록 | `incoming_received(lot_id=...)` | `create_incoming_inspection(lot_id, answers, staff_id)` — 그날 육안검사일지에 LOT 행 추가 (작성완료·결재중이면 새 일지?) |
 | 입고 취소 | `incoming_receipt_cancelled(lot_id=..., reason=..., staff_id=...)` | 육안검사일지의 해당 LOT 행 처리 방식 |
-| HOLD 근거 문서 | `lot_holds.source_document_id` 에 `document_id` 저장 | 최신 내용·최신 승인본 조회 메소드 이름·반환 형태 |
+| HOLD 근거 문서 | `holds.source_document_id` 에 `document_id` 저장 (0003 에서 `lot_holds` → `holds`) | ⑥ `get_source_document` 로 조회 |
 | 생산 시작 (계획 없이 바로 완료한 경우는 완료 때) | `batch_started(batch_id=..., staff_id=...)` | `require_for_batch(batch_id, staff_id)` — CCP 일지 작성 요구 (ERD v7 ③) |
 
 ## 6. 직접 확인하기
@@ -161,6 +179,6 @@ python backend\manage.py show_view v_doc_incoming_lot --sql    # 뷰 정의
 
 | 항목 | 상태 |
 |---|---|
-| 배치 HOLD 와 산출 LOT 전파 | 방식 결정 후 새 마이그레이션 (`lot_holds` 재정의) |
+| CCP 이탈 보류 연결 | 수불 쪽 함수는 준비됨(아래). 누가 언제 부를지, 해제 조건(개선조치 완료·승인)은 문서 쪽과 합의 필요 |
 | 결재 후 과거 수불 정정 | 제안: 승인된 달은 소급 수불 금지, 정정 이동으로만 기록 → 문서 쪽 "월별 D04 승인 여부" 함수 필요 |
 | 통합 입고 체크리스트 | 5절 문서 쪽 함수 형식 |

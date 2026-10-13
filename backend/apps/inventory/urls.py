@@ -37,4 +37,7 @@ urlpatterns = [
     path("batches/<int:pk>/complete/", api.batch_complete, name="batch-complete"),
     path("batches/<int:pk>/cancel/", api.batch_cancel, name="batch-cancel"),
     path("boms/", api.bom_collection, name="boms"),
+    path("holds/", api.hold_collection, name="holds"),
+    path("holds/<int:pk>/", api.hold_detail, name="hold-detail"),
+    path("holds/<int:pk>/release/", api.hold_release, name="hold-release"),
 ]

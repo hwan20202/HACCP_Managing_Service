@@ -52,7 +52,7 @@ CORE_TABLES = {
     "stock_movements",
     "inventory",
     "incoming_receipts",
-    "lot_holds",
+    "holds",
     "audit_logs",
     # 0002_production.sql
     "boms",

@@ -305,6 +305,33 @@ def bom(obj, lines):
     }
 
 
+def hold(obj):
+    return {
+        "id": obj.pk,
+        "target": "batch" if obj.batch_id else "lot",
+        "lot": obj.lot_id
+        and {
+            "id": obj.lot_id,
+            "lot_number": obj.lot.lot_number,
+            "item_code": obj.lot.item.item_code,
+        },
+        "batch": obj.batch_id and {"id": obj.batch_id, "batch_number": obj.batch.batch_number},
+        "source_type": obj.source_type_id,
+        "source_name": obj.source_type.name,
+        "source_document_id": obj.source_document_id,
+        "parent_hold_id": obj.parent_hold_id,
+        "reason": obj.reason,
+        "held_by": {"id": obj.held_by_id, "name": obj.held_by.name},
+        "held_at": iso(obj.held_at),
+        "is_open": obj.released_at is None,
+        "released_by": obj.released_by_id
+        and {"id": obj.released_by_id, "name": obj.released_by.name},
+        "released_at": iso(obj.released_at),
+        "disposition": obj.disposition_id,
+        "release_reason": obj.release_reason,
+    }
+
+
 def fefo_pick(lot_obj, take_e6, stock_e6):
     return {
         "lot_id": lot_obj.pk,

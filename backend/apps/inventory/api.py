@@ -24,6 +24,7 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from . import serializers as out
 from .errors import InventoryError, NotFound
 from .fields import KST
+from .holds import hold_batch, hold_lot, release_hold
 from .judgment import apply_incoming_judgment
 from .ledger import stock_ledger, stock_ledger_changes_since
 from .master_import import parse_item_row, parse_staff_row, parse_supplier_row
@@ -31,6 +32,7 @@ from .models import (
     BatchStatus,
     Bom,
     BomLine,
+    Hold,
     IncomingReceipt,
     Inventory,
     Item,
@@ -739,3 +741,68 @@ def bom_collection(request):
     ):
         lines.setdefault(line.bom_id, []).append(line)
     return ok({"results": [out.bom(b, lines.get(b.pk, [])) for b in rows]})
+
+
+# ---------------------------------------------------------------------------
+# Holds (holds.py)
+# ---------------------------------------------------------------------------
+
+HOLD_RELATED = ("lot__item", "batch", "source_type", "held_by", "released_by")
+
+
+def _hold_response(hold_id, status=200):
+    return ok(out.hold(Hold.objects.select_related(*HOLD_RELATED).get(pk=hold_id)), status=status)
+
+
+@endpoint("GET", "POST")
+def hold_collection(request):
+    if request.method == "POST":
+        data = request.data
+        _required(data, "source_type", "reason", "staff_id")
+        lot_id = _int(data.get("lot_id"), "lot_id")
+        batch_id = _int(data.get("batch_id"), "batch_id")
+        if bool(lot_id) == bool(batch_id):
+            raise BadRequest("lot_id 와 batch_id 중 하나만 보내세요.")
+        common = {
+            "source_type": str(data["source_type"]).upper(),
+            "reason": str(data["reason"]),
+            "staff_id": _int(data["staff_id"], "staff_id"),
+            "source_document_id": _int(data.get("source_document_id"), "source_document_id"),
+            "held_at": _datetime(data.get("held_at"), "held_at"),
+        }
+        hold = (
+            hold_lot(lot_id=lot_id, **common) if lot_id else hold_batch(batch_id=batch_id, **common)
+        )
+        return _hold_response(hold.pk, status=201)
+
+    rows = Hold.objects.select_related(*HOLD_RELATED).order_by("-pk")
+    if _flag(request.GET.get("open", "0")):
+        rows = rows.filter(released_at__isnull=True)
+    if lot_id := _int(request.GET.get("lot_id"), "lot_id"):
+        rows = rows.filter(lot_id=lot_id)
+    if batch_id := _int(request.GET.get("batch_id"), "batch_id"):
+        rows = rows.filter(batch_id=batch_id)
+    if parent_id := _int(request.GET.get("parent_hold_id"), "parent_hold_id"):
+        rows = rows.filter(parent_hold_id=parent_id)
+    count, page = _page(request, rows)
+    return ok({"count": count, "results": [out.hold(h) for h in page]})
+
+
+@endpoint("GET")
+def hold_detail(request, pk):
+    _get(Hold, pk, "보류")
+    return _hold_response(pk)
+
+
+@endpoint("POST")
+def hold_release(request, pk):
+    data = request.data
+    _required(data, "disposition", "reason", "staff_id")
+    release_hold(
+        hold_id=pk,
+        disposition=str(data["disposition"]).upper(),
+        reason=str(data["reason"]),
+        staff_id=_int(data["staff_id"], "staff_id"),
+        released_at=_datetime(data.get("released_at"), "released_at"),
+    )
+    return _hold_response(pk)
