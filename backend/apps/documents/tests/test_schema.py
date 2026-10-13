@@ -37,6 +37,10 @@ EXPECTED_COLUMNS = {
         "version": True,
         "deleted_at": False,
         "deleted_by": False,
+        # ERD v7.1 A19(P8): 작성 안 함 기록
+        "skipped_at": False,
+        "skipped_by": False,
+        "skip_reason": False,
     },
     "doc_section": {
         "section_id": True,
@@ -96,6 +100,7 @@ EXPECTED_FKS = {
     ("document", "created_by"): "staff",
     ("document", "completed_by"): "staff",
     ("document", "deleted_by"): "staff",
+    ("document", "skipped_by"): "staff",  # v7.1 A19
     ("doc_section", "document_id"): "document",
     ("doc_section", "recorded_by"): "staff",
     ("document_ref", "document_id"): "document",
@@ -202,6 +207,9 @@ class SchemaMatchesErdV5Tests(TestCase):
             "ck_document_completed_pair",
             "ck_document_completed_required",
             "ck_document_draft_not_completed",
+            "ck_document_skipped_status",  # v7.1 A19
+            "ck_document_skipped_pair",
+            "ck_document_skip_reason",
         ):
             self.assertIn(name, ddl["document"])
         self.assertIn('PRIMARY KEY ("document_id", "file_id")', ddl["document_file"])

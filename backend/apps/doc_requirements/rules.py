@@ -10,6 +10,9 @@ D03_INSPECTION = "inspection"  # D03 v2 검사 섹션 — 승인본 판정을 �
 D03_INSPECTION_KEYS = ("appearance", "packaging", "labeling", "verdict", "has_coa")
 D03_INSPECTION_REQUIRED = ("appearance", "packaging", "labeling", "verdict")
 
+# P8 REQ-F06: 주 묶음 조회 대상(하루 문서를 월~금으로 모아 보는 양식, DOC BUNDLE_UNITS week와 같음)
+WEEK_BUNDLE_TYPES = ("D10", "D12")
+
 # 공정 유형 → CCP 공정 목록, 품목 id → 예외 목록
 CCP_PROCESSES = {"MANUFACTURE": ["1P", "2B", "3P"], "PACKAGING": []}
 CCP_BY_ITEM = {}

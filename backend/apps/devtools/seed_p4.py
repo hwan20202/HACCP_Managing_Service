@@ -18,7 +18,7 @@ from django.utils import timezone
 from apps.doc_requirements import services as req
 from apps.document_workflow import services as wf
 from apps.documents import services as doc
-from apps.documents.seed import ensure_p4_templates, ensure_staff
+from apps.documents.seed import ensure_p4_templates, ensure_p8_templates, ensure_staff
 
 from . import inventory_dev
 
@@ -176,6 +176,7 @@ def seed_p4(today=None):
         today = date.fromisoformat(today)
     ensure_staff()
     ensure_p4_templates()
+    ensure_p8_templates()  # C3: 스프린트 3 점검표 양식(문서는 S5 프리셋에서)
     lots, batches = ensure_stock(today)
     made = {"documents": 0}
     actor = 3

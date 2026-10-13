@@ -447,3 +447,387 @@ P4_TEMPLATES = [
     ("CCP-3P", 1, "CCP-3P 모니터링일지(금속검출)", CCP_3P, True),
     ("D03", 2, "원료/부자재 육안검사일지", D03_V2, True),
 ]
+
+
+# ---------------------------------------------------------------- P8 (스프린트 3) 점검표 양식
+# 항목·키는 dev-notes/document/p8-s0-forms.md 2~4장(✅ D-107), 규칙 키는 p8-s2-spec 2장(✅ D-109).
+# 표시용 필드 키 cadence(주기)·group(관리 구분)은 화면 표의 첫 두 칸이다(검증 없음).
+
+OX_NA = ["O", "X", "NA"]
+OX_LABELS = {"O": "O", "X": "X", "NA": "해당 없음"}
+EVERY_FRIDAY = {"weekday": 5}
+FIRST_MONDAY = {"first_weekday_of_month": 1}
+
+
+def _check(key, label, cadence, group, options=OX, **extra):
+    return {
+        "key": key,
+        "label": label,
+        "type": "select",
+        "options": list(options),
+        "option_labels": {k: OX_LABELS[k] for k in options},
+        "required": True,
+        "cadence": cadence,
+        "group": group,
+        **extra,
+    }
+
+
+def _nonconforming(fields):
+    return {"any": [{"field": f["key"], "eq": "X"} for f in fields if f["type"] == "select"]}
+
+
+_DAILY = "매일 작업 전후"
+_D10_CHECKS = [
+    _check("d_hyg_clothes", "위생복장과 외출복장이 구분하여 보관되고 있는가?", _DAILY, "개인위생"),
+    _check(
+        "d_hyg_health",
+        "종사자의 건강상태가 양호하고 개인장신구 등을 소지하지 않으며, 청결한 위생복장을 착용하고 "
+        "작업하고 있는가?",
+        _DAILY,
+        "개인위생",
+    ),
+    _check(
+        "d_hyg_facility",
+        "위생설비(손세척·소독기 등) 중 이상이 없으며, 종사자는 위생처리를 하고 입실하는가?",
+        _DAILY,
+        "개인위생",
+    ),
+    _check(
+        "d_pest_sealed",
+        "작업장은 밀폐가 잘 이루어지고 있으며, 방충시설에는 이상이 없는가?",
+        _DAILY,
+        "방충방서",
+    ),
+    _check("d_equip_broken", "파손되거나 고장난 제조설비가 있는가?", _DAILY, "설비"),
+    _check(
+        "d_proc_zone",
+        "청결구역작업과 일반구역작업이 시간차를 두고 이루어지고 있는가?",
+        _DAILY,
+        "공정관리",
+    ),
+    _check("d_proc_ccp_record", "각 공정별 CCP 모니터링은 잘 기록되고 있는가?", _DAILY, "공정관리"),
+    _check(
+        "d_proc_metal",
+        "금속검출기 철(Fe)Ø2.0mm이상, 스테인레스(SUS)Ø2.5mm이상 점검이 잘 이루어지고 있는가?",
+        _DAILY,
+        "공정관리",
+    ),
+    _check("d_proc_package", "완제품의 포장 상태가 양호한가?", _DAILY, "공정관리"),
+    _check(
+        "d_proc_monitor_clean",
+        "모니터링장비(온도계 등)는 사용 전 후 세척·소독을 실시하고 있는가?",
+        _DAILY,
+        "공정관리",
+    ),
+    _check(
+        "d_pest_waste",
+        "작업장 주변의 폐기물은 잘 정리되어지고 있고, 주기적으로 반출되고 있는가?",
+        _DAILY,
+        "방충방서",
+    ),
+    _check(
+        "d_clean_contact",
+        "작업장 바닥, 배수로, 위생시설, 제조설비(식품과 직접 닿는 부분)의 청소·소독 상태는 "
+        "양호한가?",
+        _DAILY,
+        "청소소독",
+    ),
+    _check(
+        "d_ccp_action",
+        "중요관리점(CCP) 점검표를 작성 주기에 맞게 작성하고, 한계기준 이탈시 적절히 개선조치 "
+        "하였는가",
+        _DAILY,
+        "점검",
+    ),
+    _check(
+        "r_incoming",
+        "원·부재료 입고 시 시험성적서를 수령하거나, 육안검사를 실시하고 있는가?",
+        "입고 시",
+        "입고검수",
+        OX_NA,
+        initial="O",  # D-109: 새 문서는 O(양호)로 시작
+    ),
+    _check(
+        "w_pest_count",
+        "쥐덫, 해충유인 포획장치(날파리, 바퀴벌레 등)에 포획된 개체수는?",
+        "매주(금)",
+        "방충방서",
+        OX_NA,
+        na_default=EVERY_FRIDAY,
+    ),
+    _check(
+        "w_clean_noncontact",
+        "작업장 벽, 제조설비(제품과 직접 닿지 않는 부분)에 대한 청소·소독 상태는 양호한가?",
+        "매주(금)",
+        "청소소독",
+        OX_NA,
+        na_default=EVERY_FRIDAY,
+    ),
+    _check(
+        "w_laundry",
+        "위생복 세탁은 실시하였는가?",
+        "매주(금)",
+        "청소소독",
+        OX_NA,
+        na_default=EVERY_FRIDAY,
+    ),
+    _check(
+        "m_clean_all",
+        "작업장 전체 청소 상태는 양호한가?",
+        "매월 첫째 월",
+        "청소",
+        OX_NA,
+        na_default=FIRST_MONDAY,
+    ),
+    _check(
+        "m_education",
+        "종사자 위생교육을 실시하였는가?",
+        "매월 첫째 월",
+        "교육",
+        OX_NA,
+        na_default=FIRST_MONDAY,
+    ),
+    _check(
+        "m_product_test",
+        "완제품에 대한 검사를 실시하였는가?",
+        "매월 첫째 월",
+        "검사",
+        OX_NA,
+        na_default=FIRST_MONDAY,
+    ),
+    _check(
+        "m_ccp_verify",
+        "중요관리공정(CCP) 검증표를 작성하였는가?",
+        "매월 첫째 월",
+        "검증",
+        OX_NA,
+        na_default=FIRST_MONDAY,
+    ),
+    # 연간 2줄: 종이 양식처럼 실시일만(선택, O/X 없음). 비어 있으면 미기재 — 부적합으로 세지 않음
+    # (P8 S4 검토 A4, D-107 변경)
+    {
+        "key": "y_water_test_date",
+        "label": "용수검사(지하수의 경우)를 실시하였는가?",
+        "type": "date",
+        "cadence": "연간",
+        "group": "검사",
+    },
+    {
+        "key": "y_calibration_date",
+        "label": "살균기 온도계, 유속계와 세척기 압력계 및 냉장창고의 온도계는 검·교정하였는가?",
+        "type": "date",
+        "cadence": "연간",
+        "group": "점검",
+    },
+]
+
+D10 = {
+    "requirement_only": True,
+    "skippable": True,
+    "guide": [{"title": "표기", "rows": [["결과", "양호 O · 불량 X · 해당 없음"]]}],
+    "sections": [
+        {"key": "info", "label": "기본정보", "repeat": False, "fields": [_inspector()]},
+        {
+            "key": "checks",
+            "label": "점검 항목",
+            "repeat": False,
+            "nonconforming": _nonconforming(_D10_CHECKS),
+            "fields": _D10_CHECKS,
+        },
+    ],
+}
+
+_D12_ITEMS = [
+    (
+        "raw_vacuum",
+        "원료 중의 이물혼입방지",
+        "원부재료 반입 시 물품 외부에 부착된 이물을 제거하기 위하여 이물질흡입기로 이물을 "
+        "제거하고 이물이 있는지 확인하였는가?",
+    ),
+    (
+        "raw_inspect",
+        "원료 중의 이물혼입방지",
+        "입고된 원부재료는 검수를 실시하여 혼입된 이물이 없는지를 확인하였는가?",
+    ),
+    (
+        "equip_clean",
+        "설비의 청소상태 불량에 의한 이물혼입 방지",
+        "설비의 청소상태는 양호하며 습기의 제거는 잘 되어있는지를 확인하였는가?",
+    ),
+    (
+        "equip_gap",
+        "설비의 청소상태 불량에 의한 이물혼입 방지",
+        "설비의 틈새에 세척되지 않고 끼어있는 이물질이 없는지를 확인하였는가?",
+    ),
+    (
+        "worker_pen",
+        "작업자에 의한 이물혼입 방지",
+        "볼펜 등 필기구는 제조라인에서 떨어진 장소에서만 사용할 수 있게 하는가?",
+    ),
+    (
+        "worker_roller",
+        "작업자에 의한 이물혼입 방지",
+        "작업자는 입/출입 시 수시로 끈끈이 롤러를 사용하여 머리카락, 이물을 제거하는가?",
+    ),
+    (
+        "worker_hair",
+        "작업자에 의한 이물혼입 방지",
+        "작업 중 작업자의 위생모 사이로 머리카락이 새어나와 탈락되는 경우가 없는가?",
+    ),
+    (
+        "work_waste",
+        "작업 중 이물 혼입방지",
+        "작업 중 발생가능한 비닐, 테이프 등은 폐기물보관함에 즉시 버려 제조공정에 혼입될 수 "
+        "없도록 관리하는가?",
+    ),
+    (
+        "work_screw",
+        "작업 중 이물 혼입방지",
+        "기계류에 대한 점검을 정기적으로 실시하여 느슨하거나 탈락의 우려가 있는 나사류 등이 "
+        "있는지 확인하는가?",
+    ),
+    (
+        "work_bolt_count",
+        "작업 중 이물 혼입방지",
+        "기계류 등을 분해하여 세척하거나 정비할 경우 분해 한 나사, 볼트등의 숫자를 확인하여 "
+        "누락이 없도록 하는가?",
+    ),
+    (
+        "work_oil",
+        "작업 중 이물 혼입방지",
+        "기계류에 대한 점검을 정기적으로 실시하여 오일, 기름때가 혼입되는지 관리하였는가?",
+    ),
+    (
+        "pack_film",
+        "포장 중 이물혼입 방지",
+        "작업자는 내포장재(비닐) 조각이 파손되어 제품으로 혼입될 우려가 없는지 확인하는가?",
+    ),
+    (
+        "pack_hair",
+        "포장 중 이물혼입 방지",
+        "내포장 작업 중 작업자의 위생모 사이로 머리카락이 새어나와 탈락되는 경우가 없는가?",
+    ),
+    (
+        "pest_gap",
+        "해충 등의 혼입방지",
+        "건물 및 출입문에 해충이 유입될 수 있는 틈새가 발생하지 않았는가?",
+    ),
+    ("pest_door", "해충 등의 혼입방지", "작업외부로 연결되는 출입구등은 항상 닫혀있는가?"),
+]
+_D12_CHECKS = [_check(key, label, "1회/일", group) for key, group, label in _D12_ITEMS]
+
+D12 = {
+    "requirement_only": True,
+    "skippable": True,
+    "guide": [
+        {
+            "title": "점검 방법",
+            "rows": [
+                ["점검방법", "육안확인"],
+                ["점검주기", "1회/일(작업 시)"],
+                ["점검결과", "O 적합 · X 부적합"],
+            ],
+        }
+    ],
+    "sections": [
+        {
+            "key": "info",
+            "label": "기본정보",
+            "repeat": False,
+            "fields": [
+                {
+                    "key": "process_name",
+                    "label": "공정명",
+                    "type": "text",
+                    "max_length": 50,
+                    "required": True,
+                },
+                _inspector(),
+            ],
+        },
+        {
+            "key": "checks",
+            "label": "관리 항목",
+            "repeat": False,
+            "nonconforming": _nonconforming(_D12_CHECKS),
+            "fields": _D12_CHECKS,
+        },
+    ],
+}
+
+_D11_ITEMS = [
+    ("fly_trap_lamp", "비행성 해충점검", "포충등은 정상작동하며 청결한가?"),
+    ("fly_lure_lamp", "비행성 해충점검", "유인등은 꺼지거나 깜박임이 없이 양호한가?"),
+    (
+        "count_increase",
+        "비행성 해충 및 설치류 점검",
+        "해충등 끈끈이에 포획된 개체수가 급격히 증가하지 않았나?",
+    ),
+    ("food_trace", "비행성 해충 및 설치류 점검", "음식물 등의 반입 흔적은 없는가?"),
+    (
+        "inner_trap_rodent",
+        "비행성 해충 및 설치류 점검",
+        "작업장 내부트랩에 설치류가 발견되지 않았는가?",
+    ),
+    ("trap_position", "작업장 외부트랩 및 방역", "트랩의 위치가 변경되거나 파손되지 않았는가?"),
+    ("trap_rodent", "작업장 외부트랩 및 방역", "트랩에 설치류가 포획되거나 섭식의 흔적이 없는가?"),
+    (
+        "outer_trap_position",
+        "작업장 외부트랩 및 방역",
+        "외부트랩의 위치가 변경되거나 파손되지 않았는가?",
+    ),
+    (
+        "outer_pest_control",
+        "작업장 외부트랩 및 방역",
+        "정해진 주기에 따라 외부의 방역을 실시하였는가?",
+    ),
+]
+_D11_CHECKS = [_check(key, label, "주/1회", group) for key, group, label in _D11_ITEMS]
+
+D11 = {
+    "requirement_only": True,
+    "skippable": True,
+    "guide": [
+        {
+            "title": "점검 기준",
+            "rows": [
+                ["작업소명", "청결구역"],
+                ["점검주기", "주/1회"],
+                ["평가기준", "양호 O · 상태불량 X"],
+            ],
+        }
+    ],
+    "sections": [
+        {
+            "key": "info",
+            "label": "기본정보",
+            "repeat": False,
+            "fields": [
+                _inspector(),
+                {
+                    "key": "checked_on",
+                    "label": "점검일",
+                    "type": "date",
+                    "required": True,
+                    "date_window": {"from": 0, "to": 6},  # 그 주 월~일(VR-P8-02)
+                },
+                {"key": "remark", "label": "특이사항", "type": "text", "max_length": 500},
+            ],
+        },
+        {
+            "key": "checks",
+            "label": "점검 항목",
+            "repeat": False,
+            "nonconforming": _nonconforming(_D11_CHECKS),
+            "fields": _D11_CHECKS,
+        },
+    ],
+}
+
+# (type_code, version, name, schema, is_active)
+P8_TEMPLATES = [
+    ("D10", 1, "일반위생관리 및 공정점검표", D10, True),
+    ("D12", 1, "공정별 이물관리 점검표", D12, True),
+    ("D11", 1, "방충방서점검표", D11, True),
+]

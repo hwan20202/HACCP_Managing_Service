@@ -61,6 +61,7 @@ def check_template_schema(schema):
                 problems += _check_condition(field["computed"], field_keys_of(section), fwhere)
             if "hint" in field and not isinstance(field["hint"], dict):
                 problems.append(f"{fwhere}.hint는 객체여야 합니다.")
+            problems += _check_p8_field(field, section, fwhere)
         # P4 확장 키 (p4-s2-spec 2장)
         keys = field_keys_of(section)
         for name in ("system_rows",):
@@ -83,11 +84,51 @@ def check_template_schema(schema):
             problems.append(f"{where}.phase_order는 field·time_field·first·last가 필요합니다.")
     if "requirement_only" in schema and not isinstance(schema["requirement_only"], bool):
         problems.append("requirement_only는 true/false여야 합니다.")
+    if "skippable" in schema and not isinstance(schema["skippable"], bool):
+        problems.append("skippable은 true/false여야 합니다.")  # P8
     files = schema.get("files")
     if files is not None and (
         not isinstance(files, dict) or not isinstance(files.get("min", 0), int)
     ):
         problems.append("files는 {min: 정수} 형식이어야 합니다.")
+    return problems
+
+
+NA = "NA"  # P8: 주·월·연 항목 "해당 없음"
+
+
+def _check_p8_field(field, section, where):
+    """P8 필드 키(p8-s2-spec 2장): na_default·initial·date_window."""
+    problems = []
+    rule = field.get("na_default")
+    if rule is not None:
+        if (
+            not isinstance(rule, dict)
+            or len(rule) > 1
+            or not set(rule) <= {"weekday", "first_weekday_of_month"}
+            or any(
+                not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= 7
+                for v in rule.values()
+            )
+        ):
+            problems.append(
+                f"{where}.na_default는 {{}}·{{weekday: 1~7}}·{{first_weekday_of_month: 1~7}}"
+                " 중 하나여야 합니다."
+            )
+        elif NA not in field.get("options", []):
+            problems.append(f"{where}.na_default는 선택지에 NA가 있는 select 필드에만 둡니다.")
+    if "initial" in field:
+        if field.get("type") != "select" or field["initial"] not in field.get("options", []):
+            problems.append(f"{where}.initial은 select 필드의 선택지 값이어야 합니다.")
+    window = field.get("date_window")
+    if window is not None and (
+        field.get("type") != "date"
+        or not isinstance(window, dict)
+        or set(window) != {"from", "to"}
+        or any(not isinstance(v, int) or isinstance(v, bool) for v in window.values())
+        or window["from"] > window["to"]
+    ):
+        problems.append(f"{where}.date_window는 date 필드의 {{from, to}}(정수, from ≤ to)입니다.")
     return problems
 
 
@@ -459,3 +500,75 @@ def _phase_order_problems(key, label, order, rows):
             )
         ]
     return []
+
+
+# ---------------------------------------- P8: 미리 채움·날짜 범위 (p8-s2-spec 2장)
+
+
+def na_applies(rule, day):
+    """na_default 규칙이 그날 NA를 채우는가. {} = 항상, weekday = 그 요일이 아니면,
+    first_weekday_of_month = 그 달 첫 번째 그 요일이 아니면."""
+    if not rule:
+        return True
+    if "weekday" in rule:
+        return day.isoweekday() != rule["weekday"]
+    weekday = rule["first_weekday_of_month"]
+    return not (day.isoweekday() == weekday and day.day <= 7)
+
+
+def initial_values(schema_section, day):
+    """N1 새 문서의 1행 섹션 초기값: initial 값, na_default가 맞는 날은 NA. 반환 {키: 값}."""
+    values = {}
+    for field in schema_section["fields"]:
+        if "na_default" in field and na_applies(field["na_default"], day):
+            values[field["key"]] = NA
+        elif "initial" in field:
+            values[field["key"]] = field["initial"]
+    return values
+
+
+def context_errors(schema_section, values, path, work_date):
+    """저장 때 문서 문맥이 필요한 검사: date_window(VR-P8-02)."""
+    from datetime import timedelta
+
+    if not isinstance(values, dict):
+        return []
+    problems = []
+    for field in schema_section["fields"]:
+        key = field["key"]
+        value = values.get(key)
+        if _empty(value):
+            continue
+        label = field.get("label", key)
+        window = field.get("date_window")
+        if window and work_date is not None:
+            day = parse_work_date(value)
+            low = work_date + timedelta(days=window["from"])
+            high = work_date + timedelta(days=window["to"])
+            if day is not None and not low <= day <= high:
+                problems.append(
+                    error(
+                        f"{path}.{key}",
+                        "date_window",
+                        f"{label}은(는) {low.isoformat()} ~ {high.isoformat()} 안이어야 합니다.",
+                    )
+                )
+    return problems
+
+
+def check_counts(schema, values_by_key):
+    """점검표 결과 수(P8 DOC-F26): 1행 섹션의 O/X select 필드. 점검표가 아니면 None."""
+    counts = {"O": 0, "X": 0, "NA": 0, "blank": 0}
+    found = False
+    for section in schema["sections"]:
+        if section.get("repeat"):
+            continue
+        values = values_by_key.get(section["key"]) or {}
+        for field in section["fields"]:
+            options = field.get("options") or []
+            if field.get("type") != "select" or "O" not in options or "X" not in options:
+                continue
+            found = True
+            value = values.get(field["key"])
+            counts[value if value in ("O", "X", NA) else "blank"] += 1
+    return counts if found else None

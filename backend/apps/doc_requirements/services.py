@@ -404,3 +404,99 @@ def incoming_bundle(actor_id, received_date):
             },
             "default_slots": progress["latest_slots"],
         }
+
+
+# ---------------------------------------------------------------- P8 REQ-F06 주 묶음 조회
+
+
+def _week_document(brief, progress):
+    """하루 칸의 문서 값(P7 _bundle_document와 같은 조립 — 승인본 판정 대신 점검 결과 수)."""
+    return {
+        "document_id": brief["document_id"],
+        "status": brief["status"],
+        "version": brief["version"],
+        "correcting": brief["correcting"],
+        "inspector_id": brief["inspector_id"],
+        "nonconforming": brief["nonconforming"],
+        "check_counts": brief["check_counts"],
+        "progress": None
+        if progress is None
+        else {
+            k: progress[k]
+            for k in ("request_id", "attempt", "status", "total", "approved", "pending")
+        },
+        "my_slot": None if progress is None else progress["my_slot"],
+    }
+
+
+def periodic_bundle(actor_id, type_code, week_start):
+    """F06: 주 묶음 조회(REQ-PWB). 그 주 월~금 하루 문서(없는 날 null) + 요약·결재 진행·내 칸.
+
+    쓰기·트랜잭션 없음. SQL 7 이하(DOC N10 1 · F26 3 · A10 2 — 문서 없으면 1).
+    week_start는 API가 YYYY-MM-DD로 확인한 date. 주말 문서는 칸 밖이라 weekend에 따로 싣는다.
+    """
+    with step("REQ-PWB-02", "REQ", "양식·월요일 확인"):
+        problems = []
+        if type_code not in rules.WEEK_BUNDLE_TYPES:
+            problems.append(
+                {
+                    "path": "type_code",
+                    "code": "invalid",
+                    "message": f"주 묶음 양식({'·'.join(rules.WEEK_BUNDLE_TYPES)})이 아닙니다.",
+                }
+            )
+        if week_start.isoweekday() != 1:
+            problems.append(
+                {"path": "week_start", "code": "not_monday", "message": "월요일이어야 합니다."}
+            )
+        if problems:
+            raise errors.ValidationFailed(details=problems)
+    days = [week_start.fromordinal(week_start.toordinal() + n) for n in range(7)]  # 월~일
+    with step("REQ-PWB-03", "REQ", "그 주 문서(DOC N10)"):
+        found = doc.documents_on_dates([type_code], days[0], days[-1])
+        by_day = {}
+        for row in found:
+            by_day.setdefault(row["work_date"], row["document_id"])  # 같은 날 여럿이면 앞 id
+    document_ids = list(by_day.values())
+    with step("REQ-PWB-04", "REQ", "문서 요약(DOC F26)") as s:
+        briefs = {}
+        if document_ids:
+            briefs = {b["document_id"]: b for b in doc.brief_documents(document_ids)["items"]}
+        else:
+            s.skip("문서 없음")
+    with step("REQ-PWB-05", "REQ", "결재 진행·내 칸(APR A10)") as s:
+        progress = {"documents": {}, "latest_slots": []}
+        if document_ids:
+            progress = apr.document_progress(document_ids, actor_id)
+        else:
+            s.skip("문서 없음")
+    with step("REQ-PWB-06", "REQ", "조립"):
+        cells, weekend, status_counts, correcting, mine = [], [], {}, 0, 0
+        for day in days:
+            key = day.isoformat()
+            brief = briefs.get(by_day.get(key))
+            document = None
+            if brief is not None:
+                document = _week_document(brief, progress["documents"].get(brief["document_id"]))
+                status_counts[brief["status"]] = status_counts.get(brief["status"], 0) + 1
+                correcting += brief["correcting"]
+                mine += document["my_slot"] is not None
+            cell = {"work_date": key, "weekday": day.isoweekday(), "document": document}
+            if day.isoweekday() <= 5:
+                cells.append(cell)
+            elif document is not None:
+                weekend.append(cell)
+        return {
+            "type_code": type_code,
+            "week_start": days[0].isoformat(),
+            "week_end": days[4].isoformat(),
+            "days": cells,
+            "weekend": weekend,
+            "summary": {
+                "documents": len(briefs),
+                "status_counts": status_counts,
+                "correcting_count": correcting,
+                "my_pending": mine,
+            },
+            "default_slots": progress["latest_slots"],
+        }

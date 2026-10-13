@@ -121,6 +121,14 @@ def ensure_p4_templates():
     return {code: made[(code, version)] for code, version, *_ in P4_TEMPLATES}
 
 
+def ensure_p8_templates():
+    """스프린트 3 P8 점검표 양식(D10·D12·D11 v1). 반환: {type_code: template}."""
+    from .seed_forms import P8_TEMPLATES
+
+    made = _ensure(P8_TEMPLATES)
+    return {code: made[(code, version)] for code, version, *_ in P8_TEMPLATES}
+
+
 def ensure_staff(count=5):
     staff_services.ensure_dev_staff(range(1, count + 1))
 

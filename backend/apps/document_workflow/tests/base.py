@@ -29,6 +29,9 @@ ALLOWED_PAIRS = {
     ("correcting", "approved"),
     ("correcting", "rejected"),
     ("completed", "approved"),
+    # P8 작성 안 함(작성중에서만, 되돌리면 작성중) — draft와 같은 짝
+    ("skipped", None),
+    ("skipped", "rejected"),
 }
 NEEDS_OPEN_CORRECTION = {
     ("correcting", "approved"),

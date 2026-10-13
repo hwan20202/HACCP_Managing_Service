@@ -227,6 +227,7 @@ class BriefTests(P7DocCase):
                 "inspector_id": 4,
                 "verdict": "PASS",
                 "nonconforming": False,
+                "check_counts": None,  # P8 F26: 점검표 양식만
             },
         )
         self.assertEqual(

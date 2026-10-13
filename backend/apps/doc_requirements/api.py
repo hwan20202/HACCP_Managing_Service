@@ -59,3 +59,27 @@ def incoming_inspections(request):
             ) from None
         actor = actor_from_header(request.headers.get("X-Staff-Id"))
     return json_response(services.incoming_bundle(actor, day))
+
+
+@require_http_methods(["GET"])
+@_api
+def periodic_bundles(request):
+    """REQ-A04: 주 묶음 조회 ?type_code=D10&week_start=YYYY-MM-DD(월요일) (X-Staff-Id 필수)."""
+    with step("REQ-PWB-01", "API", "형식·현재 사용자"):
+        raw = request.GET.get("week_start") or ""
+        try:
+            day = parse_date(raw) if len(raw) == 10 else None
+        except ValueError:
+            day = None
+        if day is None:
+            raise errors.ValidationFailed(
+                details=[
+                    {
+                        "path": "week_start",
+                        "code": "invalid",
+                        "message": "YYYY-MM-DD 형식이어야 합니다.",
+                    }
+                ]
+            )
+        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+    return json_response(services.periodic_bundle(actor, request.GET.get("type_code") or "", day))

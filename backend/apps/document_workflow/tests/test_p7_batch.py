@@ -484,10 +484,11 @@ class ConfigTests(P7Case):
         self.assertEqual(
             body,
             {
-                "batch_types": ["D03"],
+                # P8 4.3: 기본 대상 D03·D10·D11·D12(이 시험 DB에는 P8 양식이 없어 id는 D03만)
+                "batch_types": ["D03", "D10", "D11", "D12"],
                 "template_ids": d03_ids,
                 "max_items": 50,
-                "inspector_types": ["D03"],
+                "inspector_types": ["D03", "D10", "D11", "D12"],
             },
         )
 

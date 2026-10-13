@@ -130,3 +130,13 @@ class FileTemplateMismatch(DocumentError):
         "FILE_TEMPLATE_MISMATCH",
         "다른 종류 문서의 파일은 연결할 수 없습니다.",
     )
+
+
+class DocumentNotSkippable(DocumentError):
+    """P8 VR-P8-05: 작성 안 함은 skippable 양식의 작성 요구 문서(record_key)만."""
+
+    status, code, message = (
+        409,
+        "DOCUMENT_NOT_SKIPPABLE",
+        "작성 안 함으로 바꿀 수 없는 문서입니다(주기 작성 요구 문서만).",
+    )

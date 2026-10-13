@@ -3,6 +3,7 @@
 v5(P4): 작성완료 상태·작성 요구 키(document), 업무 대상 참조(document_ref, RunSQL·managed=False),
 파일(file, document_file — 기능은 스프린트 3), 개선조치(deviation_action, deviation_checker).
 v6(P6): 정정 중 상태(correcting), 정정 기록(document_correction).
+v7.1(P8): 작성 안 함 상태(skipped)와 기록(skipped_at·skipped_by·skip_reason) — M14·M15·A19.
 Django는 on_delete를 DB의 ON DELETE로 만들지 않는다(ERD v5 메모, ORM이 처리).
 """
 
@@ -12,7 +13,16 @@ from django.db.models.functions import Length
 
 from apps.staff.models import Staff
 
-STATUS_CHOICES = ("draft", "completed", "submitted", "approved", "rejected", "correcting")
+STATUS_CHOICES = (
+    "draft",
+    "completed",
+    "submitted",
+    "approved",
+    "rejected",
+    "correcting",
+    "skipped",  # ERD v7.1 M14: 작성 안 함(주기형 작성 요구 문서만, D-106)
+)
+SKIP_REASON_MAX = 200
 FILE_MIME_TYPES = ("application/pdf", "image/jpeg", "image/png")
 FILE_MAX_BYTES = 20 * 1024 * 1024
 
@@ -103,6 +113,18 @@ class Document(models.Model):
         related_name="+",
         db_index=False,
     )
+    # ERD v7.1 A19: 작성 안 함 기록(되돌리면 비움). 셋은 짝, status = 'skipped'일 때만 있음
+    skipped_at = models.DateTimeField(null=True, blank=True)
+    skipped_by = models.ForeignKey(
+        Staff,
+        models.PROTECT,
+        null=True,
+        blank=True,
+        db_column="skipped_by",
+        related_name="+",
+        db_index=False,
+    )
+    skip_reason = models.TextField(null=True, blank=True)
 
     class Meta:
         db_table = "document"
@@ -125,9 +147,31 @@ class Document(models.Model):
                 name="ck_document_completed_required",
             ),
             models.CheckConstraint(
-                # ERD v6 M11: 정정 중도 작성완료 기록 없음(P6-S2-Q6)
-                condition=~Q(status__in=("draft", "correcting")) | Q(completed_at__isnull=True),
+                # ERD v6 M11: 정정 중도 작성완료 기록 없음(P6-S2-Q6). v7.1 M15: 작성 안 함도
+                condition=~Q(status__in=("draft", "correcting", "skipped"))
+                | Q(completed_at__isnull=True),
                 name="ck_document_draft_not_completed",
+            ),
+            # ERD v7.1 A19: 작성 안 함이면 기록 필수, 아니면 비어 있음 / 셋은 짝 / 사유 1~200자
+            models.CheckConstraint(
+                condition=Q(status="skipped", skipped_at__isnull=False)
+                | (~Q(status="skipped") & Q(skipped_at__isnull=True)),
+                name="ck_document_skipped_status",
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    skipped_at__isnull=True, skipped_by__isnull=True, skip_reason__isnull=True
+                )
+                | Q(skipped_at__isnull=False, skipped_by__isnull=False, skip_reason__isnull=False),
+                name="ck_document_skipped_pair",
+            ),
+            models.CheckConstraint(
+                condition=Q(skip_reason__isnull=True)
+                | (
+                    Q(skip_reason__length__gte=1, skip_reason__length__lte=SKIP_REASON_MAX)
+                    & ~Q(skip_reason__trim_ws="")
+                ),
+                name="ck_document_skip_reason",
             ),
             # 작성 요구 문서 1건(삭제 문서 포함). get_or_create_document의 ON CONFLICT 대상
             models.UniqueConstraint(

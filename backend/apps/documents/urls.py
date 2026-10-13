@@ -10,11 +10,15 @@ urlpatterns = [
     # P7: 고정 경로(정수 경로와 겹치지 않음)
     path("documents/batch-inspector", api.batch_inspector, name="api-document-batch-inspector"),
     path("documents/brief", api.document_brief, name="api-document-brief"),
+    # P8: 작성 안 함(일괄)·최근 값 (DOC-A24·A26)
+    path("documents/batch-skip", api.batch_skip, name="api-document-batch-skip"),
+    path("documents/recent-values", api.recent_values, name="api-document-recent-values"),
     path("documents/<int:document_id>", api.document_item, name="api-document-item"),
     path(
         "documents/<int:document_id>/complete", api.document_complete, name="api-document-complete"
     ),
     path("documents/<int:document_id>/reopen", api.document_reopen, name="api-document-reopen"),
+    path("documents/<int:document_id>/unskip", api.document_unskip, name="api-document-unskip"),
     path(
         "documents/<int:document_id>/correction",
         api.document_correction,

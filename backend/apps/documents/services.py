@@ -23,6 +23,7 @@ from apps.staff import services as staff_services
 
 from . import errors, signals, validation
 from .models import (
+    SKIP_REASON_MAX,
     STATUS_CHOICES,
     DeviationAction,
     DeviationChecker,
@@ -52,9 +53,13 @@ PAGE_SIZE = 20
 MAX_RANGE_DAYS = 366
 EDITABLE_FIELDS = ("subject", "work_date", "assignee_id", "due_at")
 # P7(p7-s2-spec 3.2, Q9): DOC가 양식 코드를 직접 아는 첫 예외 — 스키마 표시로 옮기는 일은 ISS-020
-LIST_BUNDLE_TYPES = ("D03",)  # 목록에서 작업일마다 묶음 줄 1개
-INSPECTOR_TYPES = ("D03",)  # 점검자 일괄 지정 대상(info.inspector)
+# P8(p8-s2-spec 4.1, Q5 a): 목록 묶음 단위 — day = 작업일마다 1줄, week = 그 주 월요일마다 1줄
+BUNDLE_UNITS = {"D03": "day", "D10": "week", "D12": "week"}
+LIST_BUNDLE_TYPES = tuple(BUNDLE_UNITS)
+INSPECTOR_TYPES = ("D03", "D10", "D11", "D12")  # 점검자 일괄 지정 대상(info.inspector)
 BRIEF_MAX = 50
+SKIPPABLE = ("draft",)  # P8 작성 안 함: 작성중 + record_key + 양식 skippable(VR-P8-05)
+RECENT_MAX = 10  # P8 F29 최근 값 개수
 
 
 def _open_correction(**match):
@@ -130,11 +135,14 @@ def _ref_row(ref):
 
 
 def _requirement(record_key, refs):
-    """작성 요구 출처: record_key가 없으면 None, 배치 참조가 있으면 batch, 아니면 lot (F05)."""
+    """작성 요구 출처(F04·F05): record_key가 없으면 None, 배치 참조 → batch, 참조 없음 → periodic
+    (P9 D-115 규칙을 P8 S4에서 앞당김 — 주기 문서), 그 밖 → lot."""
     if not record_key:
         return None
     if any(r["production_batch_id"] is not None for r in refs):
         return "batch"
+    if not refs:
+        return "periodic"
     return "lot"
 
 
@@ -236,11 +244,42 @@ def _assemble(document, rows, refs=None, files=None, deviations=None, hints=None
     data["files"] = files or []
     data["deviations"] = deviations or []
     data["correction"], data["corrections"] = corrections or (None, [])
+    # P8 DOC-F05 변경: 작성 안 함 가능 양식·작성 안 함 기록·N1이 미리 채운 필드
+    schema = document.template.schema_json
+    data["skippable"] = bool(schema.get("skippable"))
+    data["skip"] = (
+        None
+        if document.skipped_at is None
+        else {
+            "at": _iso(document.skipped_at),
+            "by": document.skipped_by_id,
+            "reason": document.skip_reason,
+        }
+    )
+    data["prefilled"] = _prefilled(document, rows)
     info = next((r.values_json or {} for r in rows if r.section_def == "info"), {})
     data["target_summary"] = _target_summary(  # P7 DOC-F05 변경(ISS-018)
         document, refs, info.get("item_name"), info.get("supplier_name")
     )
     return data
+
+
+def _prefilled(document, rows):
+    """N1이 na_default·initial로 채운 필드("섹션.필드"). 아무도 저장하지 않은(version 1)
+    작성 요구 문서만 — 값이 규칙 값과 같으면 미리 채운 것으로 본다(P8-S2-Q1 a)."""
+    if document.version != 1 or not document.record_key:
+        return []
+    sections = validation.sections_of(document.template.schema_json)
+    result = []
+    for row in rows:
+        section = sections.get(row.section_def)
+        if section is None or section["repeat"]:
+            continue
+        values = row.values_json or {}
+        for key, value in validation.initial_values(section, document.work_date).items():
+            if values.get(key) == value:
+                result.append(f"{row.section_def}.{key}")
+    return result
 
 
 def _files_of(document_id):
@@ -498,14 +537,16 @@ def list_documents(filters=None, page=1):
         counts = {}
         if bundles:
             marks = ", ".join(["%s"] * len(days))
+            span = [days[0], _week_end(days[-1])]  # 작업일 범위(인덱스용) — 주 묶음은 일요일까지
             with connection_cursor() as cursor:
                 cursor.execute(
-                    "SELECT d.work_date, t.type_code, d.status, "
+                    f"SELECT {_BUNDLE_KEY_SQL}, t.type_code, d.status, "
                     f"{_OPEN_CORRECTION_SQL} AS correcting, COUNT(*) "
                     "FROM document d JOIN document_template t ON t.template_id = d.template_id "
-                    f"WHERE {where} AND t.type_code IN ({bundle_in}) AND d.work_date IN ({marks}) "
+                    f"WHERE {where} AND t.type_code IN ({bundle_in}) "
+                    f"AND d.work_date BETWEEN %s AND %s AND {_BUNDLE_KEY_SQL} IN ({marks}) "
                     "GROUP BY 1, 2, 3, 4",
-                    [*params, *bundle, *days],
+                    [*params, *bundle, *span, *days],
                 )
                 for day, type_code, row_status, row_correcting, n in cursor.fetchall():
                     item = counts.setdefault(
@@ -520,13 +561,15 @@ def list_documents(filters=None, page=1):
         totals = {}
         if bundles and filtered:
             marks = ", ".join(["%s"] * len(days))
+            span = [days[0], _week_end(days[-1])]
             with connection_cursor() as cursor:
                 cursor.execute(
-                    "SELECT d.work_date, t.type_code, COUNT(*) FROM document d "
+                    f"SELECT {_BUNDLE_KEY_SQL}, t.type_code, COUNT(*) FROM document d "
                     "JOIN document_template t ON t.template_id = d.template_id "
                     f"WHERE d.deleted_at IS NULL AND t.type_code IN ({bundle_in}) "
-                    f"AND d.work_date IN ({marks}) GROUP BY 1, 2",
-                    [*bundle, *days],
+                    f"AND d.work_date BETWEEN %s AND %s AND {_BUNDLE_KEY_SQL} IN ({marks}) "
+                    "GROUP BY 1, 2",
+                    [*bundle, *span, *days],
                 )
                 totals = {(_text_date(d), t): n for d, t, n in cursor.fetchall()}
         else:
@@ -547,17 +590,21 @@ def list_documents(filters=None, page=1):
                 continue
             key = (_text_date(row[1]), row[2])
             agg = counts.get(key, {"status": {}, "correcting": 0, "count": 0})
+            unit = BUNDLE_UNITS[row[2]]
             items.append(
                 {
                     "kind": "bundle",
                     "type_code": row[2],
                     "template_name": row[_COL_NAME],
                     "work_date": key[0],
+                    # P8: 주 묶음은 work_date = 월요일, period_end = 금요일(표시용)
+                    "bundle_unit": unit,
+                    "period_end": _week_friday(key[0]) if unit == "week" else None,
                     "count": agg["count"],
                     "total": totals.get(key, agg["count"]) if filtered else agg["count"],
                     "status_counts": {k: v for k, v in agg["status"].items() if v},
                     "correcting_count": agg["correcting"],
-                    "requirement": "lot",
+                    "requirement": "lot" if unit == "day" else "periodic",
                 }
             )
         return {
@@ -595,6 +642,37 @@ _LIST_COLUMNS = (
 _COL_NAME = 4 + _LIST_COLUMNS.index("t.name")  # kind, work_date, type_code, document_id 다음
 
 
+def _bundle_key_sql():
+    """묶음 줄의 날짜 키: week 양식은 그 주 월요일(SQLite date — 'weekday 0'은 그 주 일요일),
+    그 밖은 작업일. 양식 코드는 코드 상수라 SQL에 문자로 넣는다."""
+    import re
+
+    weeks = [code for code, unit in BUNDLE_UNITS.items() if unit == "week"]
+    assert all(re.fullmatch(r"[A-Z0-9-]+", code) for code in weeks)
+    if not weeks:
+        return "d.work_date"
+    codes = ", ".join(f"'{code}'" for code in weeks)
+    return (
+        f"CASE WHEN t.type_code IN ({codes}) "
+        "THEN date(d.work_date, 'weekday 0', '-6 days') ELSE d.work_date END"
+    )
+
+
+_BUNDLE_KEY_SQL = _bundle_key_sql()
+
+
+def _week_end(day):
+    from datetime import date, timedelta
+
+    return (date.fromisoformat(day) + timedelta(days=6)).isoformat()
+
+
+def _week_friday(monday):
+    from datetime import date, timedelta
+
+    return (date.fromisoformat(monday) + timedelta(days=4)).isoformat()
+
+
 def _list_where(**f):
     """문서마다 필터 F(p7-s2-flows 6장). 반환: ([조건], [값]) — 첫 조건은 삭제 제외."""
     where, params = ["d.deleted_at IS NULL"], []
@@ -630,7 +708,9 @@ def _list_where(**f):
 
 
 def _list_union(where, bundle_in, count_only=False):
-    """문서 줄(kind 1)과 묶음 줄(kind 0, 작업일·양식 유형마다 1줄)의 UNION ALL."""
+    """문서 줄(kind 1)과 묶음 줄(kind 0, 묶음 키·양식 유형마다 1줄)의 UNION ALL.
+
+    묶음 키: day 양식은 작업일, week 양식은 그 주 월요일(P8 F04 변경)."""
     columns = ["NULL"] if count_only else list(_LIST_COLUMNS)
     nulls = ["NULL"] * len(columns)
     if not count_only:
@@ -639,9 +719,10 @@ def _list_union(where, bundle_in, count_only=False):
     return (
         f"SELECT 1 AS kind, d.work_date, t.type_code, d.document_id, {', '.join(columns)} "
         f"{source} WHERE {where} AND t.type_code NOT IN ({bundle_in}) "
-        f"UNION ALL SELECT 0, d.work_date, t.type_code, MIN(d.document_id), {', '.join(nulls)} "
+        f"UNION ALL SELECT 0, {_BUNDLE_KEY_SQL}, t.type_code, MIN(d.document_id), "
+        f"{', '.join(nulls)} "
         f"{source} WHERE {where} AND t.type_code IN ({bundle_in}) "
-        "GROUP BY t.type_code, d.work_date"
+        f"GROUP BY t.type_code, {_BUNDLE_KEY_SQL}"
     )
 
 
@@ -793,6 +874,9 @@ def create_document(actor_id, data):
             problems += validation.system_key_errors(schema_sections[key], values, f"{path}.values")
             row_errors, _ = validation.check_values(schema_sections[key], values, f"{path}.values")
             problems += row_errors
+            problems += validation.context_errors(  # P8 VR-P8-02·03
+                schema_sections[key], values, f"{path}.values", basic.get("work_date")
+            )
             counts[key] += 1
             by_section[key].append((f"{path}.values", values))
             if isinstance(values, dict):
@@ -870,11 +954,18 @@ def _patch_parts(patch):
 
 
 def _lock_failure(
-    document_id, step_id, *, deletable=False, expected_version=None, allowed=EDITABLE
+    document_id,
+    step_id,
+    *,
+    deletable=False,
+    expected_version=None,
+    allowed=EDITABLE,
+    skipped_transition=False,
 ):
     """조건부 UPDATE가 0행일 때 이유를 구분한다: 404 → 409 상태 → 409 버전 순서.
 
     allowed: 그 기능이 허용하는 상태 집합(수정·작성완료는 EDITABLE, 상신 잠금은 LOCKABLE).
+    skipped_transition: 작성 안 함 문서면 INVALID_TRANSITION(P8 F12 — 작성완료).
     """
     with step(step_id, "DOC", "잠금 실패 사유 확인"):
         row = (
@@ -893,6 +984,10 @@ def _lock_failure(
                 reason, message = "submitted", "상신 이력이 있는 문서입니다."
             raise errors.DocumentNotDeletable(
                 details=[{"path": "document", "code": reason, "reason": reason, "message": message}]
+            )
+        if skipped_transition and row["status"] == "skipped":
+            raise errors.InvalidTransition(
+                details=[{"path": "status", "code": "skipped", "message": "작성 안 함 문서입니다."}]
             )
         if row["status"] in allowed and expected_version is not None:
             if row["version"] != expected_version:
@@ -984,6 +1079,7 @@ def update_document(actor_id, document_id, patch):
                 staff_pairs = []
                 if basic.get("assignee_id") is not None:
                     staff_pairs.append(("document.assignee_id", basic["assignee_id"]))
+                work_date = basic.get("work_date", document.work_date)  # P8 date_window 기준
                 final = {
                     sid: (f"section_id:{sid}", r.section_def, r.values_json)
                     for sid, r in current.items()
@@ -1023,6 +1119,7 @@ def update_document(actor_id, document_id, patch):
                         problems += validation.system_key_errors(section, patch_values, path)
                         row_errors, _ = validation.check_values(section, merged, path)
                         problems += row_errors
+                        problems += validation.context_errors(section, merged, path, work_date)
                         staff_pairs += validation.staff_field_paths(section, patch_values, path)
                     final[row.section_id] = (path, row.section_def, merged)
                     merged_updates.append((row.section_id, patch_values))
@@ -1060,6 +1157,9 @@ def update_document(actor_id, document_id, patch):
                     problems += validation.system_key_errors(section, values, f"{path}.values")
                     row_errors, _ = validation.check_values(section, values, f"{path}.values")
                     problems += row_errors
+                    problems += validation.context_errors(
+                        section, values, f"{path}.values", work_date
+                    )
                     staff_pairs += validation.staff_field_paths(section, values, f"{path}.values")
                     final[f"new{i}"] = (f"{path}.values", key, values)
                     new_rows.append((key, values))
@@ -1348,7 +1448,11 @@ def complete_document(actor_id, document_id, expected_version, note=None):
             s.note(f"영향 행 {changed}")
         if changed == 0:
             _lock_failure(
-                document_id, "DOC-CMP-02a", expected_version=expected_version, allowed=COMPLETABLE
+                document_id,
+                "DOC-CMP-02a",
+                expected_version=expected_version,
+                allowed=COMPLETABLE,
+                skipped_transition=True,
             )
         with step("DOC-CMP-03", "DOC", "작성완료 검사") as s:
             document = Document.objects.select_related("template").get(pk=document_id)
@@ -1907,18 +2011,27 @@ def get_or_create_document(
                 continue
             row_errors, _ = validation.check_values(section, values[key], f"values.{key}")
             problems += row_errors
+            problems += validation.context_errors(
+                section, values[key], f"values.{key}", document.work_date
+            )
             staff_pairs += validation.staff_field_paths(section, values[key], f"values.{key}")
         _check_staff(staff_pairs, problems)
         if problems:
             s.fail(f"오류 {len(problems)}건")
             raise errors.ValidationFailed(details=problems)
-    with step("DOC-GOC-03", "DOC", "1행 영역 행 만들기"):
+    with step("DOC-GOC-03", "DOC", "1행 영역 행 만들기(P8: na_default·initial, 호출자 값 우선)"):
         DocSection.objects.bulk_create(
             DocSection(
                 document_id=document_id,
                 section_def=key,
                 row_no=1,
-                values_json=validation.with_computed(section, values.get(key) or {}),
+                values_json=validation.with_computed(
+                    section,
+                    {
+                        **validation.initial_values(section, document.work_date),
+                        **(values.get(key) or {}),
+                    },
+                ),
                 recorded_at=now,
                 recorded_by_id=actor_id,
             )
@@ -2067,12 +2180,25 @@ def _one_row_sections(schema):
 
 
 def _verdict_of(schema, values_by_key):
-    """1행 섹션 중 필드 verdict가 있는 첫 섹션의 값과 부적합 여부. 없으면 (None, None)."""
+    """1행 섹션 중 필드 verdict가 있는 첫 섹션의 값과 부적합 여부.
+
+    판정 필드가 없으면 판정은 None, 부적합 여부는 1행 섹션의 nonconforming 규칙으로 계산한다
+    (P8 S4 Q3 b — 점검표: X 있음 True, 다 채움 False, X 없이 빈칸 None). 규칙도 없으면 None.
+    """
     for section in _one_row_sections(schema):
         if any(f["key"] == "verdict" for f in section["fields"]):
             values = values_by_key.get(section["key"]) or {}
             return values.get("verdict"), validation.is_nonconforming(section, values)
-    return None, None
+    results = [
+        validation.evaluate(section["nonconforming"], values_by_key.get(section["key"]) or {})
+        for section in _one_row_sections(schema)
+        if section.get("nonconforming")
+    ]
+    if not results:
+        return None, None
+    if any(r is True for r in results):
+        return None, True
+    return None, None if any(r is None for r in results) else False
 
 
 def brief_documents(document_ids):
@@ -2128,6 +2254,7 @@ def brief_documents(document_ids):
             own = values.get(document_id, {})
             info = own.get("info") or {}
             verdict, nonconforming = _verdict_of(d.template.schema_json, own)
+            counts = validation.check_counts(d.template.schema_json, own)  # P8 F26 변경
             items.append(
                 {
                     "document_id": document_id,
@@ -2141,6 +2268,7 @@ def brief_documents(document_ids):
                     "inspector_id": info.get("inspector"),
                     "verdict": verdict,
                     "nonconforming": nonconforming,
+                    "check_counts": counts,
                 }
             )
         return {"items": items, "missing": [i for i in ids if i not in documents]}
@@ -2283,7 +2411,9 @@ def batch_set_inspector(actor_id, items, inspector_id):
             if document_id in types and types[document_id] not in INSPECTOR_TYPES
         ]
         if wrong:
-            raise batch.not_batchable(wrong, "점검자 일괄 지정은 육안검사(D03)만 할 수 있습니다.")
+            raise batch.not_batchable(
+                wrong, f"점검자 일괄 지정은 {'·'.join(INSPECTOR_TYPES)} 양식만 할 수 있습니다."
+            )
     now = timezone.now()
     with step("DOC-BIN-03", "DOC", "트랜잭션") as tx:
         with transaction.atomic():
@@ -2297,6 +2427,231 @@ def batch_set_inspector(actor_id, items, inspector_id):
         tx.note(f"커밋: {sum(r['ok'] for r in results)}/{len(results)}")
     with step("DOC-BIN-07", "DOC", "결과 모음"):
         return batch.summary("inspector", results)
+
+
+# ---------------------------------------------------------------- P8: 작성 안 함·되돌리기·최근 값
+
+
+def _clean_skip_reason(reason):
+    """작성 안 함 사유: 앞뒤 공백 제거 뒤 1~200자(VR-P8-05, v7.1 CHECK와 같음)."""
+    text = reason.strip() if isinstance(reason, str) else ""
+    if not 1 <= len(text) <= SKIP_REASON_MAX:
+        raise errors.ValidationFailed(
+            details=[
+                validation.error(
+                    "reason", "invalid", f"사유를 1~{SKIP_REASON_MAX}자로 적으세요(공백만 불가)."
+                )
+            ]
+        )
+    return text
+
+
+def _skip_failure(document_id, expected_version):
+    """DOC-SKP-05a: 0행일 때 사유 — 404 → 작성 안 함 불가 양식·직접 만든 문서 → 상태 → 버전."""
+    with step("DOC-SKP-05a", "DOC", "실패 사유 확인"):
+        row = (
+            Document.objects.filter(pk=document_id)
+            .values(
+                "status",
+                "deleted_at",
+                "version",
+                "updated_at",
+                "record_key",
+                "template__schema_json",
+            )
+            .first()
+        )
+        if row is None or row["deleted_at"] is not None:
+            raise errors.DocumentNotFound()
+        if not (row["template__schema_json"] or {}).get("skippable") or not row["record_key"]:
+            raise errors.DocumentNotSkippable()
+        if row["status"] not in SKIPPABLE:
+            raise errors.InvalidTransition(
+                details=[
+                    {
+                        "path": "status",
+                        "code": row["status"],
+                        "message": f"작성중일 때만 바꿀 수 있습니다(현재 {row['status']}).",
+                    }
+                ]
+            )
+        raise errors.VersionConflict(
+            details=[
+                {
+                    "path": "expected_version",
+                    "code": "conflict",
+                    "message": f"내가 연 버전 {expected_version}, 현재 {row['version']}",
+                    "expected": expected_version,
+                    "current": row["version"],
+                    "updated_at": _iso(row["updated_at"]),
+                }
+            ]
+        )
+
+
+def _skip_one(actor_id, document_id, expected_version, reason, now):
+    """한 문서: 조건부 UPDATE(상태·record_key·양식 skippable·버전을 한 문장으로)."""
+    with step("DOC-SKP-05", "DOC", "작성 안 함(조건부 UPDATE)") as s:
+        changed = Document.objects.filter(
+            pk=document_id,
+            deleted_at__isnull=True,
+            status__in=SKIPPABLE,
+            version=expected_version,
+            record_key__isnull=False,
+            template__schema_json__skippable=True,
+        ).update(
+            status="skipped",
+            skipped_at=now,
+            skipped_by_id=actor_id,
+            skip_reason=reason,
+            updated_at=now,
+            version=F("version") + 1,
+        )
+        s.note(f"영향 행 {changed}")
+    if changed == 0:
+        _skip_failure(document_id, expected_version)
+    return {"status": "skipped", "version": expected_version + 1}
+
+
+def skip_documents(actor_id, items, reason):
+    """F27: 작성 안 함(일괄, 한 건도 items 1개). 문서마다 세이브포인트(P7 F25와 같은 결과 모양).
+
+    값·개선조치는 그대로 둔다. 상태 전이 신호는 보내지 않는다(받는 쪽 규칙 없음).
+    """
+    with step("DOC-SKP-02", "DOC", "사유·항목 형식"):
+        pairs = batch.version_items(items, "items")
+        reason = _clean_skip_reason(reason)
+    now = timezone.now()
+    with step("DOC-SKP-03", "DOC", "트랜잭션") as tx:
+        with transaction.atomic():
+            results = batch.run_each(
+                pairs,
+                lambda pair: _skip_one(actor_id, pair[0], pair[1], reason, now),
+                ident=lambda pair: {"document_id": pair[0]},
+                layer="DOC",
+                item_step="DOC-SKP-04",
+            )
+        tx.note(f"커밋: {sum(r['ok'] for r in results)}/{len(results)}")
+    with step("DOC-SKP-06", "DOC", "결과 모음"):
+        return batch.summary("skip", results)
+
+
+def unskip_document(actor_id, document_id, expected_version):
+    """F28: 되돌리기 skipped → draft. 작성 안 함 기록을 비우고 값은 그대로(확인 창 없음 — S1-Q5)."""
+    now = timezone.now()
+    with transaction.atomic():
+        with step("DOC-USK-02", "DOC", "되돌리기(조건부 UPDATE)") as s:
+            changed = Document.objects.filter(
+                pk=document_id,
+                deleted_at__isnull=True,
+                status="skipped",
+                version=expected_version,
+            ).update(
+                status="draft",
+                skipped_at=None,
+                skipped_by_id=None,
+                skip_reason=None,
+                updated_at=now,
+                version=F("version") + 1,
+            )
+            s.note(f"영향 행 {changed}")
+        if changed == 0:
+            with step("DOC-USK-02a", "DOC", "실패 사유 확인"):
+                row = (
+                    Document.objects.filter(pk=document_id)
+                    .values("status", "deleted_at", "version", "updated_at")
+                    .first()
+                )
+                if row is None or row["deleted_at"] is not None:
+                    raise errors.DocumentNotFound()
+                if row["status"] != "skipped":
+                    raise errors.InvalidTransition(
+                        details=[
+                            {
+                                "path": "status",
+                                "code": row["status"],
+                                "message": "작성 안 함 문서가 아닙니다.",
+                            }
+                        ]
+                    )
+                raise errors.VersionConflict(
+                    details=[
+                        {
+                            "path": "expected_version",
+                            "code": "conflict",
+                            "message": f"내가 연 버전 {expected_version}, 현재 {row['version']}",
+                            "expected": expected_version,
+                            "current": row["version"],
+                            "updated_at": _iso(row["updated_at"]),
+                        }
+                    ]
+                )
+    with step("DOC-USK-03", "DOC", "결과 조회"):
+        return _detail(document_id)
+
+
+def recent_values(type_code, section=None, field=None, limit=RECENT_MAX):
+    """F29: 그 양식 text 필드의 최근 값(서로 다른 값, 최근 작업일 순, 삭제 문서 제외).
+
+    section을 비우면 최신 양식 버전의 1행 섹션에서 field를 찾는다(API는 field만 받음).
+    """
+    with step("DOC-RCV-01", "DOC", "양식·필드 확인"):
+        template = (
+            DocumentTemplate.objects.filter(type_code=type_code).order_by("-version").first()
+            if isinstance(type_code, str) and type_code
+            else None
+        )
+        found = None
+        if template is not None and isinstance(field, str):
+            for candidate in _one_row_sections(template.schema_json):
+                if section not in (None, candidate["key"]):
+                    continue
+                match = next((f for f in candidate["fields"] if f["key"] == field), None)
+                if match is not None:
+                    found = (candidate["key"], match)
+                    break
+        if template is None or found is None or found[1].get("type") != "text":
+            raise errors.InvalidFilter(
+                details=[
+                    validation.error("field", "invalid", "양식의 1행 영역 text 필드가 아닙니다.")
+                ]
+            )
+    with step("DOC-RCV-02", "DOC", "최근 값 조회"):
+        path = f"$.{field}"
+        with connection_cursor() as cursor:
+            cursor.execute(
+                "SELECT v FROM (SELECT trim(json_extract(s.values_json, %s)) AS v, "
+                "MAX(d.work_date) AS last_day, MAX(d.document_id) AS last_id "
+                "FROM doc_section s JOIN document d ON d.document_id = s.document_id "
+                "JOIN document_template t ON t.template_id = d.template_id "
+                "WHERE t.type_code = %s AND s.section_def = %s AND d.deleted_at IS NULL "
+                "AND json_type(s.values_json, %s) = 'text' GROUP BY 1) "
+                "WHERE v <> '' ORDER BY last_day DESC, last_id DESC LIMIT %s",
+                [path, type_code, found[0], path, limit],
+            )
+            return {"items": [row[0] for row in cursor.fetchall()]}
+
+
+def documents_on_dates(type_codes, date_from, date_to):
+    """N10(P8, REQ-F06용): 양식 유형·작업일 범위의 문서(삭제 제외). SQL 1(ix_document_list).
+
+    반환 [{document_id, type_code, work_date}] — 작업일·문서 id 순. 빈 유형이면 SQL 없음.
+    """
+    types = sorted(set(type_codes))
+    if not types:
+        return []
+    with step("DOC-DAT-01", "DOC", "유형·작업일 범위로 문서 찾기"):
+        rows = (
+            Document.objects.filter(
+                deleted_at__isnull=True,
+                work_date__gte=date_from,
+                work_date__lte=date_to,
+                template__type_code__in=types,
+            )
+            .order_by("work_date", "document_id")
+            .values_list("document_id", "template__type_code", "work_date")
+        )
+        return [{"document_id": i, "type_code": t, "work_date": _iso(day)} for i, t, day in rows]
 
 
 def connection_cursor():

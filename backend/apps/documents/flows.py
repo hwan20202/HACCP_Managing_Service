@@ -54,6 +54,11 @@ FLOWS = {
     "DOC-FLK": [f"DOC-FLK-0{n}" for n in range(1, 6)],
     "DOC-FDT": [f"DOC-FDT-0{n}" for n in range(1, 5)],
     "DOC-FSR": ["DOC-FSR-01", "DOC-FSR-02"],
+    # P8 (dev-notes/document/p8-s2-spec.md 6장). DOC-SKP는 문서 1건일 때(04·05가 문서마다 반복)
+    "DOC-SKP": [f"DOC-SKP-0{n}" for n in range(1, 7)],
+    "DOC-USK": ["DOC-USK-01", "DOC-USK-02", "DOC-USK-03"],
+    "DOC-RCV": ["DOC-RCV-01", "DOC-RCV-02"],
+    "DOC-DAT": ["DOC-DAT-01"],
 }
 
 # P7 S5: 개발 콘솔의 항목별 비교(WF BATCH와 같은 모양: 머리 → 항목 × n → 꼬리).
@@ -66,6 +71,11 @@ BATCH = {
             "same": ["DOC-BIN-04", "DOC-BIN-05"],
         },
         "tail": ["DOC-BIN-07"],
+    },
+    "DOC-SKP": {
+        "head": ["DOC-SKP-01", "DOC-SKP-02", "DOC-SKP-03"],
+        "items": {"skipped": ["DOC-SKP-04", "DOC-SKP-05"]},
+        "tail": ["DOC-SKP-06"],
     },
 }
 

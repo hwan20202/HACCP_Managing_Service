@@ -277,6 +277,44 @@ def document_brief(request):
     return json_response(services.brief_documents([int(p) for p in parts]))
 
 
+# ---------------------------------------------------------------- P8: 작성 안 함·되돌리기·최근 값
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@_api
+def batch_skip(request):
+    """DOC-A24 작성 안 함 {items: [{document_id, expected_version}] (1~50), reason} (F27)."""
+    with step("DOC-SKP-01", "API", "요청 형식·사용자 확인"):
+        body = parse_json_body(request)
+        reject_unknown_keys(body, ("items", "reason"))
+        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+    return json_response(services.skip_documents(actor, body.get("items"), body.get("reason")))
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@_api
+def document_unskip(request, document_id):
+    """DOC-A25 되돌리기 {expected_version} (F28)."""
+    actor, expected = _version_body(request, "DOC-USK-01")
+    return json_response(services.unskip_document(actor, document_id, expected))
+
+
+@require_http_methods(["GET"])
+@_api
+def recent_values(request):
+    """DOC-A26 최근 값 ?type_code=D12&field=process_name[&section=] (F29). 헤더 불필요."""
+    reject_unknown_keys(request.GET, ("type_code", "field", "section"))
+    return json_response(
+        services.recent_values(
+            request.GET.get("type_code"),
+            request.GET.get("section") or None,
+            request.GET.get("field"),
+        )
+    )
+
+
 # ---------------------------------------------------------------- 스프린트 3: 파일 (DOC-A11~A14)
 
 

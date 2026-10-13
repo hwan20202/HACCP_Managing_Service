@@ -93,11 +93,13 @@ def decide(actor_id, approval_id, result, comment=None):
 
 # ---------------------------------------------------------------- P7 일괄 (p7-s2-spec 3.1)
 
-DEFAULT_BATCH_TYPES = ("D03",)
+DEFAULT_BATCH_TYPES = ("D03", "D10", "D11", "D12")  # P8 4.3
 
 
 def batch_types():
-    """설정 HACCP_BATCH_TYPES(기본 ["D03"], P7-S2-Q2). 형식이 틀리면 빈 목록(W001이 알린다)."""
+    """설정 HACCP_BATCH_TYPES(기본 D03·D10·D11·D12 — P7-S2-Q2, P8 4.3).
+
+    형식이 틀리면 빈 목록(W001이 알린다)."""
     value = getattr(settings, "HACCP_BATCH_TYPES", DEFAULT_BATCH_TYPES)
     if not valid_batch_types(value):
         return []
