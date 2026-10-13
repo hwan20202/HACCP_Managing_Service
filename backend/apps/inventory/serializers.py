@@ -206,6 +206,115 @@ def ledger_item(row):
     }
 
 
+def batch(obj):
+    return {
+        "id": obj.pk,
+        "batch_number": obj.batch_number,
+        "process_type": obj.process_type,
+        "status": obj.status,
+        "status_name": obj.get_status_display(),
+        "item": {
+            "id": obj.item_id,
+            "item_code": obj.item.item_code,
+            "name": obj.item.name,
+            "item_type": obj.item.item_type_id,
+        },
+        "unit": obj.item.base_unit,
+        "bom_id": obj.bom_id,
+        "planned_date": iso(obj.planned_date),
+        "planned_quantity": qty(obj.planned_quantity_e6),
+        "manufactured_date": iso(obj.manufactured_date),
+        "shift": obj.shift,
+        "started_at": iso(obj.started_at),
+        "completed_at": iso(obj.completed_at),
+        "staff": {"id": obj.staff_id, "name": obj.staff.name},
+        "notes": obj.notes,
+        "cancelled_at": iso(obj.cancelled_at),
+        "cancel_reason": obj.cancel_reason,
+        "created_at": iso(obj.created_at),
+    }
+
+
+def _batch_line(row):
+    item_obj = row["item"]
+    return {
+        "lot_id": row["lot_id"],
+        "lot_number": row["lot_number"],
+        "item": {"id": item_obj.pk, "item_code": item_obj.item_code, "name": item_obj.name},
+        "unit": item_obj.base_unit,
+        "quantity": qty(row["quantity_e6"]),
+        "net_quantity": qty(row["net_quantity_e6"]),
+        "stock_movement_id": row["stock_movement_id"],
+    }
+
+
+def batch_detail(summary):
+    data = batch(summary["batch"])
+    data["usages"] = [
+        {"id": row["usage_id"], "bom_line_id": row["bom_line_id"], **_batch_line(row)}
+        for row in summary["usages"]
+    ]
+    data["outputs"] = [
+        {"id": row["output_id"], "lot_quantity": qty(row["stock_e6"]), **_batch_line(row)}
+        for row in summary["outputs"]
+    ]
+    check = summary["bom_check"]
+    data["bom_check"] = check and {
+        "basis": check["basis"],
+        "basis_quantity": qty(check["basis_e6"]),
+        "lines": [
+            {
+                "line_no": row["line"].line_no,
+                "item": {
+                    "id": row["line"].component_item_id,
+                    "item_code": row["line"].component_item.item_code,
+                    "name": row["line"].component_item.name,
+                },
+                "unit": row["line"].component_item.base_unit,
+                "standard": qty(row["standard_e6"]),
+                "actual": qty(row["actual_e6"]),
+            }
+            for row in check["lines"]
+        ],
+    }
+    return data
+
+
+def bom(obj, lines):
+    return {
+        "id": obj.pk,
+        "item_id": obj.item_id,
+        "version": obj.version,
+        "base_quantity": qty(obj.base_quantity_e6),
+        "effective_from": iso(obj.effective_from),
+        "is_active": obj.is_active,
+        "lines": [
+            {
+                "id": line.pk,
+                "line_no": line.line_no,
+                "item": {
+                    "id": line.component_item_id,
+                    "item_code": line.component_item.item_code,
+                    "name": line.component_item.name,
+                },
+                "unit": line.component_item.base_unit,
+                "quantity": qty(line.quantity_e6),
+            }
+            for line in lines
+        ],
+    }
+
+
+def fefo_pick(lot_obj, take_e6, stock_e6):
+    return {
+        "lot_id": lot_obj.pk,
+        "lot_number": lot_obj.lot_number,
+        "expiration_date": iso(lot_obj.expiration_date),
+        "take": qty(take_e6),
+        "stock": qty(stock_e6),
+    }
+
+
 def ledger_change(row):
     return {
         "movement_id": row.movement_id,

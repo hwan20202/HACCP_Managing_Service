@@ -1,5 +1,6 @@
 """API tests for /api/v1/inventory/ (A4-A6)."""
 
+import datetime
 import json
 from io import StringIO
 
@@ -7,7 +8,7 @@ from django.core.management import call_command
 from django.test import Client, TestCase
 
 from .fields import kst_now
-from .models import Item, Lot, Staff, Supplier
+from .models import Bom, BomLine, Item, Lot, Staff, Supplier
 
 BASE = "/api/v1/inventory"
 
@@ -312,3 +313,133 @@ class JudgmentApiTests(ApiTestCase):
             ).status_code,
             404,
         )
+
+
+class ProductionApiTests(ApiTestCase):
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.finished = Item.objects.get(item_code="4000001")
+        cls.semi = Item.objects.create(
+            item_type_id="SEMI",
+            item_code="3000001",
+            short_code="BGH",
+            name="가상환(벌크)",
+            base_unit="개",
+            shelf_life_months=12,
+        )
+        cls.bom = Bom.objects.create(
+            item=cls.semi,
+            version=1,
+            base_quantity_e6=1000 * 1_000_000,
+            effective_from=datetime.date(2026, 1, 1),
+        )
+        cls.line = BomLine.objects.create(
+            bom=cls.bom, line_no=1, component_item=cls.raw, quantity_e6=4 * 1_000_000
+        )
+
+    def receive_pass(self, key, quantity):
+        response = self.post(
+            "/receipts/",
+            {
+                "item_id": self.raw.pk,
+                "supplier_id": self.supplier.pk,
+                "staff_id": self.staff.pk,
+                "received_date": self.today,
+                "quantity": quantity,
+                "idempotency_key": key,
+                "judgment": "PASS",
+            },
+        )
+        self.assertEqual(response.status_code, 201, response.content.decode())
+        return response.json()["lot_id"]
+
+    def test_batch_flow(self):
+        lot_id = self.receive_pass("r1", "50")
+        created = self.post(
+            "/batches/",
+            {"item_id": self.semi.pk, "process_type": "manufacture", "staff_id": self.staff.pk},
+        )
+        self.assertEqual(created.status_code, 201, created.content.decode())
+        batch = created.json()
+        self.assertEqual((batch["status"], batch["bom_id"]), ("PLANNED", self.bom.pk))
+        url = f"/batches/{batch['id']}"
+
+        started = self.post(f"{url}/start/", {"staff_id": self.staff.pk}).json()
+        self.assertEqual(started["status"], "IN_PROGRESS")
+
+        fefo = self.get("/batches/fefo/", item_id=self.raw.pk, quantity="60").json()
+        self.assertEqual((fefo["covered"], fefo["shortfall"]), ("50", "10"))
+        self.assertEqual(fefo["results"][0]["lot_id"], lot_id)
+
+        used = self.post(
+            f"{url}/usages/",
+            {
+                "lot_id": lot_id,
+                "quantity": "8",
+                "staff_id": self.staff.pk,
+                "idempotency_key": "u1",
+                "bom_line_id": self.line.pk,
+            },
+        )
+        self.assertEqual(used.status_code, 201, used.content.decode())
+        output = self.post(
+            f"{url}/outputs/",
+            {"quantity": "2000", "staff_id": self.staff.pk, "idempotency_key": "o1"},
+        ).json()
+        self.assertEqual(
+            output["outputs"][0]["lot_number"],
+            f"BGH{self.today[2:4]}{self.today[5:7]}{self.today[8:10]}",
+        )
+        self.assertEqual(output["outputs"][0]["lot_quantity"], "2000")
+        self.assertEqual(
+            output["bom_check"],
+            {
+                "basis": "output",
+                "basis_quantity": "2000",
+                "lines": [
+                    {
+                        "line_no": 1,
+                        "item": {"id": self.raw.pk, "item_code": "1000001", "name": "가상원료A"},
+                        "unit": "kg",
+                        "standard": "8",
+                        "actual": "8",
+                    }
+                ],
+            },
+        )
+        done = self.post(f"{url}/complete/", {"staff_id": self.staff.pk}).json()
+        self.assertEqual(done["status"], "COMPLETED")
+        self.assertEqual(self.get(f"{url}/").json()["usages"][0]["net_quantity"], "8")
+
+        listed = self.get("/batches/", status="COMPLETED", **{"from": self.today}).json()
+        self.assertEqual(listed["count"], 1)
+        self.assertEqual(
+            self.get("/boms/", item_id=self.semi.pk).json()["results"][0]["id"], self.bom.pk
+        )
+
+    def test_errors(self):
+        bad = self.post(
+            "/batches/",
+            {"item_id": self.raw.pk, "process_type": "MANUFACTURE", "staff_id": self.staff.pk},
+        )
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(self.get("/batches/999999/").status_code, 404)
+        batch = self.post(
+            "/batches/",
+            {"item_id": self.finished.pk, "process_type": "PACKAGING", "staff_id": self.staff.pk},
+        ).json()
+        no_shift = self.post(
+            f"/batches/{batch['id']}/outputs/",
+            {"quantity": "1", "staff_id": self.staff.pk, "idempotency_key": "o1"},
+        )
+        self.assertEqual(no_shift.status_code, 400)
+        self.assertIn("근무조", no_shift.json()["error"]["message"])
+        missing = self.post(f"/batches/{batch['id']}/cancel/", {"staff_id": self.staff.pk})
+        self.assertEqual(missing.status_code, 400)
+        cancelled = self.post(
+            f"/batches/{batch['id']}/cancel/", {"staff_id": self.staff.pk, "reason": "잘못 등록"}
+        )
+        self.assertEqual(cancelled.json()["status"], "CANCELLED")
+        self.assertEqual(self.get("/batches/", status="NOPE").status_code, 400)
+        self.assertEqual(self.get("/batches/fefo/", item_id=self.raw.pk).status_code, 400)

@@ -102,6 +102,12 @@
 | `movements/adjust/` | POST | 재고조정 (`direction`: IN / OUT) |
 | `movements/return/`, `movements/disposal/` | POST | 공급처 반품 / 폐기 (`quantity` 생략 시 전량) |
 | `movements/<id>/correct/` | POST | 정정 (`quantity` 생략 시 남은 전량) |
+| `batches/` | GET, POST | 배치 목록(`status`, `process_type`, `item_id`, `from`, `to`=제조일·계획일, `limit`, `offset`) / 등록(`item_id`, `process_type`, `staff_id`, 선택 `planned_date`·`planned_quantity`·`manufactured_date`·`shift`·`bom_id`·`notes`) |
+| `batches/<id>/` | GET | 배치 상세: 투입·산출(정정 반영 순수량), BOM 표준 대비 실제(`bom_check`) |
+| `batches/<id>/start/`, `complete/`, `cancel/` | POST | 시작(`shift`·`manufactured_date` 지정 가능) / 완료 / 취소(`reason` 필수) |
+| `batches/<id>/usages/`, `outputs/` | POST | 투입(`lot_id`, `quantity`, `bom_line_id` 선택) / 산출(`quantity`, `lot_number`·`expiration_date` 선택). `idempotency_key` 필수 |
+| `batches/fefo/` | GET | 투입 LOT 추천 (`item_id`, `quantity`, `on_date`) — 소비기한 빠른 순, 부족분 `shortfall` |
+| `boms/` | GET | BOM 조회 (`item_id`, `include_inactive`) — 등록은 데이터 이관으로 |
 
 ## 운영 명령
 

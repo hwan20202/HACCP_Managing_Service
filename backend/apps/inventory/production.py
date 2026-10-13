@@ -447,9 +447,10 @@ def fefo_candidates(*, item_id, quantity, on_date=None):
     return picks
 
 
-def standard_requirements(*, bom_id, quantity):
-    """One-level BOM requirement for `quantity` of the output item: [(bom_line, need_e6)]."""
-    quantity_e6 = _quantity_e6(quantity)
+def standard_requirements(*, bom_id, quantity=None, quantity_e6=None):
+    """One-level BOM requirement for a quantity of the output item: [(bom_line, need_e6)]."""
+    if quantity_e6 is None:
+        quantity_e6 = _quantity_e6(quantity)
     bom = Bom.objects.filter(pk=bom_id).first()
     if bom is None:
         raise NotFound(f"BOM을 찾을 수 없습니다. (id={bom_id})")
@@ -478,4 +479,36 @@ def batch_summary(batch_id):
         outputs = [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
     for row in outputs:
         row["stock_e6"] = current_stock_e6(row["lot_id"])
-    return {"batch": batch, "usages": usages, "outputs": outputs}
+    items = Item.objects.in_bulk({row["item_id"] for row in usages + outputs})
+    for row in usages + outputs:
+        row["item"] = items[row["item_id"]]
+    return {
+        "batch": batch,
+        "usages": usages,
+        "outputs": outputs,
+        "bom_check": _bom_check(batch, usages, outputs),
+    }
+
+
+def _bom_check(batch, usages, outputs):
+    """BOM standard vs actual per component, scaled to the output (or the plan if no output).
+
+    Returns None without a BOM. Rows: line, standard_e6, actual_e6 (net usage of LOTs of the
+    component item, whichever BOM line they were recorded against).
+    """
+    if not batch.bom_id:
+        return None
+    produced = sum(row["net_quantity_e6"] for row in outputs)
+    basis = produced if produced > 0 else batch.planned_quantity_e6
+    used = {}
+    for row in usages:
+        used[row["item_id"]] = used.get(row["item_id"], 0) + row["net_quantity_e6"]
+    lines = standard_requirements(bom_id=batch.bom_id, quantity_e6=basis) if basis else []
+    return {
+        "basis_e6": basis,
+        "basis": "output" if produced > 0 else "plan",
+        "lines": [
+            {"line": line, "standard_e6": need, "actual_e6": used.get(line.component_item_id, 0)}
+            for line, need in lines
+        ],
+    }

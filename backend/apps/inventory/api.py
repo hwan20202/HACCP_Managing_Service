@@ -17,6 +17,7 @@ import json
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.http import JsonResponse
 from django.views.decorators.csrf import ensure_csrf_cookie
 
@@ -27,12 +28,17 @@ from .judgment import apply_incoming_judgment
 from .ledger import stock_ledger, stock_ledger_changes_since
 from .master_import import parse_item_row, parse_staff_row, parse_supplier_row
 from .models import (
+    BatchStatus,
+    Bom,
+    BomLine,
     IncomingReceipt,
     Inventory,
     Item,
     ItemType,
     Lot,
     LotStatus,
+    ProcessType,
+    ProductionBatch,
     ReceiptStatus,
     Staff,
     StockMovement,
@@ -46,7 +52,17 @@ from .movements import (
     record_opening_balance,
     return_to_supplier,
 )
-from .quantity import from_e6
+from .production import (
+    add_output,
+    add_usage,
+    batch_summary,
+    cancel_batch,
+    complete_batch,
+    create_batch,
+    fefo_candidates,
+    start_batch,
+)
+from .quantity import from_e6, to_e6
 from .receiving import ReceiptInput, cancel_receipt, register_receipt
 from .stock import item_stock, lot_stock
 
@@ -557,3 +573,169 @@ def correct(request, pk):
         idempotency_key=str(data["idempotency_key"]),
     )
     return _movement_response(movement)
+
+
+# ---------------------------------------------------------------------------
+# Production (production.py)
+# ---------------------------------------------------------------------------
+
+BATCH_RELATED = ("item", "staff")
+
+
+def _batch_response(batch_id, status=200):
+    summary = batch_summary(batch_id)
+    summary["batch"] = ProductionBatch.objects.select_related(*BATCH_RELATED).get(pk=batch_id)
+    return ok(out.batch_detail(summary), status=status)
+
+
+@endpoint("GET", "POST")
+def batch_collection(request):
+    if request.method == "POST":
+        data = request.data
+        _required(data, "item_id", "process_type", "staff_id")
+        batch = create_batch(
+            item_id=_int(data["item_id"], "item_id"),
+            process_type=str(data["process_type"]).upper(),
+            staff_id=_int(data["staff_id"], "staff_id"),
+            planned_date=_date(data.get("planned_date"), "planned_date"),
+            planned_quantity=data.get("planned_quantity"),
+            manufactured_date=_date(data.get("manufactured_date"), "manufactured_date"),
+            shift=(str(data["shift"]).upper() if data.get("shift") else None),
+            bom_id=_int(data.get("bom_id"), "bom_id"),
+            notes=data.get("notes"),
+        )
+        return _batch_response(batch.pk, status=201)
+
+    rows = ProductionBatch.objects.select_related(*BATCH_RELATED).order_by("-pk")
+    if status := request.GET.get("status"):
+        if status not in BatchStatus.values:
+            raise BadRequest(f"status 는 {BatchStatus.values} 중 하나여야 합니다.")
+        rows = rows.filter(status=status)
+    if process_type := request.GET.get("process_type"):
+        if process_type not in ProcessType.values:
+            raise BadRequest(f"process_type 은 {ProcessType.values} 중 하나여야 합니다.")
+        rows = rows.filter(process_type=process_type)
+    if item_id := _int(request.GET.get("item_id"), "item_id"):
+        rows = rows.filter(item_id=item_id)
+    # Period on the manufacturing date (or the planned date while not yet made).
+    if date_from := _date(request.GET.get("from"), "from"):
+        rows = rows.filter(
+            Q(manufactured_date__gte=date_from)
+            | Q(manufactured_date__isnull=True, planned_date__gte=date_from)
+        )
+    if date_to := _date(request.GET.get("to"), "to"):
+        rows = rows.filter(
+            Q(manufactured_date__lte=date_to)
+            | Q(manufactured_date__isnull=True, planned_date__lte=date_to)
+        )
+    count, page = _page(request, rows)
+    return ok({"count": count, "results": [out.batch(b) for b in page]})
+
+
+@endpoint("GET")
+def batch_detail(request, pk):
+    return _batch_response(pk)
+
+
+@endpoint("POST")
+def batch_start(request, pk):
+    data = request.data
+    _required(data, "staff_id")
+    start_batch(
+        batch_id=pk,
+        staff_id=_int(data["staff_id"], "staff_id"),
+        started_at=_datetime(data.get("started_at"), "started_at"),
+        manufactured_date=_date(data.get("manufactured_date"), "manufactured_date"),
+        shift=(str(data["shift"]).upper() if data.get("shift") else None),
+    )
+    return _batch_response(pk)
+
+
+@endpoint("POST")
+def batch_usage(request, pk):
+    data = request.data
+    _required(data, "lot_id", "quantity", "staff_id", "idempotency_key")
+    add_usage(
+        batch_id=pk,
+        lot_id=_int(data["lot_id"], "lot_id"),
+        quantity=data["quantity"],
+        staff_id=_int(data["staff_id"], "staff_id"),
+        idempotency_key=str(data["idempotency_key"]),
+        occurred_at=_datetime(data.get("occurred_at"), "occurred_at"),
+        bom_line_id=_int(data.get("bom_line_id"), "bom_line_id"),
+    )
+    return _batch_response(pk, status=201)
+
+
+@endpoint("POST")
+def batch_output(request, pk):
+    data = request.data
+    _required(data, "quantity", "staff_id", "idempotency_key")
+    add_output(
+        batch_id=pk,
+        quantity=data["quantity"],
+        staff_id=_int(data["staff_id"], "staff_id"),
+        idempotency_key=str(data["idempotency_key"]),
+        occurred_at=_datetime(data.get("occurred_at"), "occurred_at"),
+        lot_number=data.get("lot_number"),
+        expiration_date=_date(data.get("expiration_date"), "expiration_date"),
+    )
+    return _batch_response(pk, status=201)
+
+
+@endpoint("POST")
+def batch_complete(request, pk):
+    data = request.data
+    _required(data, "staff_id")
+    complete_batch(
+        batch_id=pk,
+        staff_id=_int(data["staff_id"], "staff_id"),
+        completed_at=_datetime(data.get("completed_at"), "completed_at"),
+    )
+    return _batch_response(pk)
+
+
+@endpoint("POST")
+def batch_cancel(request, pk):
+    data = request.data
+    _required(data, "staff_id", "reason")
+    cancel_batch(batch_id=pk, staff_id=_int(data["staff_id"], "staff_id"), reason=data["reason"])
+    return _batch_response(pk)
+
+
+@endpoint("GET")
+def fefo(request):
+    """Usable LOTs to cover a quantity of an item, earliest expiration first."""
+    item_id = _int(request.GET.get("item_id"), "item_id", required=True)
+    quantity = request.GET.get("quantity")
+    if not quantity:
+        raise BadRequest("'quantity' 값이 필요합니다.", {"quantity": "required"})
+    picks = fefo_candidates(
+        item_id=item_id, quantity=quantity, on_date=_date(request.GET.get("on_date"), "on_date")
+    )
+    covered = sum(take for _, take, _ in picks)
+    return ok(
+        {
+            "item_id": item_id,
+            "quantity": quantity,
+            "covered": out.qty(covered),
+            "shortfall": out.qty(max(to_e6(quantity) - covered, 0)),
+            "results": [out.fefo_pick(*pick) for pick in picks],
+        }
+    )
+
+
+@endpoint("GET")
+def bom_collection(request):
+    """BOMs (read only — BOM data is loaded by the data team)."""
+    rows = Bom.objects.order_by("item_id", "-version")
+    if item_id := _int(request.GET.get("item_id"), "item_id"):
+        rows = rows.filter(item_id=item_id)
+    if not _flag(request.GET.get("include_inactive", "0")):
+        rows = rows.filter(is_active=True)
+    lines = {}
+    for line in (
+        BomLine.objects.filter(bom__in=rows).select_related("component_item").order_by("line_no")
+    ):
+        lines.setdefault(line.bom_id, []).append(line)
+    return ok({"results": [out.bom(b, lines.get(b.pk, [])) for b in rows]})
