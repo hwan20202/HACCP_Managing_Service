@@ -183,7 +183,7 @@
   //     attempt, my_slot: {approval_id, slot_no, label} | null, progress: {approved, total, pending} | null }
   // 대상·제외는 화면 계산(S1 4장). 서버가 문서마다 다시 검사하고, 그 사이 바뀐 문서는 결과에 실패로 나온다.
   const VERDICT = { PASS: '적합', FAIL: '부적합' };
-  const ACTION = { approve: '승인', submit: '상신', inspector: '점검자 지정' };
+  const ACTION = { approve: '승인', submit: '상신', inspector: '점검자 지정', skip: '작성 안 함' };  // skip: P8 DOC-SC-13
   const verdictHtml = (v) => (v ? `<span class="${v === 'FAIL' ? 'te-judge-ng' : ''}">${esc(VERDICT[v] || v)}</span>` : '<span class="te-hint">–</span>');
   const staffText = (id) => (id ? `staff ${esc(id)}` : '-');
   const rowName = (r) => `#${r.document_id}${r.lot ? ` ${esc(r.lot)}` : ''}`;
@@ -210,6 +210,10 @@
     if (code === 'DOCUMENT_LOCKED' && action === 'submit') {
       return ['draft', 'rejected', 'correcting'].includes(sub) ? '작성완료 상태가 아닙니다. 작성완료 후 상신하세요.' : '이미 결재 진행 중이거나 승인된 문서입니다.';
     }
+    if (action === 'skip') {  // P8 작성 안 함(F27): 실패 판정 순서 404 → 양식·작성 요구 → 상태 → 버전
+      if (code === 'DOCUMENT_NOT_SKIPPABLE') return '주기 작성 요구 문서만 작성 안 함으로 바꿀 수 있습니다.';
+      if (code === 'INVALID_TRANSITION') return '작성중 문서만 작성 안 함으로 바꿀 수 있습니다.';
+    }
     if (code === 'DOCUMENT_LOCKED' && action === 'inspector') {
       return sub === 'completed' ? '작성완료된 문서입니다. 바꾸려면 작성 재개하세요.' : '결재 중이거나 승인된 문서는 바꿀 수 없습니다.';
     }
@@ -229,6 +233,7 @@
   function successText(action, result, row, extra) {
     if (action === 'approve') return result.request_status === 'approved' ? '승인 → 문서 승인됨' : `승인 (남은 대기 ${result.pending_count}칸)`;
     if (action === 'submit') return `${result.request.attempt}회차 상신${row && row.correcting ? ' (정정 상신)' : ''}`;
+    if (action === 'skip') return `작성 안 함 (v${result.version})`;
     return result.changed ? `점검자 ${staffText(extra.inspectorId)}로 지정 (v${result.version})` : `변화 없음 (이미 ${staffText(extra.inspectorId)})`;
   }
 

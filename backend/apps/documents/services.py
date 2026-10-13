@@ -519,7 +519,8 @@ def list_documents(filters=None, page=1):
         offset = (page_number - 1) * PAGE_SIZE
         with connection_cursor() as cursor:
             cursor.execute(
-                f"{_list_union(where, bundle_in)} ORDER BY 2 DESC, 1, 4 DESC LIMIT %s OFFSET %s",
+                f"{_list_union(where, bundle_in)} ORDER BY sort_day DESC, 1, 2 DESC, 4 DESC "
+                "LIMIT %s OFFSET %s",
                 [*params, *bundle, *params, *bundle, PAGE_SIZE, offset],
             )
             rows = cursor.fetchall()
@@ -710,17 +711,22 @@ def _list_where(**f):
 def _list_union(where, bundle_in, count_only=False):
     """문서 줄(kind 1)과 묶음 줄(kind 0, 묶음 키·양식 유형마다 1줄)의 UNION ALL.
 
-    묶음 키: day 양식은 작업일, week 양식은 그 주 월요일(P8 F04 변경)."""
+    묶음 키: day 양식은 작업일, week 양식은 그 주 월요일(P8 F04 변경).
+    정렬 날짜(sort_day, 맨 뒤 열): 문서 줄은 작업일, 묶음 줄은 그 묶음의 가장 늦은 작업일 — 이번 주
+    주 줄이 화~오늘 문서 뒤로 밀리지 않게(ISS-031, P8-S5-Q1 a). day 묶음은 키와 같음.
+    같은 정렬 날짜에서는 묶음 줄이 먼저(P7처럼), 그다음 묶음 키·문서 번호 내림차순."""
     columns = ["NULL"] if count_only else list(_LIST_COLUMNS)
+    sort = "" if count_only else ", d.work_date AS sort_day"
+    sort_bundle = "" if count_only else ", MAX(d.work_date)"
     nulls = ["NULL"] * len(columns)
     if not count_only:
         nulls[_LIST_COLUMNS.index("t.name")] = "MAX(t.name)"
     source = "FROM document d JOIN document_template t ON t.template_id = d.template_id"
     return (
-        f"SELECT 1 AS kind, d.work_date, t.type_code, d.document_id, {', '.join(columns)} "
+        f"SELECT 1 AS kind, d.work_date, t.type_code, d.document_id, {', '.join(columns)}{sort} "
         f"{source} WHERE {where} AND t.type_code NOT IN ({bundle_in}) "
         f"UNION ALL SELECT 0, {_BUNDLE_KEY_SQL}, t.type_code, MIN(d.document_id), "
-        f"{', '.join(nulls)} "
+        f"{', '.join(nulls)}{sort_bundle} "
         f"{source} WHERE {where} AND t.type_code IN ({bundle_in}) "
         f"GROUP BY t.type_code, {_BUNDLE_KEY_SQL}"
     )

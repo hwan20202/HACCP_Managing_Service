@@ -580,6 +580,17 @@ class FileApiTraceTests(FileApiTestCase):
     def ids(self, response):
         return [s["step_id"] for s in response.json()["trace"]["steps"]]
 
+    def test_s5_detach_delete_flow(self):
+        """C3 S5: 마지막 연결을 끊어 파일까지 지우는 경로는 05를 지난다 — 콘솔 도식 DOC-FDT-DEL."""
+        document_id = d01(88)
+        file_id = self.multipart(document_id).json()["file"]["file_id"]
+        detached = self.client.delete(
+            f"/api/v1/documents/{document_id}/files/{file_id}?expected_version=2",
+            HTTP_X_STAFF_ID="3",
+        )
+        self.assertTrue(flows.matches("DOC-FDT-DEL", self.ids(detached)), self.ids(detached))
+        self.assertFalse(flows.matches("DOC-FDT", self.ids(detached)))
+
     def test_api_flows_match(self):
         first, second = d01(88), d01(89)
         created = self.multipart(first)

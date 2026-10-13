@@ -61,7 +61,36 @@
     batchInspector: { label: '점검자 일괄 지정 (F25·A20)', method: 'POST', flow: 'DOC-BIN', uses: ['body', 'docId'], path: () => 'documents/batch-inspector', docs: (s) => idList(s.docId) || bodyDocs(s) },
     brief: { label: '문서 요약 여러 건 (F26·A21)', method: 'GET', flow: 'DOC-BRF', uses: ['query'], path: (s) => `documents/brief${s.query ? `?${s.query}` : ''}` },
     incoming: { label: 'REQ 입고일 묶음 (F05·A03)', method: 'GET', flow: 'REQ-BDL', uses: ['query'], path: (s) => `incoming-inspections${s.query ? `?${s.query}` : ''}` },
+    // ---- 스프린트 3 파일(D01·D02) — document-files/s4-basis.md, p4-s2-spec F14~F18·A11~A14
+    // 올리기는 multipart: 본문 JSON {expected_version, name, kind: pdf|png|bad}를 견본 파일로 바꿔 보낸다(콘솔 전용)
+    fileUpload: { label: '파일 올리기 (F14·A11)', method: 'POST', flow: 'DOC-FUP', uses: ['id', 'body'], path: (s) => `documents/${s.id}/files`, doc: (s) => s.id, multipart: true },
+    fileLink: { label: '이전 파일 연결 (F15·A11)', method: 'POST', flow: 'DOC-FLK', uses: ['id', 'body'], path: (s) => `documents/${s.id}/files`, doc: (s) => s.id },
+    // 끊기는 마지막 연결·보존 없음일 때만 05(커밋 뒤 파일 삭제)를 지난다 — trace로 도식을 고른다
+    fileDetach: { label: '파일 연결 끊기 (F16·A12)', method: 'DELETE', uses: ['id', 'query'], doc: (s) => s.id,
+      flow: (record, trace) => (trace && trace.steps.some((x) => x.step_id === 'DOC-FDT-05') ? 'DOC-FDT-DEL' : 'DOC-FDT'),
+      path: (s) => { const q = new URLSearchParams(s.query); return `documents/${s.id}/files/${q.get('file')}?expected_version=${q.get('expected_version')}`; } },
+    fileSearch: { label: '이전 파일 검색 (F18·A14)', method: 'GET', flow: 'DOC-FSR', uses: ['query'], path: (s) => `files${s.query ? `?${s.query}` : ''}` },
+    // ---- P8 양식 확장 — document/p8-s2-spec.md 4장(+ D-136)
+    batchSkip: { label: '작성 안 함 (F27·A24)', method: 'POST', flow: 'DOC-SKP', uses: ['body', 'docId'], path: () => 'documents/batch-skip', docs: (s) => idList(s.docId) || bodyDocs(s) },
+    unskip: { label: '되돌리기 (F28·A25)', method: 'POST', flow: 'DOC-USK', uses: ['id', 'body'], path: (s) => `documents/${s.id}/unskip`, doc: (s) => s.id },
+    recentValues: { label: '최근 값 (F29·A26)', method: 'GET', flow: 'DOC-RCV', uses: ['query'], path: (s) => `documents/recent-values${s.query ? `?${s.query}` : ''}` },
+    periodicBundle: { label: 'REQ 주 묶음 (F06·A04)', method: 'GET', flow: 'REQ-PWB', uses: ['query'], path: (s) => `periodic-bundles${s.query ? `?${s.query}` : ''}` },
   };
+  // 견본 파일(콘솔 전용): 서명만 맞으면 서버 검사(DOC-VR-20)를 통과한다. bad = 이름은 .pdf, 내용은 글자
+  const SAMPLE = {
+    pdf: () => new Blob(['%PDF-1.4\n% console sample\n%%EOF\n'], { type: 'application/pdf' }),
+    png: () => new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0])], { type: 'image/png' }),
+    bad: () => new Blob(['not a pdf'], { type: 'application/pdf' }),
+  };
+  function multipartBody(spec) {
+    const b = JSON.parse(spec.body || '{}');
+    const fd = new FormData();
+    const kind = b.kind || 'pdf';
+    fd.append('file', new File([SAMPLE[kind] ? SAMPLE[kind]() : SAMPLE.pdf()], b.name || `콘솔_견본.${kind === 'png' ? 'png' : 'pdf'}`));
+    fd.append('expected_version', String(b.expected_version ?? ''));
+    return fd;
+  }
+  const payloadOf = (fn, spec) => (fn.multipart && spec.body ? multipartBody(spec) : spec.body);
   const idList = (text) => {
     const ids = String(text || '').split(',').map((x) => x.trim()).filter((x) => /^\d+$/.test(x));
     return ids.length ? ids : null;
@@ -79,7 +108,7 @@
       return /^\d{4}-\d{2}-\d{2}$/.test(day || '') ? `${key}=${day}` : null;
     } catch (e) { return null; }
   }
-  const flowOf = (fn, record) => (typeof fn.flow === 'function' ? fn.flow(record) : fn.flow);
+  const flowOf = (fn, record, trace) => (typeof fn.flow === 'function' ? fn.flow(record, trace) : fn.flow);
 
   const state = { flows: {}, batch: {}, history: [], active: null, preset: null };
 
@@ -120,7 +149,7 @@
       // P5 REQ: 문서 하나가 아니라 LOT·배치 하나에 걸린 행(lots·입고 기록·document·doc_section·document_ref)
       const scopeBefore = fn.scope(spec, null);
       const snapBefore = before !== undefined ? before : await scopeSnapshot(scopeBefore);
-      const record = await api.request(fn.method, fn.path(spec), spec.body, { staffId: spec.staff });
+      const record = await api.request(fn.method, fn.path(spec), payloadOf(fn, spec), { staffId: spec.staff });
       let trace = record.data && typeof record.data === 'object' && record.data.trace;
       if (!trace && record.traceId) trace = await devGet(`/api/dev/traces/${record.traceId}`);
       const scope = fn.scope(spec, record) || scopeBefore;
@@ -134,7 +163,7 @@
       const ids = fn.docs(spec) || [];
       const snaps = async () => Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await snapshot(id)])));
       const multiBefore = await snaps();
-      const record = await api.request(fn.method, fn.path(spec), spec.body, { staffId: spec.staff });
+      const record = await api.request(fn.method, fn.path(spec), payloadOf(fn, spec), { staffId: spec.staff });
       let trace = record.data && typeof record.data === 'object' && record.data.trace;
       if (!trace && record.traceId) trace = await devGet(`/api/dev/traces/${record.traceId}`);
       const entry = { spec, fn, record, trace, multi: { ids, before: multiBefore, after: await snaps() }, preset: state.preset };
@@ -143,7 +172,7 @@
     }
     const docBefore = fn.doc ? fn.doc(spec, null) : null;
     const snapBefore = before !== undefined ? before : await snapshot(docBefore);
-    const record = await api.request(fn.method, fn.path(spec), spec.body, { staffId: spec.staff });
+    const record = await api.request(fn.method, fn.path(spec), payloadOf(fn, spec), { staffId: spec.staff });
     let trace = record.data && typeof record.data === 'object' && record.data.trace;
     if (!trace && record.traceId) trace = await devGet(`/api/dev/traces/${record.traceId}`);
     const docAfter = fn.doc ? fn.doc(spec, record) : null;
@@ -352,7 +381,7 @@
       $('#dcTraceBody').innerHTML = '<div class="dc-empty">trace가 없습니다(개발 콘솔 설정이 꺼져 있거나 만료됨).</div>';
       return;
     }
-    const flowId = flowOf(fn, entry.record);
+    const flowId = flowOf(fn, entry.record, trace);
     const { chips, summary, innerHtml } = compare(flowId, trace.steps, entry.record);
     $('#dcFlowSummary').innerHTML = `${summary} <span class="te-hint">도식 ${esc(flowId)} · trace ${esc(trace.trace_id)}</span>`;
     $('#dcFlowChips').innerHTML = chips.map((c) => `<span class="dc-chip ${c.cls}" title="${c.cls}">${esc(c.id)}</span>`).join('') + innerHtml;
@@ -513,7 +542,7 @@
     $('#dcFlowChips').innerHTML = '';
     $('#dcTraceBody').innerHTML = g.entries.map((e, i) => {
       if (!e.trace) return `<div class="dc-line"><span class="te-hint">호출 ${i + 1}</span> trace 없음</div>`;
-      const flowId = flowOf(e.fn, e.record);
+      const flowId = flowOf(e.fn, e.record, e.trace);
       return `<div class="dc-line"><span class="te-hint">호출 ${i + 1}</span>${compare(flowId, e.trace.steps, e.record).summary} <span class="te-hint">도식 ${esc(flowId)}</span></div>`;
     }).join('');
     $('#dcDbTitle').innerHTML = `<span class="badge badge-info">합계</span> ${esc(g.scope.replace('=', ' = '))} <span class="te-hint">· 프리셋 실행 전 → 모든 호출이 끝난 뒤</span>`;
@@ -1205,9 +1234,123 @@
       } }),
   );
 
+  // ---------------------------------------------------------------- 프리셋 FILE-PS-01~08 · P8-PS-01~10 (C3 S5, D-135)
+  // 사전 조건은 불러올 때 개발 API로 만든다(ISS-019): fixtures/file-doc(새 LOT의 D01·D02 + 견본 파일),
+  // fixtures/periodic(빈 주에 D10·D12·D11 — N1, 주기 작성 요구 형식 record_key)
+  const filePs = (preset) => ({ unit: 'FILE', ...preset });
+  const p8 = (preset) => ({ unit: 'P8', ...preset });
+  async function fileDoc(body) {
+    const made = await devPost('/api/dev/fixtures/file-doc', body);
+    prepared.push({ lot_number: made.lot_number, document_id: made.document_id, status: `${made.status} · 파일 ${made.files.length}개`, kind: body.type_code || 'D01' });
+    return made;
+  }
+  async function periodicWeek(body) {
+    const made = await devPost('/api/dev/fixtures/periodic', body);
+    made.items.forEach((x) => prepared.push({ lot_number: '-', document_id: x.document_id, status: `${body.type_code || 'D10'} ${x.work_date} ${x.status}` }));
+    return made;
+  }
+  const UP = (doc, extra) => J({ expected_version: doc.version, name: '콘솔_성적서.pdf', kind: 'pdf', ...extra });
+  const dayAfter = (day, n) => { const d = new Date(`${day}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  async function typeTemplateId(code) {
+    const t = await quietGet('templates');
+    const hit = t && t.items.find((x) => x.type_code === code);
+    if (!hit) throw new Error(`${code} 양식이 없습니다(seed_dev_p4 — C3 양식 포함).`);
+    return hit.template_id;
+  }
+  async function quietPatchAs(path, body, staff) {
+    const r = await fetch(`/api/v1/${path}`, { method: 'PATCH', headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-Staff-Id': String(staff) }, body: JSON.stringify(body) });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) throw new Error(`사전 조건을 만들지 못했습니다: ${(data && (data.message || data.code)) || r.status}`);
+    return data;
+  }
+
+  PRESETS.push(
+    filePs({ id: 'FILE-PS-01', label: '파일 올리기 정상(D01)', expect: '201 · DOC-FUP 도식 일치(01~06: 형식 → 파일 쓰기(트랜잭션 밖) → 문서 잠금 → file·document_file INSERT → 결과) · ④ file +1, document_file +1, document version +1',
+      prepare: async () => { const m = await fileDoc({}); return { func: 'fileUpload', staff: '3', id: String(m.document_id), body: UP(m) }; } }),
+    filePs({ id: 'FILE-PS-02', label: '형식이 다른 파일 거부', expect: '400 FILE_REJECTED(details code type — "파일 내용이 확장자와 맞지 않습니다") · DOC-FUP-02 실패 · ④ 변화 없음(디스크에도 남지 않음)',
+      prepare: async () => { const m = await fileDoc({}); return { func: 'fileUpload', staff: '3', id: String(m.document_id), body: UP(m, { name: '가짜.pdf', kind: 'bad' }) }; } }),
+    filePs({ id: 'FILE-PS-03', label: '작성완료 문서에 올리기 거부', expect: '409 DOCUMENT_LOCKED(details code completed) · 문서 잠금 영향 0행 → 실패 사유 · 쓴 파일은 지움 · ④ 변화 없음',
+      prepare: async () => { const m = await fileDoc({ state: 'completed', files: 1 }); return { func: 'fileUpload', staff: '3', id: String(m.document_id), body: UP(m) }; } }),
+    filePs({ id: 'FILE-PS-04', label: '이전 파일 연결(SC-08)', expect: '201 · DOC-FLK 도식 일치(01~05) · ④ document_file +1(같은 file_id — 복사 없음), file 변화 없음, version +1',
+      prepare: async () => {
+        const from = await fileDoc({ files: 1 });
+        const to = await fileDoc({});
+        return { func: 'fileLink', staff: '3', id: String(to.document_id), body: J({ expected_version: to.version, link_file_id: from.files[0] }) };
+      } }),
+    filePs({ id: 'FILE-PS-05', label: '연결 끊기 — 마지막 연결이라 파일도 지움', expect: '200 · DOC-FDT-DEL 도식 일치(01~05, 05 = 커밋 뒤 파일 삭제 — 마지막 연결) · ④ document_file −1, file −1, version +1',
+      prepare: async () => { const m = await fileDoc({ files: 1 }); return { func: 'fileDetach', staff: '3', id: String(m.document_id), query: `file=${m.files[0]}&expected_version=${m.version}` }; } }),
+    filePs({ id: 'FILE-PS-06', label: '연결 끊기 — 다른 문서가 쓰는 파일은 남음', expect: '200 · DOC-FDT 01~04(파일 삭제 없음) · ④ 이 문서 document_file −1, file 그대로(다른 문서 연결 남음)',
+      prepare: async () => {
+        const from = await fileDoc({ files: 1 });
+        const to = await fileDoc({});
+        const linked = await quietPostAs(`documents/${to.document_id}/files`, { expected_version: to.version, link_file_id: from.files[0] }, 3);
+        return { func: 'fileDetach', staff: '3', id: String(to.document_id), query: `file=${from.files[0]}&expected_version=${linked.document_version}` };
+      } }),
+    filePs({ id: 'FILE-PS-07', label: '이전 파일 검색', expect: '200 · DOC-FSR 도식 일치(01~02) · items에 방금 만든 D01 파일 2개(최신순), documents[0].target_summary = LOT … · 유자(목록과 같은 대상 표시) · DB 변화 없음',
+      prepare: async () => { await fileDoc({ files: 2 }); return { func: 'fileSearch', staff: '3', query: 'type_code=D01&item=유자&supplier=콘솔준비&days=30' }; } }),
+    filePs({ id: 'FILE-PS-08', label: '파일 없이 작성완료 거부(D02)', expect: '400 COMPLETION_INCOMPLETE(details path files, code files_required) · DOC-CMP-03 실패 → 롤백 · ④ 변화 없음',
+      prepare: async () => { const m = await fileDoc({ type_code: 'D02' }); return { func: 'complete', staff: '3', id: String(m.document_id), body: J({ expected_version: m.version }) }; } }),
+
+    p8({ id: 'P8-PS-01', label: '작성 안 함 일괄 정상(D10 3일)', expect: '200 · succeeded 3 · ③ DOC-SKP 도식 일치(머리 3 → 항목 3: skipped → 꼬리) · ④ 문서마다 status draft→skipped, skipped_at·by·reason(휴무), version +1, 값 그대로',
+      prepare: async () => {
+        const w = await periodicWeek({ type_code: 'D10', days: [{ weekday: 1 }, { weekday: 2 }, { weekday: 3 }] });
+        return { func: 'batchSkip', staff: '3', docId: ids(w.items), body: J({ items: items(w.items), reason: '휴무' }) };
+      } }),
+    p8({ id: 'P8-PS-02', label: '작성 안 함 일부 실패', expect: '200 · succeeded 1 · failed 2(INVALID_TRANSITION — 작성완료 D10, DOCUMENT_NOT_SKIPPABLE — D03) · ③ 항목 3(skipped 1 · 실패 2) · ④ 작성중 D10 1건만 skipped',
+      prepare: async () => {
+        const w = await periodicWeek({ type_code: 'D10', days: [{ weekday: 1, state: 'completed' }, { weekday: 2 }] });
+        const d03 = await one({ state: 'draft' });
+        const list = [w.items[0], d03, w.items[1]];
+        return { func: 'batchSkip', staff: '3', docId: ids(list), body: J({ items: items(list), reason: '작업 없음' }) };
+      } }),
+    p8({ id: 'P8-PS-03', label: '되돌리기', expect: '200 · DOC-USK 도식 일치(01~03) · ④ status skipped→draft, skipped_* 비움, version +1, 값 그대로',
+      prepare: async () => {
+        const w = await periodicWeek({ type_code: 'D10', days: [{ weekday: 2, state: 'skipped' }] });
+        return { func: 'unskip', staff: '3', id: String(w.items[0].document_id), body: J({ expected_version: w.items[0].version }) };
+      } }),
+    p8({ id: 'P8-PS-04', label: '작성 안 함 문서 작성완료 거부', expect: '409 INVALID_TRANSITION(details code skipped) · DOC-CMP-02 영향 0행 → 02a · ④ 변화 없음',
+      prepare: async () => {
+        const w = await periodicWeek({ type_code: 'D12', days: [{ weekday: 1, state: 'skipped' }] });
+        return { func: 'complete', staff: '3', id: String(w.items[0].document_id), body: J({ expected_version: w.items[0].version }) };
+      } }),
+    p8({ id: 'P8-PS-05', label: '주 묶음 조회(D10)', expect: '200 · REQ-PWB 도식 일치(01~06: DOC N10 → F26 → APR A10) · SQL 8개 이하 · days 5칸(목 null), 칸마다 check_counts·nonconforming(월 X 1 → true), summary documents 4, 결재중 1(내 칸 — staff 3) · DB 변화 없음',
+      prepare: async () => {
+        const w = await periodicWeek({ type_code: 'D10', days: [{ weekday: 1, state: 'submitted', x: true }, { weekday: 2, state: 'skipped' }, { weekday: 3, state: 'filled' }, { weekday: 5 }] });
+        return { func: 'periodicBundle', staff: '3', query: `type_code=D10&week_start=${w.week_start}` };
+      } }),
+    p8({ id: 'P8-PS-06', label: '문서 목록 주 묶음 줄', expect: '200 · DOC-LST 도식 일치(01~07) · 그 주 D10 줄 1개(kind bundle, bundle_unit week, work_date 월·period_end 금, count 5, status_counts 작성완료 2·작성 안 함 1·작성중 2, requirement periodic) · DB 변화 없음',
+      prepare: async () => {
+        const w = await periodicWeek({ type_code: 'D10', days: [{ weekday: 1, state: 'completed' }, { weekday: 2, state: 'skipped' }, { weekday: 3, state: 'completed' }, { weekday: 4 }, { weekday: 5 }] });
+        return { func: 'list', staff: '3', query: `from=${w.week_start}&to=${dayAfter(w.week_start, 6)}&template_id=${await typeTemplateId('D10')}` };
+      } }),
+    p8({ id: 'P8-PS-07', label: '최근 값(D12 공정명)', expect: '200 · DOC-RCV 도식 일치(01~02) · items에 "내포장"(최근 작업일 순, 서로 다른 값) · DB 변화 없음',
+      prepare: async () => { await periodicWeek({ type_code: 'D12', days: [{ weekday: 1, state: 'filled' }] }); return { func: 'recentValues', staff: '3', query: 'type_code=D12&field=process_name' }; } }),
+    p8({ id: 'P8-PS-08', label: '점검일 범위 밖 저장(D11)', expect: '400 VALIDATION_ERROR(details code date_window — 점검일은 그 주 월~일 안) · DOC-UPD-05 실패 → 롤백 · ④ 변화 없음',
+      prepare: async () => {
+        const w = await periodicWeek({ type_code: 'D11', days: [{ weekday: 1 }] });
+        const d = await quietGet(`documents/${w.items[0].document_id}`);
+        const info = d.sections.find((x) => x.section_def === 'info');
+        return { func: 'update', staff: '3', id: String(d.document_id), body: J({ expected_version: d.version, sections: { update: [{ section_id: info.section_id, values: { checked_on: dayAfter(w.week_start, 7) } }] } }) };
+      } }),
+    p8({ id: 'P8-PS-09', label: 'X 있는데 개선조치 없이 작성완료', expect: '400 COMPLETION_INCOMPLETE(details path deviations, code deviation_required) · DOC-CMP-03 실패 → 롤백 · ④ 변화 없음',
+      prepare: async () => {
+        const w = await periodicWeek({ type_code: 'D12', days: [{ weekday: 1, state: 'filled' }] });
+        const d = await quietGet(`documents/${w.items[0].document_id}`);
+        const checks = d.sections.find((x) => x.section_def === 'checks');
+        const changed = await quietPatchAs(`documents/${d.document_id}`, { expected_version: d.version, sections: { update: [{ section_id: checks.section_id, values: { pack_film: 'X' } }] } }, 3);
+        return { func: 'complete', staff: '3', id: String(d.document_id), body: J({ expected_version: changed.version }) };
+      } }),
+    p8({ id: 'P8-PS-10', label: 'D10 일괄 상신(같은 주 3일)', expect: '200 · succeeded 3 · ③ WF-BSB 도식 일치(항목 3: submitted) · ④ 문서마다 completed→submitted, approval_request +1, approval +2(일괄 대상 D10 — HACCP_BATCH_TYPES 기본)',
+      prepare: async () => {
+        const w = await periodicWeek({ type_code: 'D10', days: [{ weekday: 1, state: 'completed' }, { weekday: 2, state: 'completed' }, { weekday: 3, state: 'completed' }] });
+        return { func: 'batchSubmit', staff: '3', docId: ids(w.items), body: J({ items: items(w.items), slots: FIX_SLOTS }) };
+      } }),
+  );
+
   function preparedText(m) {
     if (m.document_id === null) return `새 LOT ${esc(m.lot_number)} · 문서 없음(작성 요구 안 부름)`;
     if (m.lot_number === '-') return `문서 #${esc(m.document_id)}(${esc(m.status)})`;
+    if (m.kind) return `새 LOT ${esc(m.lot_number)} · ${esc(m.kind)} 문서 #${esc(m.document_id)}(${esc(m.status)})`;
     return `새 LOT ${esc(m.lot_number)} · D03 문서 #${esc(m.document_id)}(${esc(m.status)}${m.correction ? ' · 정정' : ''})`;
   }
 
@@ -1275,7 +1418,7 @@
     $('#dcStaff').addEventListener('change', (e) => api.setStaff(e.target.value));
     $('#dcFunc').innerHTML = Object.entries(FUNCS).map(([k, f]) => `<option value="${k}">${esc(f.label)}</option>`).join('');
     const group = (unit, label) => `<optgroup label="${label}">${PRESETS.filter((p) => (p.unit || p.id.split('-')[0]) === unit).map((p) => `<option value="${p.id}">${p.id} ${esc(p.label)}</option>`).join('')}</optgroup>`;
-    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)');
+    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)') + group('FILE', '파일 업로드 (스프린트 3)') + group('P8', '점검표·작성 안 함 (P8)');
     $('#dcFunc').addEventListener('change', () => { state.preset = null; toggleInputs(); });
     ['#dcId', '#dcQuery', '#dcBody', '#dcDocId'].forEach((sel) => $(sel).addEventListener('input', () => { if (state.preset && state.preset.script) state.preset = null; }));
     $('#dcLoadPreset').addEventListener('click', loadPreset);

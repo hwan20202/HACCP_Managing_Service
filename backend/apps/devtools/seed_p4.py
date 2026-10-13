@@ -281,3 +281,28 @@ def seed_p4(today=None):
         actor, b3p, "summary", [{"item_name": "유자환", "passed_qty": 790, "detected_qty": 1}]
     )
     return made
+
+
+def seed_p8(today=None):
+    """C3 S5: 이번 주 점검표 — D10·D12 월~오늘(금까지), D11 이번 주 월요일.
+
+    다시 불러도 이미 있는 문서는 그대로(N1). D10은 월 작성완료 · 화 작성 안 함 · 수 값 채움 · 그 뒤
+    작성중, D12는 월 값 채움 · 그 뒤 작성중. 주기 작성 요구(P9) 전이라 fixture와 같은 함수(N1)로
+    만든다. 반환: 만든·있던 문서 수."""
+    from .fixtures_s3 import build_periodic
+
+    today = today or timezone.localdate()
+    if isinstance(today, str):
+        today = date.fromisoformat(today)
+    ensure_p8_templates()
+    monday = today - timedelta(days=today.isoweekday() - 1)
+    days = [monday + timedelta(days=n) for n in range(5) if monday + timedelta(days=n) <= today]
+    d10 = ["completed", "skipped", "filled", "draft", "draft"]
+    d12 = ["filled", "draft", "draft", "draft", "draft"]
+    count = 0
+    for n, day in enumerate(days):
+        build_periodic("D10", day, d10[n])
+        build_periodic("D12", day, d12[n])
+        count += 2
+    build_periodic("D11", monday, "draft")
+    return count + 1

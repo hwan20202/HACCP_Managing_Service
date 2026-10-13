@@ -53,6 +53,8 @@ FLOWS = {
     "DOC-FUP": [f"DOC-FUP-0{n}" for n in range(1, 7)],
     "DOC-FLK": [f"DOC-FLK-0{n}" for n in range(1, 6)],
     "DOC-FDT": [f"DOC-FDT-0{n}" for n in range(1, 5)],
+    # C3 S5: 마지막 연결이라 파일까지 지우는 경로(05 = 커밋 뒤 삭제) — 콘솔이 trace로 고름
+    "DOC-FDT-DEL": [f"DOC-FDT-0{n}" for n in range(1, 6)],
     "DOC-FSR": ["DOC-FSR-01", "DOC-FSR-02"],
     # P8 (dev-notes/document/p8-s2-spec.md 6장). DOC-SKP는 문서 1건일 때(04·05가 문서마다 반복)
     "DOC-SKP": [f"DOC-SKP-0{n}" for n in range(1, 7)],

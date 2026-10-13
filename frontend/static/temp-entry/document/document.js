@@ -7,7 +7,8 @@
 //           — dev-notes/document-workflow/p7-s1-screens.md 3장, API p7-s2-spec.md 3.2·3.4
 // 설계: dev-notes/document/s1-screens.md, p4-s1-screens.md, document-workflow/p6-s1-screens.md(+ p6a 3.2)
 //       API: s2-spec.md 4장, p4-s2-spec.md, p6-s2-spec.md
-// 파일 영역(SC-07·08)은 스프린트 3(D-058)
+// 스프린트 3: 파일 영역 DOC-SC-07·08(p4-s1-screens, API A11~A14 — document-files/s4-basis.md)
+//           P8 점검표 D10·D12·D11(p8-s1-screens): 점검표 섹션·[매일 항목 모두 O]·작성 안 함(SC-13)·되돌리기·주 묶음 줄·주 묶음 상세
 // =============================================
 (function () {
   const T = window.TempEntry;
@@ -16,7 +17,28 @@
   const EDITABLE = ['draft', 'rejected', 'correcting'];  // P6: 정정 중도 수정·작성완료
   const COMPLETABLE = ['draft', 'rejected', 'correcting'];
   const REASON_MAX = 200;
-  const REQUIREMENT = { lot: '⚙ 입고', batch: '⚙ 생산' };
+  const REQUIREMENT = { lot: '⚙ 입고', batch: '⚙ 생산', periodic: '⚙ 주기' };  // periodic: P9 규칙을 P8 S4에서 앞당김(D-136)
+  const WEEKDAY = ['일', '월', '화', '수', '목', '금', '토'];
+  const dow = (day) => WEEKDAY[new Date(`${day}T00:00:00Z`).getUTCDay()];
+  // P8 F29 최근 값 제안(D12 공정명 — p8-s0 F5). 화면이 아는 양식 필드 목록
+  const RECENT_FIELDS = { D12: ['process_name'] };
+  const WEEK_TYPES = ['D10', 'D12'];  // 주 묶음 양식(DOC BUNDLE_UNITS week · REQ WEEK_BUNDLE_TYPES와 같음)
+  // P8 점검표 섹션: 1행 섹션이고 필드에 표시용 키 group(관리 구분)이 있으면 종이처럼 표로(p8-s1-screens 2장)
+  const isChecklist = (section) => !section.repeat && section.fields.some((fd) => fd.group);
+  const isResult = (fd) => fd.type === 'select' && (fd.options || []).includes('O') && (fd.options || []).includes('X');
+  // [매일 항목 모두 O] 대상: 결과 필드 중 날짜 규칙(na_default)·기본값(initial)이 없는 것(D10 13 · D12 15 · D11 9)
+  const isDaily = (fd) => isResult(fd) && !('na_default' in fd) && !('initial' in fd);
+  function checkCounts(schema, d) {
+    const c = { O: 0, X: 0, NA: 0, blank: 0 };
+    let found = false;
+    // 서버 F26 check_counts(validation.check_counts)와 같은 기준: 반복 아닌 섹션의 O/X 선택 필드 전부
+    schema.sections.filter((s) => !s.repeat).forEach((s) => {
+      const v = ((d.sections.find((x) => x.section_def === s.key) || {}).values) || {};
+      s.fields.filter(isResult).forEach((fd) => { found = true; c[['O', 'X', 'NA'].includes(v[fd.key]) ? v[fd.key] : 'blank'] += 1; });
+    });
+    return found ? c : null;
+  }
+  const countsText = (c) => (c ? `O ${c.O} · X ${c.X} · 해당 없음 ${c.NA}${c.blank ? ` · <b>빈칸 ${c.blank}</b>` : ' (빈칸 0)'}` : '');
 
   function today(offset = 0) {
     const d = new Date();
@@ -116,13 +138,13 @@
   const correctionTag = (status, correcting) => (correcting && status !== 'correcting' ? ' <span class="badge te-chip-fix">정정</span>' : '');
   const statusCell = (status, correcting) => `${T.statusBadge(status)}${correctionTag(status, correcting)}`;
   // P7 묶음 상태 칸: 상태별 개수(0 생략, 순서 고정) + 정정 진행 수는 맨 뒤 따로 "정정 n"(P7-S5-Q3 a — 서버 status_counts 그대로)
-  const STATUS_ORDER = ['draft', 'completed', 'submitted', 'approved', 'rejected', 'correcting'];
+  const STATUS_ORDER = ['draft', 'completed', 'submitted', 'approved', 'rejected', 'correcting', 'skipped'];
   const statusSummary = (counts, correcting) => STATUS_ORDER.filter((k) => counts[k])
     .map((k) => `<span class="te-count">${T.statusBadge(k)} ${counts[k]}</span>`).join(' ')
     + (correcting ? ` <span class="te-count"><span class="badge te-chip-fix">정정</span> ${correcting}</span>` : '');
   const mmdd = (day) => String(day || '').slice(5);
   // DOC-SC-01 묶음 줄(P7 Q7): 육안검사(D03)는 입고일마다 1줄. 필터 중이면 "D03 필터 n / 전체 m건"(검토 A3 — S5에서 판단)
-  const bundleRow = (b) => `
+  const bundleRow = (b) => (b.bundle_unit === 'week' ? weekRow(b) : `
             <tr class="te-row-link te-row-bundle" data-bundle="${b.work_date}">
               <td><span class="badge te-chip-bundle">묶음</span></td>
               <td>${esc(b.template_name)} <span class="te-hint">(묶음)</span></td>
@@ -131,6 +153,18 @@
               <td><span class="te-hint">–</span></td>
               <td>${statusSummary(b.status_counts, b.correcting_count)}</td>
               <td>${b.requirement ? `<span class="te-req">${REQUIREMENT[b.requirement]}</span>` : '<span class="te-hint">–</span>'}</td>
+              <td><span class="te-hint">–</span></td>
+            </tr>`);
+  // P8 주 묶음 줄(D10·D12, p8-s1-screens 5장): 작업일 칸 = 월~금, 대상 = n일(주말 문서도 그 주 줄에 셈)
+  const weekRow = (b) => `
+            <tr class="te-row-link te-row-bundle" data-week="${b.work_date}" data-week-type="${esc(b.type_code)}">
+              <td><span class="badge te-chip-bundle">주</span></td>
+              <td>${esc(b.template_name)} <span class="te-hint">(주)</span></td>
+              <td>${b.count !== b.total ? `필터 ${b.count} / 전체 ${b.total}일` : `${b.count}일`}</td>
+              <td class="te-nowrap">${mmdd(b.work_date)}~${mmdd(b.period_end)}</td>
+              <td><span class="te-hint">–</span></td>
+              <td>${statusSummary(b.status_counts, b.correcting_count)}</td>
+              <td><span class="te-req">${REQUIREMENT[b.requirement] || '–'}</span></td>
               <td><span class="te-hint">–</span></td>
             </tr>`;
   // D03 최종판정 강조(DOC-SC-03·04, P7 Q4): 검사 항목에 "불량"이 있는데 최종판정이 적합이면 안내(저장·작성완료는 막지 않음)
@@ -180,7 +214,7 @@
       this.detailBack = null;
       const f = this.filters;
       const templates = await this.loadTemplates();
-      const statusOptions = ['', 'draft', 'completed', 'submitted', 'approved', 'rejected', 'correcting']
+      const statusOptions = ['', 'draft', 'completed', 'submitted', 'approved', 'rejected', 'correcting', 'skipped']
         .map((s) => `<option value="${s}" ${f.status === s ? 'selected' : ''}>${s ? T.STATUS[s].label : '전체'}</option>`).join('');
       const templateOptions = ['<option value="">전체</option>']
         .concat(templates.map((t) => `<option value="${t.template_id}" ${String(f.template_id) === String(t.template_id) ? 'selected' : ''}>${esc(t.name)} v${t.version}</option>`))
@@ -287,6 +321,8 @@
         tr.addEventListener('click', () => this.showDetail(Number(tr.dataset.id))));
       body.querySelectorAll('tr[data-bundle]').forEach((tr) =>
         tr.addEventListener('click', () => this.showBundle(tr.dataset.bundle, { page: 'list' })));
+      body.querySelectorAll('tr[data-week]').forEach((tr) =>
+        tr.addEventListener('click', () => this.showWeek(tr.dataset.weekType, tr.dataset.week, { page: 'list' })));
       body.querySelectorAll('button[data-page]').forEach((b) =>
         b.addEventListener('click', () => { f.page = Number(b.dataset.page); this.loadList(); }));
     },
@@ -295,7 +331,12 @@
     goBack() {
       const back = this.detailBack;
       if (back && back.bundleDay) this.showBundle(back.bundleDay, back.origin);
+      else if (back && back.week) this.showWeek(back.week.type, back.week.start, back.week.origin);
       else this.showList();
+    },
+    openFromWeek(documentId) {
+      this.detailBack = { week: { type: this.week.type, start: this.week.start, origin: this.week.origin } };
+      this.showDetail(documentId);
     },
     openFromBundle(documentId) {
       this.detailBack = { bundleDay: this.bundle.day, origin: this.bundle.origin };
@@ -439,13 +480,192 @@
       };
       $('#bdApprove').addEventListener('click', () => B.openApprove(picked, { origin: 'bundle', ...after }));
       $('#bdSubmit').addEventListener('click', () => B.openSubmit(picked, data.default_slots, after));
-      $('#bdInspector').addEventListener('click', () => B.guardOpen(async () => this.openInspector(picked, after)));
+      $('#bdInspector').addEventListener('click', () => B.guardOpen(async () => this.openInspector(picked, after, max)));
+    },
+
+    // ================================================= DOC-SC-10 주 묶음 상세 (P8 — D10·D12, p8-s1-screens 5장)
+    // 데이터: REQ-A04 GET periodic-bundles?type_code=&week_start=(월요일, X-Staff-Id 필수 — 내 차례 계산)
+    async showWeek(type, start, origin) {
+      this.detailBack = null;
+      const keep = this.week && this.week.type === type && this.week.start === start ? this.week.selected : new Set();
+      this.week = { type, start, origin: origin || (this.week && this.week.origin) || { page: 'list' }, selected: keep, data: null, max: 50 };
+      const B = window.TempEntryApproval && window.TempEntryApproval.batch;
+      const name = ((this.templates || []).find((t) => t.type_code === type) || {}).name || type;
+      this.root.innerHTML = `
+        <div class="fade-in" id="teWeek">
+          ${T.topBar(`${name} — 주 묶음`, '하루 문서를 월~금으로 모아 일괄 상신·승인·점검자 지정·작성 안 함')}
+          <div class="card">
+            <div class="te-bundle-nav">
+              <button class="btn btn-secondary btn-sm" id="wkPrev">◀ 전주</button>
+              <b class="te-bundle-day" id="wkTitle">${esc(start)} (월) ~ ${esc(shiftDay(start, 4))} (금)</b>
+              <button class="btn btn-secondary btn-sm" id="wkNext">다음주 ▶</button>
+              <span style="flex:1"></span>
+              <button class="btn btn-secondary btn-sm" id="wkBack">뒤로</button>
+            </div>
+            <div id="wkBody">${this.skeleton()}</div>
+          </div>
+        </div>`;
+      this.rerenderTopBar(() => this.showWeek(type, start, this.week.origin));
+      const $ = (sel) => this.root.querySelector(sel);
+      $('#wkPrev').addEventListener('click', () => this.showWeek(type, shiftDay(start, -7), this.week.origin));
+      $('#wkNext').addEventListener('click', () => this.showWeek(type, shiftDay(start, 7), this.week.origin));
+      $('#wkBack').addEventListener('click', () => this.showList());
+      const body = $('#wkBody');
+      if (!api.staffId) { body.innerHTML = '<div class="te-empty">현재 사용자를 선택하세요. 주 묶음은 현재 사용자 기준으로 내 결재 대기를 보입니다.</div>'; return; }
+      const [r, cfg] = await Promise.all([api.get(`periodic-bundles?type_code=${encodeURIComponent(type)}&week_start=${start}`), B ? B.config() : { max_items: 50 }]);
+      if (!this.root.contains(body)) return;
+      if (!r.ok) { T.toast(T.errorText(r), 'error'); body.innerHTML = `<div class="te-empty">${esc(T.errorText(r))}</div>`; return; }
+      this.week.data = r.data;
+      this.week.max = cfg.max_items;
+      this.renderWeek();
+    },
+
+    weekRows() {
+      return this.week.data.days.filter((x) => x.document).map((x) => {
+        const d = x.document;
+        return {
+          document_id: d.document_id, lot: `${mmdd(x.work_date)} (${WEEKDAY[x.weekday % 7]})`, status: d.status, correcting: d.correcting,
+          version: d.version, verdict: d.nonconforming === true ? 'FAIL' : (d.nonconforming === false ? 'PASS' : null), nonconforming: d.nonconforming,
+          inspector_id: d.inspector_id, attempt: d.progress ? d.progress.attempt : null, my_slot: d.my_slot, progress: d.progress,
+        };
+      });
+    },
+
+    renderWeek() {
+      const { data, selected, max } = this.week;
+      const body = this.root.querySelector('#wkBody');
+      const rows = this.weekRows();
+      const ids = new Set(rows.map((x) => x.document_id));
+      [...selected].forEach((id) => { if (!ids.has(id)) selected.delete(id); });
+      const picked = rows.filter((x) => selected.has(x.document_id));
+      const n = {
+        inspector: picked.filter((x) => EDITABLE.includes(x.status)).length,
+        submit: picked.filter((x) => x.status === 'completed').length,
+        approve: picked.filter((x) => x.my_slot).length,
+        skip: picked.filter((x) => x.status === 'draft').length,
+      };
+      const over = picked.length > max;
+      const btn = (id, label, count) => `<button class="btn ${count ? 'btn-primary' : 'btn-secondary'} btn-sm" id="${id}" ${!count || over ? 'disabled' : ''}>${label} (${count})</button>`;
+      const s = data.summary;
+      const approval = (x) => {
+        if (x.status === 'approved') return '완료';
+        if (x.status === 'submitted' && x.progress) return `승인 ${x.progress.approved}/${x.progress.total}${x.my_slot ? ' · <b class="te-my-turn">▸ 내 차례</b>' : ''}`;
+        if (x.status === 'rejected') return '<span class="te-hint">반려</span>';
+        return '<span class="te-hint">–</span>';
+      };
+      const counts = (c) => (c ? `O ${c.O} · <span class="${c.X ? 'te-judge-ng' : ''}">X ${c.X}</span> · NA ${c.NA}${c.blank ? ` · 빈칸 ${c.blank}` : ''}` : '–');
+      const dayRow = (x) => {
+        const d = x.document;
+        const label = `${mmdd(x.work_date)} (${WEEKDAY[x.weekday % 7]})`;
+        if (!d) return `<tr data-week-day="${x.work_date}" class="te-row-skipped"><td class="te-check-col"></td><td>${label}</td><td colspan="6" class="te-hint">문서 없음 — 아직 만들어지지 않은 날</td></tr>`;
+        return `<tr data-week-day="${x.work_date}" class="${selected.has(d.document_id) ? 'te-row-picked' : ''} ${d.status === 'skipped' ? 'te-row-skipped' : ''}">
+          <td class="te-check-col"><input type="checkbox" data-pick="${d.document_id}" ${selected.has(d.document_id) ? 'checked' : ''}></td>
+          <td>${label}</td>
+          <td><a href="#" class="te-lot-link" data-open-doc="${d.document_id}">#${d.document_id}</a></td>
+          <td>${statusCell(d.status, d.correcting)}</td>
+          <td>${d.inspector_id ? `staff ${esc(d.inspector_id)}` : '<span class="te-hint">-</span>'}</td>
+          <td>${counts(d.check_counts)}</td>
+          <td>${d.nonconforming ? '<span class="te-judge-ng">부적합</span>' : (d.nonconforming === false ? '적합' : '<span class="te-hint">–</span>')}</td>
+          <td>${approval({ ...d, my_slot: d.my_slot })}</td>
+        </tr>`;
+      };
+      body.innerHTML = `
+        <div class="te-bundle-summary" id="wkSummary">
+          <span>${esc(data.type_code)} ${s.documents}건:</span> ${statusSummary(s.status_counts, s.correcting_count) || '<span class="te-hint">문서 없음</span>'}
+          <span style="flex:1"></span><span>내 결재 대기 <b>${s.my_pending}</b></span>
+        </div>
+        <div class="te-bundle-actions">
+          ${btn('wkInspector', '점검자 지정', n.inspector)} ${btn('wkSubmit', '선택 상신', n.submit)} ${btn('wkApprove', '선택 승인', n.approve)} ${btn('wkSkip', '작성 안 함', n.skip)}
+          <span class="te-hint" id="wkPicked">선택 ${picked.length}건${over ? ` — <span class="te-error-text">한 번에 ${max}건까지</span>` : ''}</span>
+          <span style="flex:1"></span>
+          <button class="btn btn-secondary btn-sm" disabled title="주 출력(PRT-SC-04·05)은 P12">주 출력 <span class="te-hint">(P12)</span></button>
+        </div>
+        <div class="te-table-wrap"><table class="data-table" id="wkTable">
+          <thead><tr><th class="te-check-col"><input type="checkbox" id="wkAll" ${rows.length && picked.length === rows.length ? 'checked' : ''} ${rows.length ? '' : 'disabled'} title="문서 있는 날 전체"></th>
+            <th>날짜</th><th>문서</th><th>상태</th><th>점검자</th><th>점검 결과</th><th>판정</th><th>결재</th></tr></thead>
+          <tbody>${data.days.map(dayRow).join('')}</tbody>
+        </table></div>
+        ${data.weekend.length ? `<div class="te-bundle-missing" id="wkWeekend">주말 문서 ${data.weekend.length}건 별도: ${data.weekend.map((x) => `<a href="#" class="te-lot-link" data-open-doc="${x.document.document_id}">${mmdd(x.work_date)} (${WEEKDAY[x.weekday % 7]}) #${x.document.document_id}</a>`).join(', ')}</div>` : ''}`;
+      const $ = (sel) => body.querySelector(sel);
+      body.querySelectorAll('[data-pick]').forEach((c) => c.addEventListener('change', () => {
+        const id = Number(c.dataset.pick);
+        if (c.checked) selected.add(id); else selected.delete(id);
+        this.renderWeek();
+      }));
+      $('#wkAll').addEventListener('change', (e) => {
+        rows.forEach((x) => { if (e.target.checked) selected.add(x.document_id); else selected.delete(x.document_id); });
+        this.renderWeek();
+      });
+      body.querySelectorAll('[data-open-doc]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); this.openFromWeek(Number(a.dataset.openDoc)); }));
+      const B = window.TempEntryApproval.batch;
+      const after = {
+        onDone: () => { this.week.selected = new Set(); this.showWeek(this.week.type, this.week.start, this.week.origin); },
+        openDoc: (id) => { this.week.selected = new Set(); this.openFromWeek(id); },
+      };
+      $('#wkApprove').addEventListener('click', () => B.openApprove(picked, { origin: 'bundle', ...after }));
+      $('#wkSubmit').addEventListener('click', () => B.openSubmit(picked, data.default_slots, after));
+      $('#wkInspector').addEventListener('click', () => B.guardOpen(async () => this.openInspector(picked, after, max)));
+      $('#wkSkip').addEventListener('click', () => B.guardOpen(async () => this.openSkip(picked, { ...after, title: `${data.type_code} ${picked.filter((x) => x.status === 'draft').length}건`, max })));
+    },
+
+    // ================================================= DOC-SC-13 작성 안 함 모달 (P8, F27 — 한 건도 같은 API)
+    // rows: [{document_id, version, status, lot(표시 이름)}]. 작성중만 대상, 나머지는 제외 목록.
+    openSkip(rows, { onDone, openDoc, title, max = 50, single = false }) {
+      const B = window.TempEntryApproval.batch;
+      const targets = rows.filter((x) => x.status === 'draft');
+      const excluded = rows.filter((x) => x.status !== 'draft').map((row) => ({ row, why: `(${T.STATUS[row.status]?.label || row.status} — 작성중만 가능)` }));
+      const m = B.modal(`작성 안 함 — ${title}`);
+      const st = { reason: '', busy: false, error: '' };
+      const render = () => {
+        const text = st.reason.trim();
+        const tooLong = st.reason.length > 200;
+        m.body.innerHTML = `
+          ${st.error}
+          ${single ? '' : `<ul class="te-target-list" id="skTargets">${targets.map((x) => `<li data-target="${x.document_id}">${B.rowName(x)}</li>`).join('') || '<li class="te-hint">작성중인 문서가 없습니다.</li>'}</ul>${B.excludedHtml(excluded)}${B.overLimit(targets.length, max)}`}
+          <label class="form-label">사유 *</label>
+          <div class="te-quick" id="skQuick">${['휴무', '작업 없음'].map((q) => `<button class="btn btn-secondary btn-sm" data-quick="${q}">${q}</button>`).join('')}</div>
+          <input class="form-control ${tooLong ? 'te-field-error' : ''}" id="skReason" maxlength="220" placeholder="직접 입력" value="${esc(st.reason)}">
+          <div class="te-counter" id="skCount">${st.reason.length}/200</div>
+          <p class="te-status-note" style="margin-top:.5rem">결재·미작성 집계에서 빠지고, 출력하면 그 날은 "작성 안 함"으로 나옵니다. [되돌리기]로 다시 작성할 수 있습니다.</p>`;
+        const can = api.staffId && targets.length && targets.length <= max && text && !tooLong && !st.busy;
+        m.footer.innerHTML = `<button class="btn btn-secondary" id="skCancel">취소</button>
+          <button class="btn btn-primary" id="skGo" ${can ? '' : 'disabled'}>${st.busy ? '처리 중…' : (single ? '작성 안 함' : `${targets.length}건 작성 안 함`)}</button>`;
+        const input = m.body.querySelector('#skReason');
+        input.addEventListener('input', (e) => {
+          st.reason = e.target.value;
+          m.body.querySelector('#skCount').textContent = `${st.reason.length}/200`;
+          input.classList.toggle('te-field-error', st.reason.length > 200);
+          m.footer.querySelector('#skGo').disabled = !(api.staffId && targets.length && targets.length <= max && st.reason.trim() && st.reason.length <= 200);
+        });
+        m.body.querySelectorAll('[data-quick]').forEach((b) => b.addEventListener('click', () => { st.reason = b.dataset.quick; render(); }));
+        m.footer.querySelector('#skCancel').addEventListener('click', m.close);
+        m.footer.querySelector('#skGo').addEventListener('click', go);
+      };
+      const go = async () => {
+        st.busy = true;
+        st.error = '';
+        render();
+        const res = await api.post('documents/batch-skip', { items: targets.map((x) => ({ document_id: x.document_id, expected_version: x.version })), reason: st.reason });
+        st.busy = false;
+        if (res.ok && single) {
+          const line = res.data.results[0];
+          if (line.ok) { m.close(); T.toast('작성 안 함으로 바꿨습니다.', 'success'); onDone && onDone(); return; }
+          st.error = `<div class="te-error-box" id="skError"><strong>[${esc(line.error.code)}] ${esc(B.failureText('skip', line.error))}</strong></div>`;
+          render();
+          return;
+        }
+        if (res.ok) { B.showResult(m, 'skip', res.data, targets, { onDone, openDoc }); return; }
+        const details = (res.data && res.data.details) || [];
+        st.error = `<div class="te-error-box" id="skError"><strong>${esc(T.errorText(res))}</strong> 아무것도 처리하지 않았습니다.${details.length ? `<ul>${details.map((e) => `<li>${esc(e.message)}</li>`).join('')}</ul>` : ''}</div>`;
+        T.toast(T.errorText(res), 'error');
+        render();
+      };
+      render();
     },
 
     // ================================================= DOC-SC-11 점검자 일괄 지정 (P7, 컷 ①)
-    openInspector(rows, after) {
+    openInspector(rows, after, max = 50) {
       const B = window.TempEntryApproval.batch;
-      const max = this.bundle.max || 50;
       const targets = rows.filter((x) => EDITABLE.includes(x.status));
       const why = (x) => (x.status === 'completed' ? '작성완료 — 수정하려면 작성 재개' : '결재 중이거나 승인됨');
       const excluded = rows.filter((x) => !EDITABLE.includes(x.status)).map((row) => ({ row, why: `(${why(row)})` }));
@@ -536,6 +756,21 @@
           if (!s.repeat) rows.push({ uid: ++uid, key: s.key, sectionId: null, values: {}, original: null, deleted: false, hints: {} });
         });
       }
+      // P8: date_window 날짜(D11 점검일)가 비어 있으면 기본 = 작업일(월요일, p8-s0 F7) — 저장 전까지 "변경"
+      if (document) {
+        rows.filter((row) => !sectionByKey[row.key]?.repeat).forEach((row) => {
+          sectionByKey[row.key].fields.filter((fd) => fd.date_window && !row.values[fd.key]).forEach((fd) => {
+            row.values[fd.key] = shiftDay(document.work_date, fd.date_window.from);
+            hinted.push(`${row.uid}.${fd.key}`);
+          });
+        });
+      }
+      // P8 F29: 최근 값 제안(datalist)
+      const recent = {};
+      await Promise.all((RECENT_FIELDS[r.data.type_code] || []).map(async (key) => {
+        const res = await api.get(`documents/recent-values?type_code=${encodeURIComponent(r.data.type_code)}&field=${key}`);
+        recent[key] = res.ok ? res.data.items : [];
+      }));
       const basic = document
         ? { subject: document.subject || '', work_date: document.work_date, assignee_id: document.assignee_id ? String(document.assignee_id) : '', due_at: document.due_at ? document.due_at.slice(0, 16) : '' }
         : { subject: '', work_date: today(0), assignee_id: '', due_at: '' };
@@ -543,7 +778,7 @@
         mode: document ? 'edit' : 'create', template: r.data, schema, sectionByKey, document,
         requirement: !!(document && document.record_key),
         rows, basic, originalBasic: { ...basic }, nextUid: uid, errors: {}, errorList: [],
-        pending: pending || [], hinted: new Set(hinted),
+        pending: pending || [], hinted: new Set(hinted), recent,
       };
       if (!document) schema.sections.filter((s) => s.repeat && !s.system_rows).forEach((s) => this.addRow(s.key, false));
       if (problems) this.applyErrors({ code: 'COMPLETION_INCOMPLETE', message: '작성완료할 수 없습니다. 빠진 항목을 채우세요.', details: problems }, {}, true);
@@ -571,7 +806,8 @@
       }
       const staffOptions = ['<option value="">-</option>']
         .concat((T.staff || []).map((id) => `<option value="${id}" ${String(v) === String(id) ? 'selected' : ''}>staff ${id}</option>`)).join('');
-      const hintMark = this.form.hinted.has(`${row.uid}.${field.key}`) ? '<div class="te-hint">자동 제안(같은 LOT 성적서)</div>' : '';
+      const hinted = this.form.hinted.has(`${row.uid}.${field.key}`);
+      const hintMark = hinted ? `<div class="te-hint">${field.date_window ? '기본값(작업일) — 저장하면 확정' : '자동 제안(같은 LOT 성적서)'}</div>` : '';
       switch (field.type) {
         case 'number':
           if (field.display === 'hm') {
@@ -581,7 +817,12 @@
           }
           return `<input type="number" step="any" class="form-control" ${name} value="${esc(v)}">`;
         case 'time': return `<input type="time" class="form-control" ${name} value="${esc(v)}">`;
-        case 'date': return `<input type="date" class="form-control" ${name} value="${esc(v)}">`;
+        case 'date': {
+          // P8 date_window(VR-P8-02): 작업일 + from ~ + to 안에서만 고르게
+          const w = field.date_window;
+          const range = w ? `min="${shiftDay(this.form.basic.work_date, w.from)}" max="${shiftDay(this.form.basic.work_date, w.to)}"` : '';
+          return `<input type="date" class="form-control" ${name} value="${esc(v)}" ${range}>${hintMark}`;
+        }
         case 'datetime': {
           // 날짜 기본값 = 작업일(D-051 F11). 시각을 넣어야 값이 생긴다.
           const date = v ? v.slice(0, 10) : this.form.basic.work_date;
@@ -591,7 +832,12 @@
         case 'bool': return `<input type="checkbox" ${name} ${v === true ? 'checked' : ''}>`;
         case 'staff': return `<select class="form-control" ${name}>${staffOptions}</select>`;
         case 'select': return `<select class="form-control" ${name}><option value="">-</option>${field.options.map((o) => `<option value="${esc(o)}" ${o === v ? 'selected' : ''}>${esc(optionLabel(field, o))}</option>`).join('')}</select>${hintMark}`;
-        default: return `<input type="text" class="form-control" ${name} value="${esc(v)}" ${field.max_length ? `maxlength="${field.max_length}"` : ''}>`;
+        default: {
+          const recent = this.form.recent && this.form.recent[field.key];
+          const list = recent ? ` list="dl-${row.uid}-${field.key}"` : '';
+          const options = recent ? `<datalist id="dl-${row.uid}-${field.key}">${recent.map((x) => `<option value="${esc(x)}">`).join('')}</datalist>${recent.length ? `<div class="te-hint">최근: ${recent.slice(0, 5).map(esc).join(', ')}</div>` : ''}` : '';
+          return `<input type="text" class="form-control" ${name} value="${esc(v)}" ${field.max_length ? `maxlength="${field.max_length}"` : ''}${list}>${options}`;
+        }
       }
     },
 
@@ -686,6 +932,62 @@
       return msg ? `<div class="te-error-text">${esc(msg)}</div>` : '';
     },
 
+    // ================================================= P8 점검표 섹션 (DOC-SC-03·04, p8-s1-screens 2·3장)
+    // 주기·관리 칸은 같은 값이 이어지면 〃. "미리" = N1이 채운 값(prefilled)을 아직 안 바꾼 칸(문서 version 1일 때만 옴)
+    checkRows(s, values, cell) {
+      let prev = {};
+      return s.fields.map((fd) => {
+        const same = (k) => fd[k] && fd[k] === prev[k];
+        const line = `<tr data-check="${fd.key}" class="${values[fd.key] === 'X' ? 'te-check-row-ng' : ''}">
+          <td class="te-check-cad">${same('cadence') ? '<span class="te-ditto">〃</span>' : esc(fd.cadence || '')}</td>
+          <td class="te-check-grp">${same('cadence') && same('group') ? '<span class="te-ditto">〃</span>' : esc(fd.group || '')}</td>
+          <td>${esc(fd.label)}${fd.required ? ' *' : ''}</td>
+          <td class="te-nowrap">${cell(fd)}</td></tr>`;
+        prev = fd;
+        return line;
+      }).join('');
+    },
+
+    checklistFormHtml(s, row, sectionErr) {
+      const f = this.form;
+      const pre = new Set((f.document && f.document.prefilled) || []);
+      const daily = s.fields.filter(isDaily);
+      const cell = (fd) => {
+        const v = row.values[fd.key];
+        if (!isResult(fd)) return `${fd.type === 'date' ? '<span class="te-hint">실시일</span> ' : ''}${this.fieldInput(fd, v, row)}${this.errorFor(row.uid, fd.key)}`;
+        const untouched = v !== undefined && v === (row.original || {})[fd.key];
+        return `<span class="te-ox" data-ox="${row.uid}.${fd.key}">${fd.options.map((o) => `<button type="button" data-v="${esc(o)}" class="${v === o ? 'te-on' : ''}">${esc(optionLabel(fd, o))}</button>`).join('')}</span>
+          ${pre.has(`${s.key}.${fd.key}`) && untouched ? '<span class="te-prefilled" title="새 문서에 미리 채운 값 — 바꿀 수 있음">미리</span>' : ''}
+          ${v === 'X' ? '<span class="te-judge-ng" title="저장 뒤 상세에서 이탈·개선조치를 적으세요">⚠</span>' : ''}${this.errorFor(row.uid, fd.key)}`;
+      };
+      const ng = isNonconforming(s, row.values);
+      return `<div class="te-section${ng ? ' te-section-ng' : ''}" id="teChecklist">
+        <div class="te-section-head"><span class="te-section-title">${esc(s.label)} <span class="te-hint">${s.fields.filter(isResult).length}항목 · 다시 누르면 빈칸</span></span>
+          ${daily.length ? `<button class="btn btn-secondary btn-sm" data-all-o="${row.uid}" id="teAllO" title="매일 항목 ${daily.length}개 중 빈칸만 O로(이미 고른 값은 그대로)">매일 항목 모두 O</button>` : ''}</div>${sectionErr}
+        ${ng ? '<div class="te-error-text">X(불량·부적합)가 있습니다 — 저장한 뒤 상세 화면에서 이탈·개선조치를 1건 이상 적어야 작성완료할 수 있습니다.</div>' : ''}
+        <div class="te-table-wrap"><table class="data-table te-check-table">
+          <thead><tr><th>주기</th><th>관리</th><th>검증 내용</th><th>결과</th></tr></thead>
+          <tbody>${this.checkRows(s, row.values, cell)}</tbody></table></div></div>`;
+    },
+
+    checklistDetailHtml(s, d, detail) {
+      const v = ((d.sections.find((x) => x.section_def === s.key) || {}).values) || {};
+      const canDev = detail && api.staffId && d.status !== 'skipped';
+      const cell = (fd) => {
+        const value = v[fd.key];
+        if (!isResult(fd)) return value ? `<span class="te-hint">실시일</span> ${esc(value)}` : '<span class="te-hint">-</span>';
+        if (!value) return '<span class="te-hint">빈칸</span>';
+        const text = esc(optionLabel(fd, value));
+        if (value !== 'X') return value === 'NA' ? `<span class="te-hint">${text}</span>` : text;
+        return `<span class="te-judge-ng">⚠ ${text}</span>${canDev ? ` <button class="btn btn-secondary btn-sm te-dev-add" data-dev-for="" data-dev-text="${esc(`${fd.label} — 불량`)}">개선조치 추가</button>` : ''}`;
+      };
+      const ng = isNonconforming(s, v);
+      return `<div class="te-section${ng ? ' te-section-ng' : ''}"><div class="te-section-title">${esc(s.label)}${ng ? ' <span class="te-judge-ng">⚠ 부적합</span>' : ''}</div>
+        <div class="te-table-wrap"><table class="data-table te-check-table" id="teCheckView">
+          <thead><tr><th>주기</th><th>관리</th><th>검증 내용</th><th>결과</th></tr></thead>
+          <tbody>${this.checkRows(s, v, cell)}</tbody></table></div></div>`;
+    },
+
     guideHtml(schema) {
       if (!schema.guide || !schema.guide.length) return '';
       return `<details class="te-guide" id="teGuide"><summary>고정 안내 (관리기준) 펼치기</summary>
@@ -709,6 +1011,7 @@
       const sectionsHtml = f.schema.sections.map((s) => {
         const rows = f.rows.filter((r) => r.key === s.key);
         const sectionErr = f.errors[`section.${s.key}`] ? `<div class="te-error-text" data-error-section="${s.key}">${esc(f.errors[`section.${s.key}`])}</div>` : '';
+        if (isChecklist(s)) return this.checklistFormHtml(s, rows[0], sectionErr);
         if (!s.repeat) {
           const row = rows[0];
           const ng = row && isNonconforming(s, row.values) ? ' te-section-ng' : '';
@@ -808,6 +1111,18 @@
         el.addEventListener('input', handler);
         el.addEventListener('change', handler);
       });
+      // P8 점검표: O/X/해당 없음 버튼(다시 누르면 빈칸), [매일 항목 모두 O](빈칸만)
+      root.querySelectorAll('[data-ox] button').forEach((b) => b.addEventListener('click', () => {
+        const [uid, key] = b.parentElement.dataset.ox.split('.');
+        const row = f.rows.find((x) => x.uid === Number(uid));
+        if (row.values[key] === b.dataset.v) delete row.values[key]; else row.values[key] = b.dataset.v;
+        this.renderForm();
+      }));
+      root.querySelectorAll('[data-all-o]').forEach((b) => b.addEventListener('click', () => {
+        const row = f.rows.find((x) => x.uid === Number(b.dataset.allO));
+        f.sectionByKey[row.key].fields.filter(isDaily).forEach((fd) => { if (!row.values[fd.key]) row.values[fd.key] = 'O'; });
+        this.renderForm();
+      }));
       root.querySelectorAll('[data-add]').forEach((b) => b.addEventListener('click', () => this.addRow(b.dataset.add)));
       root.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', () => {
         const row = f.rows.find((r) => r.uid === Number(b.dataset.del));
@@ -984,6 +1299,9 @@
       const fixing = d.correction || null; // 정정 진행 중(정정 중·작성완료·결재중)
       const canCorrect = d.status === 'approved' && !fixing;
       const canDelete = d.status === 'draft' && !d.submitted_at && !d.record_key && !fixing; // 정정 중 숨김
+      // P8: 작성 안 함 = 작성중 + 주기 작성 요구 문서(skippable 양식 + record_key), 되돌리기 = 작성 안 함일 때(p8-s1 6장)
+      const canSkip = d.status === 'draft' && d.skippable && !!d.record_key;
+      const skipped = d.status === 'skipped';
       // 유효 승인본(가장 큰 attempt의 승인 회차, APR A5 effective) — 정정 배너용
       let effective = null;
       if (fixing) {
@@ -1001,6 +1319,9 @@
       if (d.status === 'approved') notes.approved = '승인된 문서는 수정할 수 없습니다. 고쳐야 하면 [정정 시작]을 누르세요.';
       if (d.status === 'draft' && d.submitted_at) notes.draft = '상신 이력이 있어 삭제할 수 없습니다.';
       if (d.status === 'draft' && d.record_key) notes.draft = '작성 요구로 만들어진 문서입니다. 삭제할 수 없습니다.';
+      if (canSkip) notes.draft = '주기 작성 요구 문서입니다. 삭제할 수 없고, 휴무 등 작성하지 않는 날은 [작성 안 함]을 누르세요.';
+      if (skipped) notes.skipped = `작성 안 함: <b>${esc(d.skip.reason)}</b> — staff ${esc(d.skip.by)}, ${T.fmtDateTime(d.skip.at)}. 다시 작성하려면 [되돌리기](입력했던 값은 그대로).`;
+      const counts = checkCounts(schema, d);
       const info = d.sections.find((s) => s.section_def === 'info');
       const inspector = info && info.values.inspector ? `<span>점검자 <b>staff ${esc(info.values.inspector)}</b></span>` : '';
       const sections = this.sectionsHtml(schema, d, { detail: true });
@@ -1017,10 +1338,12 @@
                 ${canReopen ? `<button class="btn btn-secondary btn-sm" id="btnReopen" ${api.staffId ? '' : 'disabled'}>작성 재개</button>` : ''}
                 ${canCorrect ? `<button class="btn btn-warning btn-sm" id="btnCorrect" ${api.staffId ? '' : 'disabled title="현재 사용자를 선택하세요"'}>정정 시작</button>` : ''}
                 ${canDelete ? `<button class="btn btn-danger btn-sm" id="btnDelete" ${api.staffId ? '' : 'disabled'}>삭제</button>` : ''}
+                ${canSkip ? `<button class="btn btn-secondary btn-sm" id="btnSkip" ${api.staffId ? '' : 'disabled'}>작성 안 함</button>` : ''}
+                ${skipped ? `<button class="btn btn-primary btn-sm" id="btnUnskip" ${api.staffId ? '' : 'disabled'}>되돌리기</button>` : ''}
               </div>
             </div>
             ${fixing ? this.correctionBanner(d, fixing, effective) : ''}
-            ${notes[d.status] ? `<div class="te-status-note">${notes[d.status]}</div>` : ''}
+            ${notes[d.status] ? `<div class="${skipped ? 'te-skip-note' : 'te-status-note'}" id="teStatusNote">${notes[d.status]}</div>` : ''}
             <div class="te-meta">
               <span>대상 <b id="teTarget">${targetHtml(d)}</b></span><span>작업일 <b>${d.work_date}</b></span>
               <span>작성자 <b>staff ${d.created_by}</b></span><span>담당자 <b>${d.assignee_id ? `staff ${d.assignee_id}` : '-'}</b></span>${inspector}
@@ -1031,9 +1354,11 @@
               ${d.completed_at ? `<span id="teCompleted">작성완료 ${T.fmtDateTime(d.completed_at)} (staff ${d.completed_by})</span>` : ''}
               ${d.submitted_at ? `<span>상신 ${T.fmtDateTime(d.submitted_at)}</span>` : ''}<span class="te-hint">v${d.version}</span>
             </div>
+            ${WEEK_TYPES.includes(d.template.type_code) ? '<div class="te-meta" id="teWeekStrip"></div>' : ''}
+            ${counts ? `<div class="te-check-sum" id="teCheckSum"><span>점검표: ${countsText(counts)}</span>${counts.blank && COMPLETABLE.includes(d.status) ? '<span class="te-hint">빈칸이 있으면 작성완료할 수 없습니다</span>' : ''}</div>` : ''}
             ${this.guideHtml(schema)}
             ${sections}
-            ${schema.files ? `<div class="te-placeholder" id="teFiles">증빙 파일 ${d.files.length}개${d.files.length ? `: ${d.files.map((x) => esc(x.original_name)).join(', ')}` : ''} — 파일 올리기·불러오기 화면은 스프린트 3(D-058). 작성완료에는 파일이 ${schema.files.min}개 이상 필요합니다.</div>` : ''}
+            ${schema.files ? '<div id="teFiles"></div>' : ''}
             <div id="teDeviationArea"></div>
             <div id="teApprovalArea"></div>
           </div>
@@ -1045,6 +1370,11 @@
       $('#btnDelete')?.addEventListener('click', () => this.confirmDelete(d));
       $('#btnComplete')?.addEventListener('click', () => this.confirmComplete(d, schema));
       $('#btnReopen')?.addEventListener('click', () => this.reopen(d));
+      $('#btnSkip')?.addEventListener('click', () => this.openSkip(
+        [{ document_id: d.document_id, version: d.version, status: d.status, lot: `${d.work_date} (${dow(d.work_date)})` }],
+        { title: `${d.work_date} (${dow(d.work_date)}) ${d.template.name}`, single: true, onDone: () => this.showDetail(d.document_id) },
+      ));
+      $('#btnUnskip')?.addEventListener('click', () => this.unskip(d));
       $('#btnCorrect')?.addEventListener('click', () => this.openCorrection(d, effective));
       $('#btnFixCancel')?.addEventListener('click', () => this.cancelCorrection(d, effective));
       $('#btnEffective')?.addEventListener('click', () => {
@@ -1059,16 +1389,22 @@
         this.renderDeviations(d, schema);
         this.root.querySelector('#teDeviationArea').scrollIntoView({ block: 'center' });
       }));
-      this.renderDeviations(d, schema);
+      // 작성 안 함: 이탈·개선조치는 있으면 읽기만, 결재 영역 숨김(p8-s1 3장·6장)
+      if (skipped) {
+        if ((d.deviations || []).length) $('#teDeviationArea').innerHTML = this.deviationsHtml(schema, d);
+      } else this.renderDeviations(d, schema);
+      if (schema.files) this.renderFiles(d, schema);
+      if (WEEK_TYPES.includes(d.template.type_code)) this.renderWeekStrip(d);
       // P3 결재 영역 (WF-SC-01) — temp-entry/approval/approval.js
       const area = $('#teApprovalArea');
-      if (window.TempEntryApproval) window.TempEntryApproval.mountArea(area, d, () => this.showDetail(id));
+      if (window.TempEntryApproval && !skipped) window.TempEntryApproval.mountArea(area, d, () => this.showDetail(id));
     },
 
     // 문서 내용(섹션) 읽기 전용 표시. 결재 요청 상세(WF-SC-04)도 스냅샷을 이 함수로 그린다.
     sectionsHtml(schema, d, { detail = false } = {}) {
       return schema.sections.map((s) => {
         const rows = d.sections.filter((x) => x.section_def === s.key);
+        if (isChecklist(s)) return this.checklistDetailHtml(s, d, detail);
         if (!s.repeat) {
           const v = rows[0] ? rows[0].values : {};
           const hints = (rows[0] && rows[0].hints) || {}; // P7 S6(ISS-025): 반복 아닌 섹션(D03 v2 검사)도 자동 제안 표시
@@ -1128,6 +1464,193 @@
         return `<span class="${bad ? 'te-judge-ng' : 'te-judge-ok'}">${bad ? '⚠ ' : ''}${esc(value)}</span>`;
       }
       return esc(optionLabel(field, value));
+    },
+
+    // ================================================= DOC-SC-07 첨부 파일 영역 (스프린트 3, D01·D02)
+    // 올리기는 파일마다 한 요청(multipart, A11) — 한 파일이 실패해도 나머지는 올린다(형식·크기 오류는 파일별 표시).
+    // 올리기·연결·끊기마다 문서 버전 +1 → 다음 요청은 응답의 document_version을 쓴다. 상세 화면에서만(폼 저장과 별개).
+    fileSize(n) {
+      if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)}MB`;
+      return `${Math.max(1, Math.round(n / 1024))}KB`;
+    },
+
+    renderFiles(d, schema) {
+      const el = this.root.querySelector('#teFiles');
+      if (!el) return;
+      const rule = schema.files || {};
+      const can = EDITABLE.includes(d.status);
+      const results = this.fileResults && this.fileResults.documentId === d.document_id ? this.fileResults.lines : [];
+      this.fileResults = null;
+      const icon = (mime) => (mime === 'application/pdf' ? '📄' : '🖼');
+      const shared = (x) => (x.shared_count > 1 ? `<span class="te-file-shared" title="같은 파일을 다른 문서도 씁니다(끊어도 파일은 남음)">다른 문서 ${x.shared_count - 1}곳과 공유</span>` : '<span class="te-hint">이 문서</span>');
+      const lockedNote = {
+        completed: '작성완료 문서입니다. 파일을 바꾸려면 [작성 재개]를 누르세요.',
+        submitted: '결재 중인 문서는 파일을 볼 수만 있습니다.',
+        approved: '승인된 문서는 파일을 볼 수만 있습니다. 고쳐야 하면 [정정 시작].',
+      };
+      el.innerHTML = `
+        <div class="te-section te-files" id="teFileArea">
+          <div class="te-section-head"><span class="te-section-title">증빙 파일 <span class="te-hint" id="teFileCount">${d.files.length}개 · PDF·JPG·PNG, 파일당 20MB 이하${rule.min ? ` · 작성완료에는 ${rule.min}개 이상` : ''}</span></span></div>
+          ${rule.kinds ? `<p class="te-hint">서류 종류(${rule.kinds.map(esc).join(' / ')})는 기본정보의 [서류 종류]에서 고릅니다.</p>` : ''}
+          ${results.length ? `<ul class="te-result-list" id="teFileResults">${results.map((x) => (x.ok
+            ? `<li class="te-result-ok-line">✅ <b>${esc(x.name)}</b> <span>${esc(x.text)}</span></li>`
+            : `<li class="te-result-fail-line">⚠ <b>${esc(x.name)}</b> <span>${esc(x.text)}</span></li>`)).join('')}</ul>` : ''}
+          <div class="te-table-wrap"><table class="data-table" id="teFileTable">
+            <thead><tr><th>파일</th><th>크기</th><th>올린 사람·시각</th><th>연결</th><th></th></tr></thead>
+            <tbody>${d.files.map((x) => `<tr data-file="${x.file_id}">
+              <td>${icon(x.mime_type)} ${esc(x.original_name)}</td>
+              <td class="te-nowrap">${this.fileSize(x.size_bytes)}</td>
+              <td class="te-nowrap">staff ${esc(x.uploaded_by)} · ${T.fmtDateTime(x.uploaded_at)}</td>
+              <td>${shared(x)}</td>
+              <td class="te-nowrap"><a class="btn btn-secondary btn-sm" href="/api/v1/files/${x.file_id}" target="_blank" rel="noopener" data-file-view="${x.file_id}">보기</a>
+                ${can ? `<button class="btn btn-secondary btn-sm" data-file-detach="${x.file_id}" title="이 문서에서 연결 끊기" ${api.staffId ? '' : 'disabled'}>✕</button>` : ''}</td>
+            </tr>`).join('') || `<tr><td colspan="5" class="te-empty">${can ? '아직 올린 파일이 없습니다. 아래에서 파일을 고르거나 끌어 놓으세요.' : '파일이 없습니다.'}</td></tr>`}</tbody>
+          </table></div>
+          ${can ? `<div class="te-file-actions">
+              <label class="te-dropzone ${api.staffId ? '' : 'te-disabled'}" id="teDrop">
+                <input type="file" id="teFileInput" multiple accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" hidden ${api.staffId ? '' : 'disabled'}>
+                📎 파일 선택 / 끌어 놓기 <span class="te-hint">(여러 개 가능)</span>
+              </label>
+              <button class="btn btn-secondary btn-sm" id="teFilePick" ${api.staffId ? '' : 'disabled'}>이전 파일 불러오기</button>
+              ${api.staffId ? '' : '<span class="te-hint">현재 사용자를 선택하세요.</span>'}
+            </div>` : (lockedNote[d.status] ? `<p class="te-hint">${lockedNote[d.status]}</p>` : '')}
+        </div>`;
+      if (!can || !api.staffId) return;
+      const input = el.querySelector('#teFileInput');
+      const drop = el.querySelector('#teDrop');
+      input.addEventListener('change', () => { if (input.files.length) this.uploadFiles(d, [...input.files]); });
+      ['dragenter', 'dragover'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add('te-drop-over'); }));
+      ['dragleave', 'drop'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove('te-drop-over'); }));
+      drop.addEventListener('drop', (e) => { const list = [...(e.dataTransfer?.files || [])]; if (list.length) this.uploadFiles(d, list); });
+      el.querySelector('#teFilePick').addEventListener('click', () => this.openFilePicker(d, schema));
+      el.querySelectorAll('[data-file-detach]').forEach((b) => b.addEventListener('click', () => {
+        const file = d.files.find((x) => x.file_id === Number(b.dataset.fileDetach));
+        this.detachFile(d, file);
+      }));
+    },
+
+    // 파일마다 한 요청. 버전 충돌이면 최신 버전을 읽어 한 번 더(다른 사람이 그사이 저장한 경우)
+    async fileRequests(d, jobs) {
+      let version = d.version;
+      const lines = [];
+      for (const job of jobs) {
+        let res = await job.send(version);
+        if (!res.ok && res.data && res.data.code === 'VERSION_CONFLICT') {
+          const latest = await api.get(`documents/${d.document_id}`);
+          if (latest.ok) { version = latest.data.version; res = await job.send(version); }
+        }
+        if (res.ok) { version = res.data.document_version; lines.push({ ok: true, name: job.name, text: job.okText }); continue; }
+        const detail = res.data && res.data.details && res.data.details[0];
+        lines.push({ ok: false, name: job.name, text: `[${res.data?.code || res.status}] ${detail?.message || T.errorText(res)}` });
+        if (res.data && ['DOCUMENT_LOCKED', 'DOCUMENT_NOT_FOUND'].includes(res.data.code)) break;  // 뒤 파일도 같은 이유로 실패
+      }
+      return lines;
+    },
+
+    async uploadFiles(d, files) {
+      const area = this.root.querySelector('#teFileArea');
+      if (area) area.classList.add('te-busy');
+      T.toast(`파일 ${files.length}개를 올리는 중…`, 'info');
+      const lines = await this.fileRequests(d, files.map((f) => ({
+        name: f.name, okText: `올림 (${this.fileSize(f.size)})`,
+        send: (version) => { const fd = new FormData(); fd.append('file', f); fd.append('expected_version', String(version)); return api.upload(`documents/${d.document_id}/files`, fd); },
+      })));
+      const ok = lines.filter((x) => x.ok).length;
+      T.toast(`파일 ${files.length}개 중 ${ok}개를 올렸습니다.`, ok === files.length ? 'success' : 'error');
+      this.fileResults = { documentId: d.document_id, lines };
+      this.showDetail(d.document_id);
+    },
+
+    async detachFile(d, file) {
+      const msg = file.shared_count > 1
+        ? `<b>${esc(file.original_name)}</b>의 연결을 끊습니다.<br><span class="te-hint">다른 문서도 쓰는 파일이라 파일은 남습니다.</span>`
+        : `<b>${esc(file.original_name)}</b>의 연결을 끊습니다.<br><span class="te-hint">어디에도 쓰이지 않게 되면 파일도 지웁니다(상신된 적 있는 파일은 보존).</span>`;
+      if (!(await T.confirm('파일 연결 끊기', msg, '연결 끊기', 'btn-danger'))) return;
+      const lines = await this.fileRequests(d, [{ name: file.original_name, okText: '연결 끊음', send: (version) => api.del(`documents/${d.document_id}/files/${file.file_id}?expected_version=${version}`) }]);
+      if (lines[0].ok) T.toast('연결을 끊었습니다.', 'success'); else T.toast(lines[0].text, 'error');
+      this.fileResults = lines[0].ok ? null : { documentId: d.document_id, lines };
+      this.showDetail(d.document_id);
+    },
+
+    // ================================================= DOC-SC-08 이전 성적서 불러오기 (F18 검색 → F15 연결)
+    openFilePicker(d, schema) {
+      const B = window.TempEntryApproval && window.TempEntryApproval.batch;
+      if (!B) return;
+      const info = (d.sections.find((x) => x.section_def === 'info') || {}).values || {};
+      const linked = new Set(d.files.map((x) => x.file_id));
+      const st = { item: info.item_name || '', supplier: info.supplier_name || '', days: '90', page: 1, data: null, picked: new Set(), error: '', busy: false };
+      const m = B.modal(`이전 파일 불러오기 — ${d.template.name}`);
+      const search = async () => {
+        const q = new URLSearchParams({ type_code: d.template.type_code, days: st.days, page: String(st.page) });
+        if (st.item.trim()) q.set('item', st.item.trim());
+        if (st.supplier.trim()) q.set('supplier', st.supplier.trim());
+        const r = await api.get(`files?${q}`);
+        st.data = r.ok ? r.data : null;
+        st.error = r.ok ? '' : `<div class="te-error-box" id="fpError">${esc(T.errorText(r))}</div>`;
+        render();
+      };
+      const render = () => {
+        const items = st.data ? st.data.items : [];
+        const pages = st.data ? Math.max(1, Math.ceil(st.data.total / st.data.page_size)) : 1;
+        m.body.innerHTML = `
+          <p class="te-hint">같은 양식(${esc(d.template.type_code)})의 파일만 찾습니다. 연결하면 파일을 복사하지 않고 이 문서에도 붙입니다.</p>
+          <div class="te-filters" id="fpFilters">
+            <div class="form-group"><label class="form-label">품명</label><input class="form-control" id="fpItem" maxlength="50" value="${esc(st.item)}"></div>
+            <div class="form-group"><label class="form-label">매입처</label><input class="form-control" id="fpSupplier" maxlength="50" value="${esc(st.supplier)}"></div>
+            <div class="form-group"><label class="form-label">기간</label><select class="form-control" id="fpDays">${[['30', '최근 30일'], ['90', '최근 90일'], ['180', '최근 180일'], ['365', '최근 1년']].map(([v, l]) => `<option value="${v}" ${st.days === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+            <button class="btn btn-secondary" id="fpSearch">검색</button>
+          </div>
+          ${st.error}
+          <div class="te-table-wrap"><table class="data-table" id="fpTable">
+            <thead><tr><th class="te-check-col"></th><th>파일</th><th>대상(LOT)</th><th>문서</th><th>올린 날</th></tr></thead>
+            <tbody>${st.data === null ? '<tr><td colspan="5" class="te-hint">검색 중…</td></tr>' : items.map((x) => {
+              const docs = x.documents || [];
+              const mine = linked.has(x.file_id);
+              return `<tr data-fp="${x.file_id}" class="${st.picked.has(x.file_id) ? 'te-row-picked' : ''}">
+                <td class="te-check-col"><input type="checkbox" data-fp-pick="${x.file_id}" ${mine ? 'disabled' : ''} ${st.picked.has(x.file_id) ? 'checked' : ''}></td>
+                <td>${esc(x.original_name)} <span class="te-hint">${this.fileSize(x.size_bytes)}</span>${mine ? ' <span class="te-hint">(이미 연결)</span>' : ''}</td>
+                <td>${docs.map((y) => esc(y.target_summary || '-')).join('<br>') || '<span class="te-hint">-</span>'}</td>
+                <td>${docs.map((y) => `#${y.document_id}`).join(', ') || '-'}</td>
+                <td class="te-nowrap">${esc(String(x.uploaded_at || '').slice(5, 10))}</td></tr>`;
+            }).join('') || '<tr><td colspan="5" class="te-empty">조건에 맞는 파일이 없습니다.</td></tr>'}</tbody>
+          </table></div>
+          ${st.data && st.data.total > st.data.page_size ? `<div class="te-pager"><button class="btn btn-secondary btn-sm" id="fpPrev" ${st.page <= 1 ? 'disabled' : ''}>‹</button><span>${st.page} / ${pages} · 총 ${st.data.total}개</span><button class="btn btn-secondary btn-sm" id="fpNext" ${st.page >= pages ? 'disabled' : ''}>›</button></div>` : ''}`;
+        m.footer.innerHTML = `<button class="btn btn-secondary" id="fpCancel">취소</button>
+          <button class="btn btn-primary" id="fpLink" ${st.picked.size && !st.busy ? '' : 'disabled'}>${st.busy ? '연결 중…' : `연결 (${st.picked.size})`}</button>`;
+        const $ = (sel) => m.body.querySelector(sel);
+        $('#fpItem').addEventListener('input', (e) => { st.item = e.target.value; });
+        $('#fpSupplier').addEventListener('input', (e) => { st.supplier = e.target.value; });
+        $('#fpDays').addEventListener('change', (e) => { st.days = e.target.value; });
+        $('#fpSearch').addEventListener('click', () => { st.page = 1; search(); });
+        $('#fpPrev')?.addEventListener('click', () => { st.page -= 1; search(); });
+        $('#fpNext')?.addEventListener('click', () => { st.page += 1; search(); });
+        m.body.querySelectorAll('[data-fp-pick]').forEach((c) => c.addEventListener('change', () => {
+          const id = Number(c.dataset.fpPick);
+          if (c.checked) st.picked.add(id); else st.picked.delete(id);
+          render();
+        }));
+        m.footer.querySelector('#fpCancel').addEventListener('click', m.close);
+        m.footer.querySelector('#fpLink').addEventListener('click', link);
+      };
+      const link = async () => {
+        st.busy = true;
+        render();
+        const byId = Object.fromEntries((st.data ? st.data.items : []).map((x) => [x.file_id, x]));
+        const lines = await this.fileRequests(d, [...st.picked].map((id) => {
+          const from = (byId[id].documents || [])[0];
+          return {
+            name: byId[id].original_name, okText: `연결함${from ? ` (#${from.document_id}에서 불러옴)` : ''}`,
+            send: (version) => api.post(`documents/${d.document_id}/files`, { expected_version: version, link_file_id: id }),
+          };
+        }));
+        m.close();
+        const ok = lines.filter((x) => x.ok).length;
+        T.toast(`${lines.length}개 중 ${ok}개를 연결했습니다.`, ok === lines.length ? 'success' : 'error');
+        this.fileResults = { documentId: d.document_id, lines };
+        this.showDetail(d.document_id);
+      };
+      render();
+      search();
     },
 
     // ================================================= 이탈·개선조치 영역 (P4-S1 (5), F19~F21)
@@ -1228,20 +1751,22 @@
       if (data.code === 'COMPLETION_INCOMPLETE') {
         const details = data.details || [];
         const items = details.map((e) => `<li>${esc(this.problemText(e, schema, d.sections))}</li>`).join('');
-        // 이동할 곳: 폼 항목(값·행) → 작성 폼, 개선조치만 → 상세의 개선조치 영역, 파일만 → 이동 없음(스프린트 3)
+        // 이동할 곳: 폼 항목(값·행) → 작성 폼, 개선조치만 → 상세의 개선조치 영역, 파일만 → 상세의 증빙 파일 영역
         const formProblems = details.filter((e) => e.path !== 'deviations' && e.path !== 'files');
         const devProblem = details.some((e) => e.path === 'deviations');
+        const fileProblem = details.some((e) => e.path === 'files');
         const buttons = [{ label: '닫기', value: false }];
         if (formProblems.length && EDITABLE.includes(d.status)) buttons.push({ label: '수정하러 가기', value: 'form', cls: 'btn-primary' });
         else if (devProblem) buttons.push({ label: '개선조치 입력하러 가기', value: 'deviation', cls: 'btn-primary' });
+        else if (fileProblem) buttons.push({ label: '파일 올리러 가기', value: 'files', cls: 'btn-primary' });
         const go = await T.modal({
           title: '작성완료할 수 없습니다',
-          body: `<p>아래 항목을 먼저 채워 주세요.</p><ul class="te-pending" id="teCompleteProblems">${items}</ul>
-            ${details.some((e) => e.path === 'files') ? '<p class="te-hint">파일 올리기 화면은 스프린트 3에서 제공됩니다.</p>' : ''}`,
+          body: `<p>아래 항목을 먼저 채워 주세요.</p><ul class="te-pending" id="teCompleteProblems">${items}</ul>`,
           buttons,
         });
         if (go === 'form') this.openForm({ document: d, problems: details });
         else if (go === 'deviation') this.goToDeviation(d, schema);
+        else if (go === 'files') this.root.querySelector('#teFileArea')?.scrollIntoView({ block: 'center' });
         return;
       }
       if (data.code === 'VERSION_CONFLICT') {
@@ -1437,6 +1962,36 @@
     },
 
     // ================================================= DOC-SC-05 삭제 확인
+    // P8 F28 되돌리기: 확인 없이 작성중으로(S1-Q5 a — 작성 재개와 같음)
+    async unskip(d) {
+      const r = await api.post(`documents/${d.document_id}/unskip`, { expected_version: d.version });
+      if (r.ok) { T.toast('작성중으로 되돌렸습니다.', 'success'); this.showDetail(d.document_id); return; }
+      T.toast(T.errorText(r), 'error');
+      this.showDetail(d.document_id);
+    },
+
+    // 같은 주 줄(D10·D12, p8-s1 3장): 월~금 상태 아이콘, 누르면 그날 문서. REQ-A04로 읽음(X-Staff-Id 필요)
+    async renderWeekStrip(d) {
+      const el = this.root.querySelector('#teWeekStrip');
+      if (!el || !api.staffId) return;
+      const start = shiftDay(d.work_date, -((new Date(`${d.work_date}T00:00:00Z`).getUTCDay() + 6) % 7));
+      const r = await api.get(`periodic-bundles?type_code=${encodeURIComponent(d.template.type_code)}&week_start=${start}`);
+      if (!r.ok || !this.root.contains(el)) return;
+      const icon = (x) => {
+        if (!x) return '–';
+        if (x.status === 'skipped') return '⊘';
+        return ['completed', 'submitted', 'approved'].includes(x.status) ? '✅' : '▢';
+      };
+      el.innerHTML = `<span class="te-week-strip">같은 주: ${r.data.days.map((x) => {
+        const label = `${WEEKDAY[x.weekday % 7]} ${icon(x.document)}`;
+        if (x.document && x.document.document_id === d.document_id) return `<span class="te-day te-day-now">${label} (지금)</span>`;
+        if (!x.document) return `<span class="te-day te-hint" title="문서 없음">${label}</span>`;
+        return `<a href="#" data-week-doc="${x.document.document_id}" title="${esc(T.STATUS[x.document.status]?.label || x.document.status)}">${label}</a>`;
+      }).join('')} <a href="#" id="teWeekOpen">주 묶음 ▸</a></span>`;
+      el.querySelectorAll('[data-week-doc]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); this.showDetail(Number(a.dataset.weekDoc)); }));
+      el.querySelector('#teWeekOpen').addEventListener('click', (e) => { e.preventDefault(); this.showWeek(d.template.type_code, start, { page: 'list' }); });
+    },
+
     async confirmDelete(d) {
       const ok = await T.confirm('문서 삭제',
         `문서 #${d.document_id} (${esc(d.template.name)}, ${d.work_date})를 삭제합니다.<br>목록에서 사라지지만 기록은 삭제자·삭제 시각과 함께 보존됩니다.`,

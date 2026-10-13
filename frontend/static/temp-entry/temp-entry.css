@@ -175,3 +175,34 @@
 #bdTable .mono, .te-bundle-missing .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
 .te-excluded summary { cursor: pointer; font-weight: 600; }
 .te-excluded ul { margin: 0.3rem 0 0 1.1rem; display: grid; gap: 0.15rem; }
+
+/* ---------- 스프린트 3 파일 영역 DOC-SC-07·08 ---------- */
+.te-files { margin-top: 1.25rem; }
+.te-file-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin-top: 0.6rem; }
+.te-dropzone { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.55rem 1rem; border: 1.5px dashed var(--border-strong); border-radius: var(--radius-md); cursor: pointer; font-size: 0.85rem; }
+.te-dropzone:hover, .te-drop-over { border-color: var(--brand-primary); background: #eef4ff; }
+.te-dropzone.te-disabled { opacity: 0.5; cursor: not-allowed; }
+.te-file-shared { font-size: 0.75rem; padding: 0.05rem 0.4rem; border-radius: 999px; background: #fff4e5; color: #8a5300; }
+.te-busy { opacity: 0.6; pointer-events: none; }
+
+/* ---------- P8 점검표·작성 안 함 ---------- */
+.badge.te-badge-skipped { background: #eceff1; color: #78909c; border: 1px dashed #b0bec5; }
+.te-check-table input[type=date] { width: auto; display: inline-block; min-width: 9.5rem; }
+.te-check-table td { vertical-align: middle; }
+.te-check-table .te-check-cad, .te-check-table .te-check-grp { white-space: nowrap; color: var(--text-muted); font-size: 0.78rem; }
+.te-check-table .te-ditto { color: #b0bec5; }
+.te-ox { display: inline-flex; gap: 0.25rem; flex-wrap: wrap; align-items: center; }
+.te-ox button { min-width: 2.4rem; padding: 0.2rem 0.5rem; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: #fff; cursor: pointer; font-size: 0.82rem; }
+.te-ox button.te-on { background: var(--brand-primary); color: #fff; border-color: var(--brand-primary); font-weight: 700; }
+.te-ox button.te-on[data-v="X"] { background: #c62828; border-color: #c62828; }
+.te-ox button.te-on[data-v="NA"] { background: #78909c; border-color: #78909c; }
+.te-ox button:disabled { cursor: default; }
+.te-prefilled { font-size: 0.7rem; color: #78909c; border: 1px dashed #b0bec5; border-radius: 4px; padding: 0 0.25rem; }
+.te-check-row-ng td { background: #fdecea; }
+.te-check-sum { display: flex; gap: 0.9rem; flex-wrap: wrap; font-size: 0.85rem; margin: 0.5rem 0; }
+.te-week-strip { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; font-size: 0.85rem; }
+.te-week-strip a, .te-week-strip span.te-day { padding: 0.1rem 0.45rem; border-radius: var(--radius-md); border: 1px solid var(--border); text-decoration: none; color: inherit; }
+.te-week-strip .te-day-now { border-color: var(--brand-primary); font-weight: 700; }
+.te-skip-note { background: #eceff1; border-radius: var(--radius-md); padding: 0.6rem 0.8rem; margin-top: 0.75rem; font-size: 0.88rem; }
+.te-quick { display: flex; gap: 0.4rem; margin-bottom: 0.4rem; }
+.te-row-skipped td { color: var(--text-muted); }

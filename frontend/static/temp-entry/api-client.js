@@ -33,15 +33,21 @@
       const staff = options.staffId !== undefined ? options.staffId : this.staffId;
       if (staff) headers['X-Staff-Id'] = String(staff);
       let payload;
-      if (body !== undefined && body !== null) {
+      let shown = null;
+      if (body instanceof FormData) {
+        // 스프린트 3 파일 올리기(multipart): Content-Type은 브라우저가 경계값과 함께 채운다
+        payload = body;
+        shown = `[multipart] ${[...body.entries()].map(([k, v]) => (v instanceof File ? `${k}=${v.name} (${v.size}B)` : `${k}=${v}`)).join(', ')}`;
+      } else if (body !== undefined && body !== null) {
         headers['Content-Type'] = 'application/json';
         payload = typeof body === 'string' ? body : JSON.stringify(body);
+        shown = payload;
       }
       const started = performance.now();
       const record = {
         id: log.length + 1,
         at: new Date(),
-        request: { method, url, headers: { ...headers }, body: payload === undefined ? null : payload },
+        request: { method, url, headers: { ...headers }, body: shown },
       };
       try {
         const response = await fetch(url, { method, headers, body: payload, credentials: 'same-origin' });
@@ -67,6 +73,7 @@
 
     get(path, options) { return this.request('GET', path, null, options); },
     post(path, body, options) { return this.request('POST', path, body, options); },
+    upload(path, formData, options) { return this.request('POST', path, formData, options); },
     patch(path, body, options) { return this.request('PATCH', path, body, options); },
     del(path, options) { return this.request('DELETE', path, null, options); },
   };

@@ -13,6 +13,7 @@
     approved: { label: '승인', badge: 'badge-success' },
     rejected: { label: '반려', badge: 'badge-danger' },
     correcting: { label: '정정 중', badge: 'badge-warning' },  // P6 (p6-s1-screens DOC-SC-04)
+    skipped: { label: '작성 안 함', badge: 'badge-neutral te-badge-skipped' },  // P8 (p8-s1-screens 6장, 회색)
   };
 
   const TempEntry = {

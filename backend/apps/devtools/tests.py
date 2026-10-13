@@ -239,3 +239,93 @@ class D03FixtureTests(TestCase):
             [(r["id"], r["status"]) for r in snap["tables"]["lots"]],
             [(made["lot_id"], "AVAILABLE")],
         )
+
+
+@override_settings(ROOT_URLCONF="apps.devtools.test_urls")
+class S3FixtureTests(TestCase):
+    """C3 S5 프리셋 사전 조건: 파일 문서(D01·D02)·P8 점검표(D10·D12·D11)."""
+
+    def setUp(self):
+        import tempfile
+
+        from apps.doc_requirements.tests.base import setup_req
+        from apps.documents.seed import ensure_p8_templates
+
+        setup_req()
+        ensure_p8_templates()
+        self.media = override_settings(MEDIA_ROOT=tempfile.mkdtemp(prefix="haccp-media-"))
+        self.media.enable()
+
+    def tearDown(self):
+        from apps.document_workflow.tests.base import invariant_violations
+
+        self.media.disable()
+        self.assertEqual(invariant_violations(), [])
+
+    def post(self, path, body):
+        import json
+
+        return self.client.post(
+            f"/api/dev/fixtures/{path}", data=json.dumps(body), content_type="application/json"
+        )
+
+    def test_file_doc(self):
+        from apps.documents import services as doc
+
+        draft = self.post("file-doc", {}).json()
+        self.assertEqual((draft["status"], draft["files"]), ("draft", []))
+        done = self.post("file-doc", {"type_code": "D02", "state": "submitted", "files": 2})
+        self.assertEqual(done.status_code, 201, done.content)
+        body = done.json()
+        detail = doc.get_document(body["document_id"])
+        self.assertEqual(detail["template"]["type_code"], "D02")
+        self.assertEqual(body["status"], "submitted")
+        self.assertEqual(
+            [f["mime_type"] for f in detail["files"]], ["application/pdf", "image/png"]
+        )
+        self.assertEqual(self.post("file-doc", {"state": "completed"}).status_code, 400)
+
+    def test_periodic(self):
+        import datetime
+
+        res = self.post(
+            "periodic",
+            {
+                "type_code": "D10",
+                "week_start": "2026-10-12",
+                "days": [
+                    {"weekday": 1, "state": "approved", "x": True},
+                    {"weekday": 2, "state": "skipped"},
+                    {"weekday": 3, "state": "submitted_partial"},
+                    {"weekday": 4, "state": "filled"},
+                    {"weekday": 5},
+                ],
+            },
+        )
+        self.assertEqual(res.status_code, 201, res.content)
+        self.assertEqual(
+            [i["status"] for i in res.json()["items"]],
+            ["approved", "skipped", "submitted", "draft", "draft"],
+        )
+        free = self.post("periodic", {"type_code": "D10"}).json()
+        start = datetime.date.fromisoformat(free["week_start"])
+        self.assertEqual((start.isoweekday(), len(free["items"])), (1, 5))
+        d11 = self.post("periodic", {"type_code": "D11", "days": [{"state": "completed"}]}).json()
+        self.assertEqual(d11["items"][0]["status"], "completed")
+        self.assertEqual(self.post("periodic", {"week_start": "2026-10-13"}).status_code, 400)
+        self.assertEqual(self.post("periodic", {"type_code": "D03"}).status_code, 400)
+
+    def test_seed_p8(self):
+        from apps.devtools.seed_p4 import seed_p8
+        from apps.documents.models import Document
+
+        self.assertEqual(seed_p8("2026-10-14"), 7)  # 수요일: D10·D12 월~수 + D11
+        self.assertEqual(seed_p8("2026-10-14"), 7)
+        statuses = dict(
+            Document.objects.filter(record_key__startswith="D10|").values_list(
+                "work_date", "status"
+            )
+        )
+        self.assertEqual(
+            [statuses[day] for day in sorted(statuses)], ["completed", "skipped", "draft"]
+        )

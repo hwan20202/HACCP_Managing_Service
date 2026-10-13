@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import fixtures, req_api, views
+from . import fixtures, fixtures_s3, req_api, views
 
 urlpatterns = [
     path("snapshot", views.snapshot, name="dev-snapshot"),
@@ -19,4 +19,7 @@ urlpatterns = [
     ),
     # P6 S5: 프리셋 사전 조건(ISS-019)
     path("fixtures/d03", fixtures.d03_fixture, name="dev-fixture-d03"),
+    # 스프린트 3 C3 S5: 파일 업로드(FILE-PS-*)·P8 점검표(P8-PS-*) 사전 조건
+    path("fixtures/file-doc", fixtures_s3.file_doc_fixture, name="dev-fixture-file-doc"),
+    path("fixtures/periodic", fixtures_s3.periodic_fixture, name="dev-fixture-periodic"),
 ]

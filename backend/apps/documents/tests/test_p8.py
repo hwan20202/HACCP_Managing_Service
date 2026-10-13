@@ -639,6 +639,28 @@ class WeekBundleListTests(P8Case):
             [(r["work_date"], r["count"]) for r in rows], [("2026-10-19", 1), (MON, 2)]
         )
 
+    def test_week_row_sorted_by_latest_day(self):
+        """ISS-031(P8-S5-Q1 a): 주 줄은 그 주 가장 늦은 작업일 자리(수요일 문서 → 화요일보다 앞)."""
+        from django.utils import timezone
+
+        periodic("D10", MON)
+        periodic("D10", WED)
+        periodic("D11", MON)
+        now = timezone.now()
+        tue = Document.objects.create(
+            template=self.t["D01"],
+            work_date=TUE,
+            created_by_id=3,
+            status="draft",
+            created_at=now,
+            updated_at=now,
+        )
+        items = self.client.get(f"/api/v1/documents?from={MON}&to={FRI}").json()["items"]
+        order = [(i["kind"], i.get("type_code") or i["template"]["type_code"]) for i in items]
+        self.assertEqual(order, [("bundle", "D10"), ("document", "D01"), ("document", "D11")])
+        self.assertEqual(items[0]["work_date"], MON)  # 표시 날짜는 그대로 월요일
+        self.assertEqual(items[1]["document_id"], tue.document_id)
+
     def test_list_flow_and_queries(self):
         self.week()
         with captured() as steps, CaptureQueriesContext(connection) as ctx:
