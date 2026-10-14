@@ -147,6 +147,7 @@ def _new_lot(day, documents=True):
         received_date=day,
         quantity=100,
         staff_id=ACTOR,
+        expiration_status="NONE",  # 개발 시드: 날짜 없는 원료 LOT은 '소비기한 없음'으로(수불 0007)
         documents=documents,
     )
 

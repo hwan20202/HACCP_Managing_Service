@@ -39,6 +39,7 @@ LOT_KEYS = (
     "received_date",
     "quantity",
     "expiration_date",
+    "expiration_status",  # 수불 0007: 소비기한 유무 KNOWN·NONE. 원료는 날짜 또는 이 값을 직접 선택
     "fail_after",
     "inspection",  # P6 D-080: 입고 화면에서 육안검사까지(형식 검사는 REQ-LOT-00b)
 )
@@ -114,6 +115,10 @@ def _clean_lot(body):
         problems.append(_err("supplier_name", "invalid", "1~50자입니다."))
     data["received_date"] = _date(body, "received_date", problems)
     data["expiration_date"] = _date(body, "expiration_date", problems, required=False)
+    status = body.get("expiration_status")
+    if status not in (None, "KNOWN", "NONE", "UNKNOWN"):
+        problems.append(_err("expiration_status", "invalid", "KNOWN·NONE·UNKNOWN 중 하나입니다."))
+    data["expiration_status"] = status
     if not _number(body.get("quantity")) or body["quantity"] <= 0:
         problems.append(_err("quantity", "invalid", "0보다 큰 수입니다."))
     data["fail_after"] = _fail_after(body, problems)
@@ -222,6 +227,7 @@ def lot_collection(request):
                 quantity=data["quantity"],
                 staff_id=actor,
                 expiration_date=data["expiration_date"],
+                expiration_status=data["expiration_status"],
                 inspection=data["inspection"],
             )
         return _finish(

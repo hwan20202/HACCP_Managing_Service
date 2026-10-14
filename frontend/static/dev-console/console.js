@@ -937,7 +937,7 @@
   }
   // C2: 수불 입고 서비스로 입고 — 구분·단위·원산지는 품목 값(보내지 않음)
   const lotBody = async (day, extra = {}) => ({ item_id: await itemId('유자'), supplier_name: '콘솔농협',
-    received_date: day, quantity: 100, ...extra });
+    received_date: day, quantity: 100, expiration_status: 'NONE', ...extra });  // 원료: 소비기한 유무 명시(수불 0007)
   const d03Of = (lot) => lot.documents.find((d) => d.type_code === 'D03');
   async function lotWhere(pred, what) {
     const hit = (await reqList('lots')).find(pred);

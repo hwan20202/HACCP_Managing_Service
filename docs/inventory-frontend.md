@@ -49,7 +49,8 @@
 | 부자재(포장재) 수불대장 | 부자재 수불대장 | 같은 API, `item_type=PACKAGING` | 3 |
 | 기준정보 관리 | 설정 | `staff/`, `suppliers/`, `items/` | 3 |
 | 기초재고 이관 | 설정 (운영 시작 1회) | `movements/opening-balance/` | 4 |
-| 완제품 수불대장, 생산 | 완제품 수불대장, 생산일지 | 0002 이후 | 생산 개발 후 |
+| 완제품 수불대장 | 완제품 수불대장 | `stock/lots/`, `ledger/` (`item_type=SEMI,FINISHED`) | ✅ 10/15 (`inventory-api.js`) |
+| 제조배치 (생성·시작·투입·산출·완료·취소) | HACCP 관리 > 제조배치 | `batches/`, `batches/<id>/start·usages·outputs·complete·cancel/`, `batches/fefo/`, `stock/lots/`, `ledger/?lot_id=`, 문서 `GET /api/v1/batches/<id>/documents` | ✅ 10/15 (`production-api.js`) |
 | 입고 육안검사 체크리스트 | 입고 등록 안 | 문서 쪽 `get_incoming_inspection_form()` | 문서 쪽 함수 형식 후 |
 
 ## 개발 기준
@@ -77,3 +78,14 @@
 - `prototype/js/modules/inventory-api.js` (`InventoryApiPage`): 재고장(LOT별 현재고)·수불일지 두 탭. 원료·부자재·완제품 메뉴가 이 화면을 씀 (`app.js` 의 3줄, `index.html` 에 스크립트 1줄 추가 — 문서 담당자와 공유 필요). 완제품 메뉴는 반제품(벌크)·완제품을 함께 보여 줌.
 - 소비기한은 날짜가 없으면 "소비기한 없음"(NONE)과 "미확인"(UNKNOWN) 배지로 구분.
 - 조회 전용. 입고 등록·조정·정정 화면은 다음 단계. 기존 `inventory.js` 는 그대로 둠 (다른 화면에서 쓰지 않음).
+
+## 10/15 제조배치 화면 (`production-api.js`, `ProductionApiPage`)
+
+- 메뉴: HACCP 관리 > **제조배치** (`production-batches`). 기존 "생산 일지"(`production.js`, 고정 데이터)는 그대로 둠. `app.js` 2줄·`index.html` 메뉴 1개·스크립트 1줄 추가 — 문서 담당자와 공유 필요
+- 흐름: 반제품(SEMI) 제조배치 생성 → 생산 시작(제조일 = 생산 시작일) → 원료 LOT 선택·투입 → 산출 등록 → 완료 → 재고·수불 확인. 모두 생산 API 로 기록 (SQL 직접 입력 없음)
+- 투입 LOT: 고른 원료의 사용 가능 LOT(`stock/lots/?status=AVAILABLE`, `is_usable`)을 소비기한 빠른 순으로, 투입량을 넣으면 `batches/fefo/` 추천 순위 표시. BOM 이 있으면 기준량·실투입 표와 줄별 "LOT 선택"
+- 산출: 한 배치 = 산출 LOT 하나(0006). 나눠 입력하면 같은 LOT 에 더해짐
+- **CCP 일지 연결 확인**: 생산 시작 뒤 문서 API `GET /api/v1/batches/<id>/documents`(docs_for_batch)로 실제 연결된 CCP 일지를 보여 줌. 시작된 배치에 일지가 없으면 빨간 경고, 제조 기본 공정(1P·2B·3P) 중 빠진 것이 있으면 노란 경고. 문서 쪽 오류(예: 양식 없음)면 생산 시작이 되돌려지고 오류 코드와 메시지를 화면에 표시
+- 재고·수불 확인: 이 배치가 투입한 LOT 과 산출 LOT 마다 수불일지 API(`ledger/?lot_id=`)로 이월·입고·출고·현재고와 이동 기록을 보여 주고, 이 배치의 이동에 "이 배치" 표시. 원료·완제품 수불대장으로 이동 버튼
+- 요청 키: 입력 화면마다 `crypto.randomUUID()` 하나 — 두 번 눌러도 한 번만 등록. 담당자는 화면 위 드롭다운(세션 동안 기억)
+- 검증(10/15): 새 DB + 양식 + 원료 입고 3건으로 브라우저에서 생성 → 시작(CCP 일지 3건) → 투입 2건(FEFO 1순위 자동 선택) → 산출 2회(같은 LOT) → 완료 → 수불 확인, 완제품 수불대장에 산출 LOT 표시. CCP 양식을 비활성화하면 시작 실패(TEMPLATE_INACTIVE)·배치는 계획 상태 유지 확인

@@ -95,6 +95,19 @@ class DevLotApiTests(ReqTestCase):
             self.post("/api/dev/req/lots", LOT_BODY).json()["lot"]["lot_number"], "X01270501-2"
         )
 
+    def test_raw_receipt_needs_explicit_expiration_status(self):
+        """수불 0007: 날짜 없는 원료 입고는 소비기한 유무를 직접 고름(개발 API도 기본값 없음)."""
+        body = {k: v for k, v in LOT_BODY.items() if k != "expiration_date"}
+        self.assertError(self.post("/api/dev/req/lots", body), 400, "INVENTORY_REJECTED")
+        res = self.post("/api/dev/req/lots", {**body, "expiration_status": "NONE"})
+        self.assertEqual(res.status_code, 201, res.content)
+        self.assertEqual(res.json()["lot"]["lot_number"], "X01261011")  # 없음 → 약어 + 입고일
+        self.assertError(
+            self.post("/api/dev/req/lots", {**body, "expiration_status": "X"}),
+            400,
+            "VALIDATION_ERROR",
+        )
+
     def test_tc041_validation_failure_header(self):
         bad = {
             **LOT_BODY,

@@ -122,12 +122,11 @@ def receive_lot(
     판정이 없으면 LOT은 QUARANTINE.
 
     idempotency_key를 주면 같은 키로 다시 불러도 입고가 늘지 않는다(수불 규칙 — 개발 시드용).
-    expiration_status(수불 0007): 소비기한 유무 KNOWN(있음) / NONE(없음). 원료는 둘 중 하나여야
-    입고된다. 개발 도구 기본값: 날짜가 있으면 KNOWN(수불이 정함), 없으면 NONE.
+    expiration_status(수불 0007): 소비기한 유무 KNOWN(있음) / NONE(없음). 원료는 날짜(→ KNOWN)를
+    주거나 이 값을 직접 골라야 입고된다 — 기본값을 넣지 않는다(실제 입고와 같음).
+    날짜 없는 LOT을 '없음'으로 만드는 것은 개발 시드·콘솔 준비(fixtures)만 명시적으로 한다.
     documents=False: 문서 없이 LOT만 — 훅 연결 전에 입고된 LOT 흉내(P7 S5 "문서 없음" 줄 확인용).
     """
-    if expiration_status is None and expiration_date is None:
-        expiration_status = "NONE"
     ensure_default_lot_rules()  # 수불 기본 LOT 번호 규칙(없을 때만 만듦)
     data = ReceiptInput(
         item_id=item_id,

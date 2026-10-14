@@ -279,8 +279,10 @@
             <div class="te-field"><label>입고일 <span class="te-hint">(오늘 이전 — 수불 규칙)</span></label><input type="date" class="form-control" name="received_date" value="${day}" max="${today()}"></div>
             <div class="te-field"><label>수량 <span class="te-hint" id="reqLotUnit">(${esc((receivable[0] || {}).base_unit || '')})</span></label>
               <input type="number" class="form-control" name="quantity" min="0" step="any" value="500"></div>
-            <div class="te-field"><label>소비기한 <span class="te-hint">(선택)</span></label><input type="date" class="form-control" name="expiration_date"></div>
-            <div class="te-field"><label>LOT 번호</label><div class="te-ro-block">수불 규칙으로 자동(LOT 약어 + 입고일)</div></div>
+            <div class="te-field"><label>소비기한 <span class="te-hint">(날짜가 있으면 '있음')</span></label><input type="date" class="form-control" name="expiration_date"></div>
+            <div class="te-field"><label>소비기한 유무 <span class="te-hint">(원료는 날짜 또는 '없음' 선택)</span></label>
+              <select class="form-control" name="expiration_status"><option value="">선택 안 함</option><option value="NONE">없음</option><option value="UNKNOWN">미확인(원료 불가)</option></select></div>
+            <div class="te-field"><label>LOT 번호</label><div class="te-ro-block">수불 규칙으로 자동(원료: 약어 + 소비기한, 없음이면 약어 + 입고일)</div></div>
           </div>
           ${inspectionHtml(section)}
           <label class="te-check te-fail-after"><input type="checkbox" name="fail_after"> 작성 요구 중 오류 내기(롤백 확인용)</label>`,
@@ -293,6 +295,7 @@
             quantity: qty === '' ? null : Number(qty),
           };
           if (v('expiration_date').value) body.expiration_date = v('expiration_date').value;
+          if (v('expiration_status').value) body.expiration_status = v('expiration_status').value;
           if (v('fail_after').checked) body.fail_after = true;
           if (section && v('with_inspection').checked) {
             // 빈 값은 보내지 않는다(필수 누락은 서버 REQ-LOT-00b가 inspection.<키>로 알려 준다)

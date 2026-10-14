@@ -172,7 +172,7 @@ release_hold(hold_id=..., disposition="RELEASE", reason=..., staff_id=...)
 
 - 문서 양식(D01·D02·D03, CCP-1P·2B·3P)이 DB 에 있어야 입고·생산 시작이 됩니다. 없으면 `TEMPLATE_NOT_FOUND` 로 입고가 롤백됩니다. 개발 DB 는 `seed_dev_p4`·`seed_dev_workflow` 가 넣고, 운영 DB 에 양식을 넣는 방법은 문서 쪽과 정해야 합니다.
 - 담당자(`staff_id`)는 문서 쪽에서도 활성 직원이어야 합니다(`INVALID_STAFF`).
-- 문서 쪽 명세의 `create_incoming_inspection`·`get_incoming_inspection_form`·`get_source_document`·`ledger_approved_until` 은 아직 코드에 없습니다. 지금 연결한 것은 실제로 있는 `require_for_lot`·`require_for_batch`·`docs_for_lot` 입니다. 수불대장 잠금(`ledger_approved_until` 이하 날짜의 수불 등록·정정 막기)은 문서 함수가 나오면 반영합니다.
+- 문서 쪽 명세의 `create_incoming_inspection`·`get_incoming_inspection_form`·`get_source_document`·`ledger_approved_until` 은 아직 코드에 없습니다. 지금 연결한 것은 실제로 있는 `require_for_lot`·`require_for_batch`·`docs_for_lot` 입니다. 수불대장 잠금(`ledger_approved_until` 이하 날짜의 수불 등록·정정 막기, 문서 쪽 4장 요청)은 **이번 범위에서 제외**합니다 — 10/14 PM 미팅 D3(결재 여부와 무관하게 소급 수정 허용, 기간 잠금 없음)·D4(수불대장은 시스템 결재 없이 출력까지만). 함수가 생겨도 수불은 부르지 않습니다.
 
 ## 6. 직접 확인하기
 
@@ -189,8 +189,9 @@ python backend\manage.py show_view v_doc_incoming_lot --sql    # 뷰 정의
 
 ## 7. 아직 정해지지 않은 것
 
+결재 후 과거 수불 정정은 정해짐 — 10/14 PM 미팅 D3·D4: 소급 수정 허용, 기간 잠금 없음, 수불대장은 출력까지만. 문서 쪽 수불대장 잠금 요청은 이번 범위에서 제외(5절).
+
 | 항목 | 상태 |
 |---|---|
 | CCP 이탈 보류 연결 | 수불 쪽 함수는 준비됨(아래). 누가 언제 부를지, 해제 조건(개선조치 완료·승인)은 문서 쪽과 합의 필요 |
-| 결재 후 과거 수불 정정 | 제안: 승인된 달은 소급 수불 금지, 정정 이동으로만 기록 → 문서 쪽 "월별 D04 승인 여부" 함수 필요 |
-| 통합 입고 체크리스트 | 5절 문서 쪽 함수 형식 |
+| 통합 입고 체크리스트 | 입고 + 육안검사 값 저장은 연결 완료(5절). 화면 항목 조회 `get_incoming_inspection_form()` 은 문서 쪽 대기 |
