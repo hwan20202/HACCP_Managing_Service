@@ -1,0 +1,833 @@
+"""스프린트 2 작성 요구 양식 정의(v1).
+
+항목·판정 기준은 sprints/sprint2-s0-forms.md(✅ D-051·D-057)와 같다.
+
+모든 양식은 requirement_only(작성 요구로만 생성, P4-S1-Q1). 개선조치는 별도 테이블(D-054)이라
+섹션으로 두지 않고, `deviation`은 확인 대시보드 노출 시점만 정한다(ISS-008).
+"""
+
+GOOD_BAD = ["양호", "불량"]
+OX = ["O", "X"]
+CIRCLE_X = ["○", "X"]
+VERDICT = ["적합", "부적합"]
+NONCONFORMING = {"any": [{"field": "verdict", "eq": "부적합"}]}
+
+
+def _ro(key, label, type_="text", **extra):
+    return {"key": key, "label": label, "type": type_, "readonly": True, **extra}
+
+
+def _verdict(condition):
+    return {
+        "key": "verdict",
+        "label": "판정",
+        "type": "select",
+        "options": VERDICT,
+        "computed": {**condition, "then": "적합", "else": "부적합"},
+    }
+
+
+def _inspector():
+    return {"key": "inspector", "label": "점검자", "type": "staff", "required": True}
+
+
+def _note():
+    return {"key": "note", "label": "비고", "type": "text", "max_length": 200}
+
+
+def _lot_info():
+    return [
+        _ro("lot_number", "LOT"),
+        _ro("item_name", "품명"),
+        _ro("supplier_name", "매입처"),
+        _ro("received_date", "입고일", "date"),
+    ]
+
+
+D01 = {
+    "requirement_only": True,
+    "files": {"min": 1},
+    "guide": [{"title": "안내", "rows": [["첨부", "해당 LOT의 시험성적서(PDF·JPG·PNG)"]]}],
+    "sections": [
+        {"key": "info", "label": "기본정보", "repeat": False, "fields": [*_lot_info(), _note()]}
+    ],
+}
+
+D02 = {
+    "requirement_only": True,
+    "files": {"min": 1, "kinds": ["원산지 증명", "수입면장"]},
+    "guide": [{"title": "안내", "rows": [["첨부", "원산지 증명서 또는 수입면장"]]}],
+    "sections": [
+        {
+            "key": "info",
+            "label": "기본정보",
+            "repeat": False,
+            "fields": [
+                *_lot_info(),
+                {
+                    "key": "doc_kind",
+                    "label": "서류 종류",
+                    "type": "select",
+                    "options": ["원산지 증명", "수입면장"],
+                    "required": True,
+                },
+                _note(),
+            ],
+        }
+    ],
+}
+
+D03 = {
+    "requirement_only": True,
+    "guide": [
+        {
+            "title": "검사 기준",
+            "rows": [
+                ["성상 및 이물혼입", "원료 고유의 색택, 오염·이물 없음"],
+                ["외/내포장", "외포장 파손·내부 오염 흔적 없음, 내포장 훼손 없음"],
+                ["표시사항", "제품별 표기사항 정확"],
+                ["파렛트", "외부오염·파손 없음, 빗물에 젖지 않음(기준 문구만, F3)"],
+            ],
+        }
+    ],
+    "sections": [
+        {"key": "info", "label": "기본정보", "repeat": False, "fields": [_inspector()]},
+        {
+            "key": "lots",
+            "label": "LOT별 검사",
+            "repeat": True,
+            "system_rows": True,
+            "max_rows": 200,
+            "nonconforming": {"any": [{"field": "verdict", "eq": "FAIL"}]},
+            "fields": [
+                _ro("lot_number", "LOT"),
+                _ro("received_date", "입고일", "date"),
+                _ro("supplier_name", "매입처"),
+                _ro("material_kind", "구분"),
+                _ro("item_name", "품명"),
+                _ro("quantity", "중량"),
+                _ro("expiration_date", "소비기한", "date"),
+                {
+                    "key": "appearance",
+                    "label": "성상 및 이물혼입",
+                    "type": "select",
+                    "options": GOOD_BAD,
+                    "required": True,
+                },
+                {
+                    "key": "packaging",
+                    "label": "외/내포장",
+                    "type": "select",
+                    "options": GOOD_BAD,
+                    "required": True,
+                },
+                {
+                    "key": "labeling",
+                    "label": "표시사항",
+                    "type": "select",
+                    "options": GOOD_BAD,
+                    "required": True,
+                },
+                {
+                    "key": "verdict",
+                    "label": "최종판정",
+                    "type": "select",
+                    "options": ["PASS", "FAIL"],
+                    "option_labels": {"PASS": "적합", "FAIL": "부적합"},
+                    "required": True,
+                },
+                {
+                    "key": "has_coa",
+                    "label": "시험성적서",
+                    "type": "select",
+                    "options": ["유", "무"],
+                    "hint": {"kind": "file_exists", "type_code": "D01"},
+                },
+            ],
+        },
+    ],
+}
+
+
+# P6a(D-084·D-088): 육안검사는 LOT마다 문서 1건.
+# 입고 정보(읽기 전용)는 info, 검사 항목은 inspection.
+# 필드 정의는 v1 `lots` 행과 같다(이름·값 그대로).
+D03_V2 = {
+    "requirement_only": True,
+    "guide": D03["guide"],
+    "sections": [
+        {
+            "key": "info",
+            "label": "기본정보",
+            "repeat": False,
+            "fields": [
+                _inspector(),
+                *[dict(f) for f in D03["sections"][1]["fields"] if f.get("readonly")],
+            ],
+        },
+        {
+            "key": "inspection",
+            "label": "검사",
+            "repeat": False,
+            "nonconforming": {"any": [{"field": "verdict", "eq": "FAIL"}]},
+            "fields": [dict(f) for f in D03["sections"][1]["fields"] if not f.get("readonly")],
+        },
+    ],
+}
+
+
+def _phase_order(field, time_field, first, last):
+    return {"field": field, "time_field": time_field, "first": first, "last": last}
+
+
+CCP_1P = {
+    "requirement_only": True,
+    "deviation": {"check_visibility": "immediate"},
+    "guide": [
+        {
+            "title": "관리기준",
+            "rows": [
+                [
+                    "한계기준",
+                    "자력 10,000 가우스 이상 / 자석봉 청소상태 확인. 자석봉 8개 사용. "
+                    "분말 투입량 분당 1kg, 3530rpm 고정. 금속이물(쇳가루) 10mg/kg 이하",
+                ],
+                [
+                    "주기",
+                    "작업 시작 전(자력 측정, 자석봉 청소상태 확인), 작업 중 1시간마다 자석봉 청소",
+                ],
+                [
+                    "방법",
+                    "가우스미터로 자력 측정, 자석봉 청소. "
+                    "공정품을 식품공전 금속성이물 시험법으로 검사. "
+                    "가우스미터 연 1회 검·교정",
+                ],
+            ],
+        }
+    ],
+    "sections": [
+        {
+            "key": "info",
+            "label": "기본정보",
+            "repeat": False,
+            "fields": [
+                _ro("item_name", "품명"),
+                _ro("batch_qty_kg", "중량(kg)", "number"),
+                _inspector(),
+            ],
+        },
+        {
+            "key": "rounds",
+            "label": "측정 기록",
+            "repeat": True,
+            "max_rows": 48,
+            "min_rows": 2,
+            "phase_order": _phase_order("phase", "measured_at", "작업시작 전", "작업종료 후"),
+            "nonconforming": NONCONFORMING,
+            "fields": [
+                {
+                    "key": "phase",
+                    "label": "측정시점",
+                    "type": "select",
+                    "options": ["작업시작 전", "작업 중", "작업종료 후"],
+                    "required": True,
+                },
+                {"key": "measured_at", "label": "측정일시", "type": "datetime", "required": True},
+                {
+                    "key": "gauss",
+                    "label": "자력(G)",
+                    "type": "number",
+                    "required": True,
+                    "limit": {"min": 10000},
+                },
+                {
+                    "key": "rod_cleaned",
+                    "label": "자석봉 청소",
+                    "type": "select",
+                    "options": OX,
+                    "required": True,
+                },
+                _verdict(
+                    {"all": [{"field": "gauss", "min": 10000}, {"field": "rod_cleaned", "eq": "O"}]}
+                ),
+                _note(),
+            ],
+        },
+    ],
+}
+
+CCP_2B = {
+    "requirement_only": True,
+    "deviation": {"check_visibility": "immediate"},
+    "guide": [
+        {
+            "title": "관리기준",
+            "rows": [
+                ["한계기준", "환: 건조온도 70℃ ± 2℃, 건조시간 2시간 ± 5분"],
+                ["주기", "건조 시작 전, 작업 중, 건조 종료 전"],
+                ["방법", "건조기 판넬의 온도·시간 확인 후 기록. 온도계·타이머 연 1회 검·교정"],
+            ],
+        }
+    ],
+    "sections": [
+        {
+            "key": "info",
+            "label": "기본정보",
+            "repeat": False,
+            "fields": [
+                _ro("item_name", "품명"),
+                _ro("batch_qty_kg", "중량(kg)", "number"),
+                _inspector(),
+            ],
+        },
+        {
+            "key": "rounds",
+            "label": "측정 기록",
+            "repeat": True,
+            "max_rows": 48,
+            "min_rows": 2,
+            "phase_order": _phase_order("phase", "measured_at", "건조시작 전", "건조종료 전"),
+            "nonconforming": NONCONFORMING,
+            "fields": [
+                {
+                    "key": "phase",
+                    "label": "측정시점",
+                    "type": "select",
+                    "options": ["건조시작 전", "작업 중", "건조종료 전"],
+                    "required": True,
+                },
+                {"key": "measured_at", "label": "측정일시", "type": "datetime", "required": True},
+                {
+                    "key": "temp_c",
+                    "label": "건조온도(℃)",
+                    "type": "number",
+                    "required": True,
+                    "limit": {"min": 68.0, "max": 72.0},
+                },
+                {
+                    "key": "dry_minutes",
+                    "label": "건조시간",
+                    "type": "number",
+                    "unit": "분",
+                    "display": "hm",
+                    "required": True,
+                    "limit": {"min": 115, "max": 125},
+                },
+                _verdict(
+                    {
+                        "all": [
+                            {"field": "temp_c", "min": 68.0, "max": 72.0},
+                            {"field": "dry_minutes", "min": 115, "max": 125},
+                        ]
+                    }
+                ),
+                _note(),
+            ],
+        },
+    ],
+}
+
+_SPECIMENS = ("fe_l", "fe_c", "fe_r", "sus_l", "sus_c", "sus_r")
+_SPECIMEN_LABELS = ("Fe 좌", "Fe 중", "Fe 우", "SUS 좌", "SUS 중", "SUS 우")
+
+CCP_3P = {
+    "requirement_only": True,
+    "deviation": {"check_visibility": "immediate"},
+    "guide": [
+        {
+            "title": "관리기준",
+            "rows": [
+                ["한계기준", "Fe(철) 2.0mmΦ 이상 불검출, SUS(스테인리스) 2.5mmΦ 이상 불검출"],
+                ["점검주기", "작업 시작 전, 작업 중 2시간마다, 제품 변경 시, 작업 종료 후"],
+                [
+                    "방법",
+                    "① 표준시편 소독 ② 표준시편만 통과(좌/중/우) ③ 표준시편과 제품 통과 "
+                    "④ 제품만 통과 ⑤ 사용 후 표준시편 소독·보관. 연 1회 이상 정상작동 확인",
+                ],
+                ["표기", "검출 ○ / 불검출 X"],
+            ],
+        }
+    ],
+    "sections": [
+        {
+            "key": "info",
+            "label": "기본정보",
+            "repeat": False,
+            "fields": [
+                _ro("item_name", "품명"),
+                _ro("batch_qty_kg", "중량(kg)", "number"),
+                _inspector(),
+            ],
+        },
+        {
+            "key": "checks",
+            "label": "감도·통과 점검",
+            "repeat": True,
+            "max_rows": 48,
+            "min_rows": 2,
+            "phase_order": _phase_order("phase", "passed_at", "시작", "종료"),
+            "nonconforming": NONCONFORMING,
+            "fields": [
+                {
+                    "key": "phase",
+                    "label": "구분",
+                    "type": "select",
+                    "options": ["시작", "중간", "종료"],
+                    "required": True,
+                },
+                {"key": "passed_at", "label": "통과일시", "type": "datetime", "required": True},
+                *(
+                    {
+                        "key": key,
+                        "label": label,
+                        "type": "select",
+                        "options": CIRCLE_X,
+                        "required": True,
+                    }
+                    for key, label in zip(_SPECIMENS, _SPECIMEN_LABELS, strict=True)
+                ),
+                {
+                    "key": "product_only",
+                    "label": "제품만",
+                    "type": "select",
+                    "options": CIRCLE_X,
+                    "required": True,
+                },
+                {
+                    "key": "product_fe",
+                    "label": "제품+Fe",
+                    "type": "select",
+                    "options": CIRCLE_X,
+                    "required": True,
+                },
+                {
+                    "key": "product_sus",
+                    "label": "제품+SUS",
+                    "type": "select",
+                    "options": CIRCLE_X,
+                    "required": True,
+                },
+                _note(),  # 종이 양식 순서: 비고 → (판정)
+                _verdict(
+                    {
+                        "all": [
+                            *({"field": key, "eq": "○"} for key in _SPECIMENS),
+                            {"field": "product_only", "eq": "X"},
+                            {"field": "product_fe", "eq": "○"},
+                            {"field": "product_sus", "eq": "○"},
+                        ]
+                    }
+                ),
+            ],
+        },
+        {
+            "key": "summary",
+            "label": "제품 통과 요약",
+            "repeat": True,
+            "max_rows": 10,
+            "min_rows": 1,
+            "nonconforming": {"any": [{"field": "detected_qty", "gt": 0}]},
+            "fields": [
+                {"key": "item_name", "label": "품명", "type": "text", "max_length": 50},
+                {"key": "passed_qty", "label": "통과량", "type": "number", "required": True},
+                {"key": "detected_qty", "label": "검출량", "type": "number", "required": True},
+                {"key": "note", "label": "특이사항", "type": "text", "max_length": 200},
+            ],
+        },
+    ],
+}
+
+# (type_code, version, name, schema, is_active)
+P4_TEMPLATES = [
+    ("D01", 1, "시험성적서", D01, True),
+    ("D02", 1, "원산지 증명/수입면장", D02, True),
+    ("D03", 1, "원료/부자재 육안검사일지", D03, False),  # P6a: LOT 문서(v2)로 바뀜
+    ("CCP-1P", 1, "CCP-1P 모니터링일지(쇳가루 제거)", CCP_1P, True),
+    ("CCP-2B", 1, "CCP-2B 모니터링일지(건조)", CCP_2B, True),
+    ("CCP-3P", 1, "CCP-3P 모니터링일지(금속검출)", CCP_3P, True),
+    ("D03", 2, "원료/부자재 육안검사일지", D03_V2, True),
+]
+
+
+# ---------------------------------------------------------------- P8 (스프린트 3) 점검표 양식
+# 항목·키는 dev-notes/document/p8-s0-forms.md 2~4장(✅ D-107), 규칙 키는 p8-s2-spec 2장(✅ D-109).
+# 표시용 필드 키 cadence(주기)·group(관리 구분)은 화면 표의 첫 두 칸이다(검증 없음).
+
+OX_NA = ["O", "X", "NA"]
+OX_LABELS = {"O": "O", "X": "X", "NA": "해당 없음"}
+EVERY_FRIDAY = {"weekday": 5}
+FIRST_MONDAY = {"first_weekday_of_month": 1}
+
+
+def _check(key, label, cadence, group, options=OX, **extra):
+    return {
+        "key": key,
+        "label": label,
+        "type": "select",
+        "options": list(options),
+        "option_labels": {k: OX_LABELS[k] for k in options},
+        "required": True,
+        "cadence": cadence,
+        "group": group,
+        **extra,
+    }
+
+
+def _nonconforming(fields):
+    return {"any": [{"field": f["key"], "eq": "X"} for f in fields if f["type"] == "select"]}
+
+
+_DAILY = "매일 작업 전후"
+_D10_CHECKS = [
+    _check("d_hyg_clothes", "위생복장과 외출복장이 구분하여 보관되고 있는가?", _DAILY, "개인위생"),
+    _check(
+        "d_hyg_health",
+        "종사자의 건강상태가 양호하고 개인장신구 등을 소지하지 않으며, 청결한 위생복장을 착용하고 "
+        "작업하고 있는가?",
+        _DAILY,
+        "개인위생",
+    ),
+    _check(
+        "d_hyg_facility",
+        "위생설비(손세척·소독기 등) 중 이상이 없으며, 종사자는 위생처리를 하고 입실하는가?",
+        _DAILY,
+        "개인위생",
+    ),
+    _check(
+        "d_pest_sealed",
+        "작업장은 밀폐가 잘 이루어지고 있으며, 방충시설에는 이상이 없는가?",
+        _DAILY,
+        "방충방서",
+    ),
+    _check("d_equip_broken", "파손되거나 고장난 제조설비가 있는가?", _DAILY, "설비"),
+    _check(
+        "d_proc_zone",
+        "청결구역작업과 일반구역작업이 시간차를 두고 이루어지고 있는가?",
+        _DAILY,
+        "공정관리",
+    ),
+    _check("d_proc_ccp_record", "각 공정별 CCP 모니터링은 잘 기록되고 있는가?", _DAILY, "공정관리"),
+    _check(
+        "d_proc_metal",
+        "금속검출기 철(Fe)Ø2.0mm이상, 스테인레스(SUS)Ø2.5mm이상 점검이 잘 이루어지고 있는가?",
+        _DAILY,
+        "공정관리",
+    ),
+    _check("d_proc_package", "완제품의 포장 상태가 양호한가?", _DAILY, "공정관리"),
+    _check(
+        "d_proc_monitor_clean",
+        "모니터링장비(온도계 등)는 사용 전 후 세척·소독을 실시하고 있는가?",
+        _DAILY,
+        "공정관리",
+    ),
+    _check(
+        "d_pest_waste",
+        "작업장 주변의 폐기물은 잘 정리되어지고 있고, 주기적으로 반출되고 있는가?",
+        _DAILY,
+        "방충방서",
+    ),
+    _check(
+        "d_clean_contact",
+        "작업장 바닥, 배수로, 위생시설, 제조설비(식품과 직접 닿는 부분)의 청소·소독 상태는 "
+        "양호한가?",
+        _DAILY,
+        "청소소독",
+    ),
+    _check(
+        "d_ccp_action",
+        "중요관리점(CCP) 점검표를 작성 주기에 맞게 작성하고, 한계기준 이탈시 적절히 개선조치 "
+        "하였는가",
+        _DAILY,
+        "점검",
+    ),
+    _check(
+        "r_incoming",
+        "원·부재료 입고 시 시험성적서를 수령하거나, 육안검사를 실시하고 있는가?",
+        "입고 시",
+        "입고검수",
+        OX_NA,
+        initial="O",  # D-109: 새 문서는 O(양호)로 시작
+    ),
+    _check(
+        "w_pest_count",
+        "쥐덫, 해충유인 포획장치(날파리, 바퀴벌레 등)에 포획된 개체수는?",
+        "매주(금)",
+        "방충방서",
+        OX_NA,
+        na_default=EVERY_FRIDAY,
+    ),
+    _check(
+        "w_clean_noncontact",
+        "작업장 벽, 제조설비(제품과 직접 닿지 않는 부분)에 대한 청소·소독 상태는 양호한가?",
+        "매주(금)",
+        "청소소독",
+        OX_NA,
+        na_default=EVERY_FRIDAY,
+    ),
+    _check(
+        "w_laundry",
+        "위생복 세탁은 실시하였는가?",
+        "매주(금)",
+        "청소소독",
+        OX_NA,
+        na_default=EVERY_FRIDAY,
+    ),
+    _check(
+        "m_clean_all",
+        "작업장 전체 청소 상태는 양호한가?",
+        "매월 첫째 월",
+        "청소",
+        OX_NA,
+        na_default=FIRST_MONDAY,
+    ),
+    _check(
+        "m_education",
+        "종사자 위생교육을 실시하였는가?",
+        "매월 첫째 월",
+        "교육",
+        OX_NA,
+        na_default=FIRST_MONDAY,
+    ),
+    _check(
+        "m_product_test",
+        "완제품에 대한 검사를 실시하였는가?",
+        "매월 첫째 월",
+        "검사",
+        OX_NA,
+        na_default=FIRST_MONDAY,
+    ),
+    _check(
+        "m_ccp_verify",
+        "중요관리공정(CCP) 검증표를 작성하였는가?",
+        "매월 첫째 월",
+        "검증",
+        OX_NA,
+        na_default=FIRST_MONDAY,
+    ),
+    # 연간 2줄: 종이 양식처럼 실시일만(선택, O/X 없음). 비어 있으면 미기재 — 부적합으로 세지 않음
+    # (P8 S4 검토 A4, D-107 변경)
+    {
+        "key": "y_water_test_date",
+        "label": "용수검사(지하수의 경우)를 실시하였는가?",
+        "type": "date",
+        "cadence": "연간",
+        "group": "검사",
+    },
+    {
+        "key": "y_calibration_date",
+        "label": "살균기 온도계, 유속계와 세척기 압력계 및 냉장창고의 온도계는 검·교정하였는가?",
+        "type": "date",
+        "cadence": "연간",
+        "group": "점검",
+    },
+]
+
+D10 = {
+    "requirement_only": True,
+    "skippable": True,
+    "guide": [{"title": "표기", "rows": [["결과", "양호 O · 불량 X · 해당 없음"]]}],
+    "sections": [
+        {"key": "info", "label": "기본정보", "repeat": False, "fields": [_inspector()]},
+        {
+            "key": "checks",
+            "label": "점검 항목",
+            "repeat": False,
+            "nonconforming": _nonconforming(_D10_CHECKS),
+            "fields": _D10_CHECKS,
+        },
+    ],
+}
+
+_D12_ITEMS = [
+    (
+        "raw_vacuum",
+        "원료 중의 이물혼입방지",
+        "원부재료 반입 시 물품 외부에 부착된 이물을 제거하기 위하여 이물질흡입기로 이물을 "
+        "제거하고 이물이 있는지 확인하였는가?",
+    ),
+    (
+        "raw_inspect",
+        "원료 중의 이물혼입방지",
+        "입고된 원부재료는 검수를 실시하여 혼입된 이물이 없는지를 확인하였는가?",
+    ),
+    (
+        "equip_clean",
+        "설비의 청소상태 불량에 의한 이물혼입 방지",
+        "설비의 청소상태는 양호하며 습기의 제거는 잘 되어있는지를 확인하였는가?",
+    ),
+    (
+        "equip_gap",
+        "설비의 청소상태 불량에 의한 이물혼입 방지",
+        "설비의 틈새에 세척되지 않고 끼어있는 이물질이 없는지를 확인하였는가?",
+    ),
+    (
+        "worker_pen",
+        "작업자에 의한 이물혼입 방지",
+        "볼펜 등 필기구는 제조라인에서 떨어진 장소에서만 사용할 수 있게 하는가?",
+    ),
+    (
+        "worker_roller",
+        "작업자에 의한 이물혼입 방지",
+        "작업자는 입/출입 시 수시로 끈끈이 롤러를 사용하여 머리카락, 이물을 제거하는가?",
+    ),
+    (
+        "worker_hair",
+        "작업자에 의한 이물혼입 방지",
+        "작업 중 작업자의 위생모 사이로 머리카락이 새어나와 탈락되는 경우가 없는가?",
+    ),
+    (
+        "work_waste",
+        "작업 중 이물 혼입방지",
+        "작업 중 발생가능한 비닐, 테이프 등은 폐기물보관함에 즉시 버려 제조공정에 혼입될 수 "
+        "없도록 관리하는가?",
+    ),
+    (
+        "work_screw",
+        "작업 중 이물 혼입방지",
+        "기계류에 대한 점검을 정기적으로 실시하여 느슨하거나 탈락의 우려가 있는 나사류 등이 "
+        "있는지 확인하는가?",
+    ),
+    (
+        "work_bolt_count",
+        "작업 중 이물 혼입방지",
+        "기계류 등을 분해하여 세척하거나 정비할 경우 분해 한 나사, 볼트등의 숫자를 확인하여 "
+        "누락이 없도록 하는가?",
+    ),
+    (
+        "work_oil",
+        "작업 중 이물 혼입방지",
+        "기계류에 대한 점검을 정기적으로 실시하여 오일, 기름때가 혼입되는지 관리하였는가?",
+    ),
+    (
+        "pack_film",
+        "포장 중 이물혼입 방지",
+        "작업자는 내포장재(비닐) 조각이 파손되어 제품으로 혼입될 우려가 없는지 확인하는가?",
+    ),
+    (
+        "pack_hair",
+        "포장 중 이물혼입 방지",
+        "내포장 작업 중 작업자의 위생모 사이로 머리카락이 새어나와 탈락되는 경우가 없는가?",
+    ),
+    (
+        "pest_gap",
+        "해충 등의 혼입방지",
+        "건물 및 출입문에 해충이 유입될 수 있는 틈새가 발생하지 않았는가?",
+    ),
+    ("pest_door", "해충 등의 혼입방지", "작업외부로 연결되는 출입구등은 항상 닫혀있는가?"),
+]
+_D12_CHECKS = [_check(key, label, "1회/일", group) for key, group, label in _D12_ITEMS]
+
+D12 = {
+    "requirement_only": True,
+    "skippable": True,
+    "guide": [
+        {
+            "title": "점검 방법",
+            "rows": [
+                ["점검방법", "육안확인"],
+                ["점검주기", "1회/일(작업 시)"],
+                ["점검결과", "O 적합 · X 부적합"],
+            ],
+        }
+    ],
+    "sections": [
+        {
+            "key": "info",
+            "label": "기본정보",
+            "repeat": False,
+            "fields": [
+                {
+                    "key": "process_name",
+                    "label": "공정명",
+                    "type": "text",
+                    "max_length": 50,
+                    "required": True,
+                },
+                _inspector(),
+            ],
+        },
+        {
+            "key": "checks",
+            "label": "관리 항목",
+            "repeat": False,
+            "nonconforming": _nonconforming(_D12_CHECKS),
+            "fields": _D12_CHECKS,
+        },
+    ],
+}
+
+_D11_ITEMS = [
+    ("fly_trap_lamp", "비행성 해충점검", "포충등은 정상작동하며 청결한가?"),
+    ("fly_lure_lamp", "비행성 해충점검", "유인등은 꺼지거나 깜박임이 없이 양호한가?"),
+    (
+        "count_increase",
+        "비행성 해충 및 설치류 점검",
+        "해충등 끈끈이에 포획된 개체수가 급격히 증가하지 않았나?",
+    ),
+    ("food_trace", "비행성 해충 및 설치류 점검", "음식물 등의 반입 흔적은 없는가?"),
+    (
+        "inner_trap_rodent",
+        "비행성 해충 및 설치류 점검",
+        "작업장 내부트랩에 설치류가 발견되지 않았는가?",
+    ),
+    ("trap_position", "작업장 외부트랩 및 방역", "트랩의 위치가 변경되거나 파손되지 않았는가?"),
+    ("trap_rodent", "작업장 외부트랩 및 방역", "트랩에 설치류가 포획되거나 섭식의 흔적이 없는가?"),
+    (
+        "outer_trap_position",
+        "작업장 외부트랩 및 방역",
+        "외부트랩의 위치가 변경되거나 파손되지 않았는가?",
+    ),
+    (
+        "outer_pest_control",
+        "작업장 외부트랩 및 방역",
+        "정해진 주기에 따라 외부의 방역을 실시하였는가?",
+    ),
+]
+_D11_CHECKS = [_check(key, label, "주/1회", group) for key, group, label in _D11_ITEMS]
+
+D11 = {
+    "requirement_only": True,
+    "skippable": True,
+    "guide": [
+        {
+            "title": "점검 기준",
+            "rows": [
+                ["작업소명", "청결구역"],
+                ["점검주기", "주/1회"],
+                ["평가기준", "양호 O · 상태불량 X"],
+            ],
+        }
+    ],
+    "sections": [
+        {
+            "key": "info",
+            "label": "기본정보",
+            "repeat": False,
+            "fields": [
+                _inspector(),
+                {
+                    "key": "checked_on",
+                    "label": "점검일",
+                    "type": "date",
+                    "required": True,
+                    "date_window": {"from": 0, "to": 6},  # 그 주 월~일(VR-P8-02)
+                },
+                {"key": "remark", "label": "특이사항", "type": "text", "max_length": 500},
+            ],
+        },
+        {
+            "key": "checks",
+            "label": "점검 항목",
+            "repeat": False,
+            "nonconforming": _nonconforming(_D11_CHECKS),
+            "fields": _D11_CHECKS,
+        },
+    ],
+}
+
+# (type_code, version, name, schema, is_active)
+P8_TEMPLATES = [
+    ("D10", 1, "일반위생관리 및 공정점검표", D10, True),
+    ("D12", 1, "공정별 이물관리 점검표", D12, True),
+    ("D11", 1, "방충방서점검표", D11, True),
+]

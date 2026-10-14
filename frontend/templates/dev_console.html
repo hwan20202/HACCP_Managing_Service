@@ -1,0 +1,68 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>개발 콘솔 · BIODOT HACCP</title>
+  <link rel="icon" href="{% static 'images/mark.svg' %}" type="image/svg+xml">
+  <link rel="stylesheet" href="{% static 'prototype/css/main.css' %}" />
+  <link rel="stylesheet" href="{% static 'temp-entry/temp-entry.css' %}" />
+  <link rel="stylesheet" href="{% static 'dev-console/console.css' %}" />
+</head>
+<body class="dc-body">
+  <header class="dc-header">
+    <div class="dc-title">개발 콘솔 <span class="badge badge-warning">개발 설정 전용</span></div>
+    <div class="dc-controls">
+      <label>현재 사용자 <select id="dcStaff" class="form-control dc-inline"></select></label>
+      <label>프리셋 <select id="dcPreset" class="form-control dc-inline dc-preset"></select></label>
+      <button class="btn btn-secondary btn-sm" id="dcLoadPreset">불러오기</button>
+      <a class="btn btn-secondary btn-sm" href="/" target="_blank" rel="noopener">사용 화면 ↗</a>
+    </div>
+  </header>
+
+  <main class="dc-main">
+    <section class="card dc-panel" id="dcOperate">
+      <div class="dc-panel-title">① 조작</div>
+      <div class="dc-preset-desc" id="dcPresetDesc">기능을 고르고 실행하세요. 프리셋을 불러오면 입력이 채워집니다.</div>
+      <div class="dc-form">
+        <label>기능 <select id="dcFunc" class="form-control"></select></label>
+        <label id="dcIdWrap">대상 id <input id="dcId" class="form-control" type="number" min="1"></label>
+        <label id="dcQueryWrap">쿼리 <input id="dcQuery" class="form-control" placeholder="from=2026-10-01&to=2026-10-09&page=1"></label>
+        <label id="dcBodyWrap">본문(JSON) <textarea id="dcBody" class="form-control dc-code" rows="12"></textarea></label>
+        <label id="dcDocIdWrap">④ 비교할 문서 id <input id="dcDocId" class="form-control" placeholder="결재 처리 전/후 DB를 비교할 문서(일괄은 쉼표로 여러 개)"></label>
+        <div class="dc-row">
+          <button class="btn btn-primary" id="dcRun">실행</button>
+          <span class="te-hint" id="dcRunHint"></span>
+        </div>
+      </div>
+    </section>
+
+    <section class="card dc-panel" id="dcApi">
+      <div class="dc-panel-title">② API <span id="dcCallTabs" class="dc-call-tabs" hidden></span></div>
+      <div id="dcApiBody" class="dc-empty">아직 호출이 없습니다.</div>
+    </section>
+
+    <section class="card dc-panel dc-wide" id="dcTrace">
+      <div class="dc-panel-title">③ 처리 로직 <span id="dcFlowSummary" class="dc-flow-summary"></span></div>
+      <div id="dcFlowChips" class="dc-chips"></div>
+      <div id="dcTraceBody" class="dc-empty">실행하면 서버가 거친 단계와 SQL이 표시됩니다.</div>
+    </section>
+
+    <section class="card dc-panel dc-wide" id="dcDb">
+      <div class="dc-panel-title">④ DB 반영 <span id="dcDbTitle" class="te-hint"></span>
+        <label class="te-check dc-right"><input type="checkbox" id="dcOnlyChanged" checked> 변경만</label>
+      </div>
+      <div id="dcDbBody" class="dc-empty">문서 단위로 실행 전/후 행을 비교합니다.</div>
+    </section>
+
+    <section class="card dc-panel dc-wide" id="dcHistory">
+      <div class="dc-panel-title">호출 이력 <span class="te-hint">(새로고침하면 사라집니다)</span></div>
+      <div id="dcHistoryBody" class="dc-timeline"></div>
+    </section>
+  </main>
+
+  <script src="{% static 'temp-entry/api-client.js' %}"></script>
+  <script src="{% static 'dev-console/console.js' %}"></script>
+</body>
+</html>

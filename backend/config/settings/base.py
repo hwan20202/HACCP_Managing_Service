@@ -33,6 +33,11 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "apps.core",
     "apps.inventory",
+    "apps.documents",
+    "apps.approvals",
+    "apps.document_workflow",
+    "apps.doc_requirements",
+    "apps.doc_effects",  # P6 EFF 문서 후속 처리(D-079)
 ]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -78,7 +83,8 @@ STATIC_ROOT = DATA_DIR / "static"
 PROTOTYPE_DATA_FILE = DATA_DIR / "legacy-prototype" / "src" / "js" / "data.js"
 PROTOTYPE_STANDARD_DIR = DATA_DIR / "reference" / "setup_standard"
 MEDIA_ROOT = DATA_DIR / "uploads"
-# Reserved for future uploads; there is currently no upload/download feature.
+# Document attachments (D01·D02) are stored under MEDIA_ROOT/files/YYYY/MM/ and served only
+# through /api/v1/files/<id>; MEDIA_URL is not routed.
 MEDIA_URL = "/private-media/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 FILE_UPLOAD_PERMISSIONS = 0o600
@@ -93,3 +99,16 @@ LOGGING = {
     "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "standard"}},
     "root": {"handlers": ["console"], "level": "INFO"},
 }
+
+# 개발 콘솔(처리 단계 추적, DB 스냅샷 API). 개발 설정에서만 켤 수 있다(development.py).
+HACCP_DEV_CONSOLE = False
+# [P6 EFF-A1] 수불 판정 함수(점 경로)와 거부로 바꿀 예외. 기본값 = 수불 앱(C2, D-128 D2).
+# 비어 있으면 육안검사 작성완료가 503(W001).
+HACCP_INVENTORY_JUDGMENT = os.environ.get(
+    "HACCP_INVENTORY_JUDGMENT", "apps.inventory.judgment.apply_incoming_judgment"
+)
+HACCP_INVENTORY_ERRORS = env_list("HACCP_INVENTORY_ERRORS", "apps.inventory.errors.InventoryError")
+# [P7 WF] 일괄 승인·상신 대상 양식 유형(P7-S2-Q2). 형식이 틀리면 시스템 점검 W001.
+HACCP_BATCH_TYPES = env_list("HACCP_BATCH_TYPES", "D03,D10,D11,D12")  # P8 4.3
+# [임시 진입점 T5] 시제품 사이드바의 "개발 검증 (임시)" 탭. 운영(사용 테스트)에서도 켤 수 있다.
+HACCP_TEMP_ENTRY = env_bool("HACCP_TEMP_ENTRY", False)
