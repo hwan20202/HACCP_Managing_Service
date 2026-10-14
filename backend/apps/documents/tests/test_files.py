@@ -237,7 +237,7 @@ class LinkDetachTests(FileTestCase):
         self.assertTrue(File.objects.filter(pk=kept).exists())
         self.assertEqual(out["document_version"], version_of(a) - 1)
         names = {File.objects.get(pk=i).storage_path for i in (shared, kept)}
-        self.assertEqual({str(p.relative_to(self.media)) for p in self.disk_files()}, names)
+        self.assertEqual({p.relative_to(self.media).as_posix() for p in self.disk_files()}, names)
 
     def test_tc164b_disk_delete_only_after_commit(self):
         document_id = d01()
