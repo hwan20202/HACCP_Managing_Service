@@ -54,7 +54,7 @@ HTTP 자동 검사는 `scripts/smoke_process.py`가 `scripts/smoke_server.py`를
 
 기존 HTML·CSS·기능 JavaScript를 `frontend/`에 복사했습니다. 앞으로 화면을 수정하는 위치는 이 실행 사본이며 `data/legacy-prototype`의 원본은 보존합니다. 시제품 화면은 기존 전역 변수 `HACCP_DATA`와 일부 브라우저 `localStorage`를 사용하며, 시제품 데이터의 서버 저장·동기화는 아직 없습니다.
 
-문서·결재 기능은 서버 DB에 저장하며, 아직 정식 메뉴가 없어 사이드바의 "개발 검증 (임시)" 탭(`frontend/static/temp-entry/`)으로 들어갑니다. 이 탭은 `HACCP_TEMP_ENTRY`로 켜고 끄며(개발 기본 켜짐, 운영 기본 꺼짐), 시제품에 손댄 곳에는 `[임시 진입점 Tn]` 주석을 달아 정식 메뉴로 옮길 때 되돌릴 수 있게 했습니다. 임시 화면은 시제품 모듈·`HACCP_DATA`·`localStorage`를 쓰지 않고 `/api/v1/`만 사용합니다. 문서함·결재함 메뉴는 `HACCP_DOC_MENU`(`dev` = 개발 검증 섹션, `haccp` = HACCP 관리 섹션 맨 위)로 자리를 정하며, `haccp`이면 `HACCP_TEMP_ENTRY`와 관계없이 보입니다(화면 id `doc-box`·`approval-box`, 예전 `temp-doc`·`temp-approval`도 같은 화면). 문서함의 마지막 탭만 브라우저 `localStorage`에 기억합니다.
+문서·결재 기능은 서버 DB에 저장하며, 화면은 정식 화면으로 옮기기 전까지 사이드바의 "개발 검증 (임시)" 탭(`frontend/static/temp-entry/`)으로 들어갑니다. 이 탭은 `HACCP_TEMP_ENTRY`로 켜고 끄며(개발 기본 켜짐, 운영 기본 꺼짐), 시제품에 손댄 곳에는 `[임시 진입점 Tn]` 주석을 달아 정식 메뉴로 옮길 때 되돌릴 수 있게 했습니다. 임시 화면은 시제품 모듈·`HACCP_DATA`·`localStorage`를 쓰지 않고 `/api/v1/`만 사용합니다. 문서함·결재함 메뉴는 `HACCP_DOC_MENU`(`dev` = 개발 검증 섹션, `haccp` = HACCP 관리 섹션 맨 위)로 자리를 정하며, `haccp`이면 `HACCP_TEMP_ENTRY`와 관계없이 보입니다(화면 id `doc-box`·`approval-box`, 예전 `temp-doc`·`temp-approval`도 같은 화면). 문서함의 마지막 탭만 브라우저 `localStorage`에 기억합니다.
 
 실제 데이터는 `HACCP_DATA_DIR/legacy-prototype/src/js/data.js`, PDF는 `HACCP_DATA_DIR/reference/setup_standard/`의 지정 파일을 읽습니다. 초기 개발 테스트용 `data.js`는 Git에 포함하므로 기본 데이터 경로에서는 저장소 복제 후 초기 화면을 사용할 수 있습니다. PDF는 별도 전달합니다. 원본 자료를 서버 DB로 자동 이관하지 않습니다. 데이터 경로를 변경하고 `data.js`를 배치하지 않은 경우에는 초기 화면에 준비 안내를 표시하며, `/test/`와 서버 검증은 계속 동작합니다.
 
