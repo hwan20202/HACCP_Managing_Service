@@ -413,8 +413,16 @@ class OpenTests(RulesFileMixin, TestCase):
 
     def test_tc034_035_delete_and_skip(self):
         out = periodic.open_periodic_document(3, "D10", "2026-10-30")  # 날짜를 잘못 고름
-        with self.assertRaises(doc_errors.DocumentNotDeletable):
-            doc.delete_document(3, out["document_id"])  # C-3, ISS-028
+        # D-149(ISS-028 b): 주기 문서도 작성중·상신 전이면 삭제
+        # — record_key를 비워 그날 다시 만들 수 있음
+        self.assertIsNone(doc.delete_document(3, out["document_id"]))
+        gone = Document.objects.get(pk=out["document_id"])
+        self.assertIsNotNone(gone.deleted_at)
+        self.assertIsNone(gone.record_key)
+        again = periodic.open_periodic_document(3, "D10", "2026-10-30")
+        self.assertEqual(again["result"], "created")
+        self.assertNotEqual(again["document_id"], out["document_id"])
+        out = again
         skipped = doc.skip_documents(
             3, [{"document_id": out["document_id"], "expected_version": 1}], "날짜 잘못 고름"
         )
@@ -607,3 +615,36 @@ class DevSnapshotTests(RulesFileMixin, TestCase):
         self.assertNotIn(lot, [r["document_id"] for r in data["tables"]["document"]])
         bad = self.client.get("/api/dev/snapshot?periodic_from=2026-13-01")
         self.assertEqual(bad.status_code, 400)
+
+
+class DeleteTests(RulesFileMixin, TestCase):
+    """C4 S6 r2(D-149, ISS-028 b): 주기 문서 삭제.
+
+    작성중·상신 전만, 입고·생산 작성 요구 문서는 그대로 불가.
+    """
+
+    def setUp(self):
+        super().setUp()
+        setup_req()
+        setup_p8()
+
+    def test_delete_periodic_rules(self):
+        with today(FRI):
+            line = run(TUE, types=["D10"])["lines"][0]
+        doc.delete_document(3, line["document_id"])
+        with today(FRI):  # 규칙 대상 평일은 다음 실행 때 다시 만들어짐
+            again = run(TUE, types=["D10"])["lines"][0]
+        self.assertEqual(again["result"], "created")
+        self.assertNotEqual(again["document_id"], line["document_id"])
+        skipped = doc.skip_documents(
+            3, [{"document_id": again["document_id"], "expected_version": 1}], "휴무"
+        )
+        self.assertEqual(skipped["succeeded"], 1)
+        with self.assertRaises(doc_errors.DocumentNotDeletable) as ctx:
+            doc.delete_document(3, again["document_id"])  # 작성 안 함은 삭제 불가(상태)
+        self.assertEqual(ctx.exception.details[0]["code"], "status")
+        with transaction.atomic():
+            lot = req.require_for_lot(3, 88)["documents"][0]["document_id"]
+        with self.assertRaises(doc_errors.DocumentNotDeletable) as ctx:
+            doc.delete_document(3, lot)  # 입고 작성 요구 문서는 C-3 그대로
+        self.assertEqual(ctx.exception.details[0]["code"], "requirement")

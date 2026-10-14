@@ -1409,7 +1409,7 @@
         prepared.push({ lot_number: '-', document_id: line.document_id, status: `D10 ${day} ${line.status} — ${line.result}` });
         return { func: 'periodicOpen', staff: '3', body: J({ type_code: 'D10', date: day }) };
       } }),
-    p9({ id: 'DOC-PS-31', label: '새 문서 → 미래·주말(다음 주 토요일 D12)', expect: '1번째 200 · REQ-POD 도식 일치 · result created(이번 주에 다시 실행하면 existing), record_key D12|day:<토요일> · ④ document +1 / 2번째 삭제 409 DOCUMENT_NOT_DELETABLE(주기 문서 — ISS-028) · ④ 변화 없음. 만든 문서는 남음 — 필요 없으면 [작성 안 함]',
+    p9({ id: 'DOC-PS-31', label: '새 문서 → 미래·주말(다음 주 토요일 D12) → 삭제', expect: '1번째 200(created) → 2번째 삭제 204 · 1번째 REQ-POD 도식 일치, record_key D12|day:<토요일>, ④ document +1 · 2번째 DOC-DEL 도식 일치, ④ deleted_at·by 채워지고 record_key 비움(주기 문서는 작성중·상신 전이면 삭제 — D-149, ISS-028) → 다시 실행해도 다시 created',
       prepare: async () => {
         const body = J({ type_code: 'D12', date: nextSaturday() });
         return { func: 'periodicOpen', staff: '3', body,

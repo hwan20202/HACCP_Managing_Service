@@ -44,9 +44,8 @@ CORRECTABLE = ("approved",)  # 정정 시작(P6-FR-01)
 ROW_APPENDABLE = ("draft", "rejected")  # N2 — P4 그대로(P6a: 정정 중 문서에 행 추가 경로 없음)
 CORRECTION_REASON_MAX = 200
 NOTE_MAX = 200  # 작성완료 메모(판정 변경 사유) — 저장하지 않고 신호로만(D-080, P6-VR-06)
-DELETABLE = (
-    "draft",
-)  # 그리고 submitted_at IS NULL, record_key IS NULL(작성 요구 문서 삭제 불가 C-3)
+DELETABLE = ("draft",)  # 그리고 submitted_at IS NULL, 작성 요구 문서 삭제 불가(C-3)
+# — 주기 문서(참조 없음)는 예외(D-149, ISS-028)
 REF_TARGETS = ("lot_id", "production_batch_id", "item_id", "process_code")
 DEVIATION_MAX_CHECKERS = 10
 PAGE_SIZE = 20
@@ -982,7 +981,11 @@ def _lock_failure(
         if row is None or row["deleted_at"] is not None:
             raise errors.DocumentNotFound()
         if deletable:
-            if row["record_key"] is not None:
+            periodic = (
+                row["record_key"] is not None
+                and not DocumentRef.objects.filter(document_id=document_id).exists()
+            )
+            if row["record_key"] is not None and not periodic:
                 reason, message = "requirement", "작성 요구로 만들어진 문서는 삭제할 수 없습니다."
             elif row["status"] not in DELETABLE:
                 reason, message = "status", f"현재 상태: {row['status']}"
@@ -1268,14 +1271,25 @@ def delete_document(actor_id, document_id):
     now = timezone.now()
     with transaction.atomic():
         with step("DOC-DEL-02", "DOC", "삭제 표시(조건부 UPDATE)") as s:
-            marked = Document.objects.filter(
-                pk=document_id,
-                deleted_at__isnull=True,
-                status__in=DELETABLE,
-                submitted_at__isnull=True,
-                record_key__isnull=True,
-            ).update(
-                deleted_at=now, deleted_by_id=actor_id, updated_at=now, version=F("version") + 1
+            # 작성 요구 문서 중 주기 문서(record_key 있고 참조 없음 — _requirement periodic)는
+            # 지울 수 있다(C4 S6, D-149 — ISS-028). 지우면 record_key를 비워 그 날짜를
+            # 다시 만들 수 있게 한다(유일 인덱스).
+            has_ref = Exists(DocumentRef.objects.filter(document_id=OuterRef("pk")))
+            marked = (
+                Document.objects.filter(
+                    pk=document_id,
+                    deleted_at__isnull=True,
+                    status__in=DELETABLE,
+                    submitted_at__isnull=True,
+                )
+                .filter(Q(record_key__isnull=True) | ~has_ref)
+                .update(
+                    deleted_at=now,
+                    deleted_by_id=actor_id,
+                    updated_at=now,
+                    version=F("version") + 1,
+                    record_key=None,
+                )
             )
             s.note(f"영향 행 {marked}")
         if marked == 0:

@@ -770,7 +770,7 @@
             <label class="form-label">날짜</label>
             <div class="te-prd-day"><input type="date" class="form-control" id="pdDay" value="${seoulDay()}"> <span id="pdDow"></span></div>
             <p class="te-hint">날짜마다 문서가 1건입니다. 그날 문서가 이미 있으면 그 문서를 엽니다.</p>
-            <p class="te-hint">주기 문서는 삭제할 수 없습니다. 필요 없으면 [작성 안 함]을 쓰세요.</p>
+            <p class="te-hint">작성하지 않는 날은 [작성 안 함]을 쓰세요. 날짜를 잘못 골랐으면 작성중·상신 전에 [삭제]할 수 있습니다.</p>
             <div class="te-error-text" id="pdError"></div>
           </div>
           <div class="te-modal-footer"><button class="btn btn-secondary" id="pdCancel">취소</button><button class="btn btn-primary" id="pdOpen">열기</button></div>
@@ -1381,7 +1381,8 @@
       const canReopen = d.status === 'completed';
       const fixing = d.correction || null; // 정정 진행 중(정정 중·작성완료·결재중)
       const canCorrect = d.status === 'approved' && !fixing;
-      const canDelete = d.status === 'draft' && !d.submitted_at && !d.record_key && !fixing; // 정정 중 숨김
+      // 작성 요구 문서는 삭제 불가(C-3) — 주기 문서는 예외(C4 S6, D-149 — ISS-028)
+      const canDelete = d.status === 'draft' && !d.submitted_at && (!d.record_key || d.requirement === 'periodic') && !fixing; // 정정 중 숨김
       // P8: 작성 안 함 = 작성중 + 주기 작성 요구 문서(skippable 양식 + record_key), 되돌리기 = 작성 안 함일 때(p8-s1 6장)
       const canSkip = d.status === 'draft' && d.skippable && !!d.record_key;
       const skipped = d.status === 'skipped';
@@ -1402,7 +1403,7 @@
       if (d.status === 'approved') notes.approved = '승인된 문서는 수정할 수 없습니다. 고쳐야 하면 [정정 시작]을 누르세요.';
       if (d.status === 'draft' && d.submitted_at) notes.draft = '상신 이력이 있어 삭제할 수 없습니다.';
       if (d.status === 'draft' && d.record_key) notes.draft = '작성 요구로 만들어진 문서입니다. 삭제할 수 없습니다.';
-      if (canSkip) notes.draft = '주기 작성 요구 문서입니다. 삭제할 수 없고, 휴무 등 작성하지 않는 날은 [작성 안 함]을 누르세요.';
+      if (canSkip) notes.draft = '주기 작성 요구 문서입니다. 휴무 등 작성하지 않는 날은 [작성 안 함]을 누르세요. 날짜를 잘못 골라 만들었으면 [삭제] — 규칙상 만드는 평일은 다음 주기 생성 때 다시 만들어집니다.';
       if (skipped) notes.skipped = `작성 안 함: <b>${esc(d.skip.reason)}</b> — staff ${esc(d.skip.by)}, ${T.fmtDateTime(d.skip.at)}. 다시 작성하려면 [되돌리기](입력했던 값은 그대로).`;
       const counts = checkCounts(schema, d);
       const info = d.sections.find((s) => s.section_def === 'info');
@@ -2077,7 +2078,7 @@
 
     async confirmDelete(d) {
       const ok = await T.confirm('문서 삭제',
-        `문서 #${d.document_id} (${esc(d.template.name)}, ${d.work_date})를 삭제합니다.<br>목록에서 사라지지만 기록은 삭제자·삭제 시각과 함께 보존됩니다.`,
+        `문서 #${d.document_id} (${esc(d.template.name)}, ${d.work_date})를 삭제합니다.<br>목록에서 사라지지만 기록은 삭제자·삭제 시각과 함께 보존됩니다.${d.requirement === 'periodic' ? '<br>주기 문서입니다. 규칙상 만드는 날이면 다음 주기 생성(명령·[주기 문서 만들기]) 때 다시 만들어집니다 — 작성하지 않는 날이면 [작성 안 함]을 쓰세요.' : ''}`,
         '삭제', 'btn-danger');
       if (!ok) return;
       const r = await api.del(`documents/${d.document_id}`);
