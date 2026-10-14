@@ -18,7 +18,7 @@ class TempEntryTabTests(SimpleTestCase):
         self.enterContext(override_settings(PROTOTYPE_DATA_FILE=data_file))
 
     def test_tab_hidden_when_disabled(self):
-        with override_settings(HACCP_TEMP_ENTRY=False):
+        with override_settings(HACCP_TEMP_ENTRY=False, HACCP_DOC_MENU="dev"):
             response = self.client.get("/")
         self.assertContains(response, 'id="pageContainer"')
         self.assertNotContains(response, 'data-page="doc-box"')
