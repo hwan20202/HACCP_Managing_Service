@@ -9,6 +9,7 @@
 //       API: s2-spec.md 4장, p4-s2-spec.md, p6-s2-spec.md
 // 스프린트 3: 파일 영역 DOC-SC-07·08(p4-s1-screens, API A11~A14 — document-files/s4-basis.md)
 //           P8 점검표 D10·D12·D11(p8-s1-screens): 점검표 섹션·[매일 항목 모두 O]·작성 안 함(SC-13)·되돌리기·주 묶음 줄·주 묶음 상세
+//           P9(C4 S5): DOC-SC-02 주기 양식 칸 · DOC-SC-14 주기 문서 날짜 선택(doc-requirements/p9-s1-screens.md 5·6장, REQ-A06·A07)
 // =============================================
 (function () {
   const T = window.TempEntry;
@@ -45,6 +46,21 @@
     d.setDate(d.getDate() + offset);
     const p = (n) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+
+  // P9 (DOC-SC-02·14): 오늘(Asia/Seoul), 규칙 설명, A06 오류 문구
+  const seoulDay = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
+  function periodicRuleText(rule) {
+    const same = (a) => a.length === rule.weekdays.length && a.every((n, i) => n === rule.weekdays[i]);
+    const span = same([1, 2, 3, 4, 5]) ? '월~금' : rule.weekdays.map((n) => WEEKDAY[n % 7]).join('·');
+    return rule.cadence === 'weekly' ? '매주 (그 주 월요일)' : `${span} 매일`;
+  }
+  function periodicOpenError(r) {
+    const code = r.data && r.data.code;
+    if (code === 'TEMPLATE_INACTIVE' || code === 'TEMPLATE_NOT_FOUND') return '이 양식의 사용 중인 버전이 없습니다. 관리자에게 알리세요.';
+    if (code === 'NOT_PERIODIC') return '주기 양식이 아닙니다. (규칙 파일이 바뀐 경우 — 화면을 새로 고치세요)';
+    if (code === 'VALIDATION_ERROR') return '날짜를 고르세요.';
+    return T.errorText(r);
   }
 
   // ---------------------------------------------------------------- 판정 계산 (서버 validation.evaluate와 같은 규칙)
@@ -707,11 +723,14 @@
 
     // ================================================= DOC-SC-02 양식 선택
     async showPicker() {
-      // 작성 요구 양식은 작성 요구로만 생긴다(P4-S1-Q1)
-      const templates = (await this.loadTemplates()).filter((t) => !t.requirement_only);
+      // 작성 요구 양식은 작성 요구로만 생긴다(P4-S1-Q1). 단 주기 양식은 날짜를 골라 직접 만들 수 있다(P9 D-113 — 규칙 파일 양식, 꺼진 규칙도)
+      const [all, rulesRes] = await Promise.all([this.loadTemplates(), api.get('periodic-rules')]);
+      const templates = all.filter((t) => !t.requirement_only);
+      const rules = rulesRes.ok ? rulesRes.data.rules : [];
       this.root.innerHTML = `
         <div class="fade-in">
           ${T.topBar('새 문서 › 양식 선택', '활성 양식 중 유형별 최신 버전만 표시됩니다.')}
+          <h3 class="te-sub">일반 양식</h3>
           ${templates.length ? `<div class="te-cards">${templates.map((t) => `
             <div class="card">
               <div class="card-title">${esc(t.name)}</div>
@@ -720,6 +739,14 @@
               <div class="te-actions"><button class="btn btn-primary btn-sm" data-template="${t.template_id}">선택</button></div>
             </div>`).join('')}</div>`
           : '<div class="te-empty">사용 가능한 양식이 없습니다 (개발용 시드 데이터를 넣으세요).</div>'}
+          <h3 class="te-sub">주기 양식 (날짜마다 1건)</h3>
+          ${rules.length ? `<div class="te-table-wrap"><table class="data-table" id="tePeriodicPick">
+            <tbody>${rules.map((x) => `<tr data-periodic-row="${esc(x.type_code)}">
+              <td class="mono">${esc(x.type_code)}</td><td>${esc(x.name || '(사용 중인 양식 없음)')}</td>
+              <td class="te-hint">${esc(periodicRuleText(x))}${x.enabled ? '' : ' · 자동 생성 꺼짐'}</td>
+              <td><button class="btn btn-primary btn-sm" data-periodic="${esc(x.type_code)}" data-name="${esc(x.name || x.type_code)}" data-cadence="${esc(x.cadence)}">선택</button></td>
+            </tr>`).join('')}</tbody></table></div>`
+          : `<div class="te-empty" id="tePeriodicNone">${rulesRes.ok ? '주기 양식이 없습니다.' : esc(T.errorText(rulesRes))}</div>`}
           <p class="te-hint" id="teReqNote" style="margin-top:1rem">시험성적서·원산지·육안검사·CCP 일지는 입고·생산 시작 때 자동으로 만들어집니다.</p>
           <div class="te-actions"><button class="btn btn-secondary" id="btnCancel">취소</button></div>
         </div>`;
@@ -727,6 +754,61 @@
       this.root.querySelector('#btnCancel').addEventListener('click', () => this.showList());
       this.root.querySelectorAll('button[data-template]').forEach((b) =>
         b.addEventListener('click', () => this.openForm({ templateId: Number(b.dataset.template) })));
+      this.root.querySelectorAll('button[data-periodic]').forEach((b) =>
+        b.addEventListener('click', () => this.openPeriodicDate({ type_code: b.dataset.periodic, name: b.dataset.name, cadence: b.dataset.cadence })));
+    },
+
+    // ================================================= DOC-SC-14 주기 문서 날짜 선택 (P9, REQ-A06)
+    // 미래·주말도 됨(특근일). 그날(D11은 그 주) 문서가 있으면 그 문서를, 없으면 만들어 작성 폼으로
+    openPeriodicDate(rule) {
+      const wrap = document.createElement('div');
+      wrap.className = 'te-modal-wrap';
+      wrap.innerHTML = `
+        <div class="te-modal" role="dialog" aria-modal="true" id="tePeriodicDate">
+          <div class="modal-header"><div class="modal-title">새 문서 › ${esc(rule.type_code)} ${esc(rule.name)}</div></div>
+          <div class="te-modal-body">
+            <label class="form-label">날짜</label>
+            <div class="te-prd-day"><input type="date" class="form-control" id="pdDay" value="${seoulDay()}"> <span id="pdDow"></span></div>
+            <p class="te-hint">날짜마다 문서가 1건입니다. 그날 문서가 이미 있으면 그 문서를 엽니다.</p>
+            <p class="te-hint">주기 문서는 삭제할 수 없습니다. 필요 없으면 [작성 안 함]을 쓰세요.</p>
+            <div class="te-error-text" id="pdError"></div>
+          </div>
+          <div class="te-modal-footer"><button class="btn btn-secondary" id="pdCancel">취소</button><button class="btn btn-primary" id="pdOpen">열기</button></div>
+        </div>`;
+      document.body.appendChild(wrap);
+      const $ = (sel) => wrap.querySelector(sel);
+      const close = () => wrap.remove();
+      const showDow = () => {
+        const day = $('#pdDay').value;
+        if (!day) { $('#pdDow').textContent = ''; return; }
+        const monday = shiftDay(day, -((new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7));
+        $('#pdDow').textContent = rule.cadence === 'weekly' ? `(${dow(day)}) → ${monday.slice(5)}(월) 주 문서` : `(${dow(day)})`;
+      };
+      showDow();
+      $('#pdDay').addEventListener('input', () => { $('#pdError').textContent = ''; showDow(); });
+      wrap.addEventListener('click', (e) => { if (e.target === wrap) close(); });
+      $('#pdCancel').addEventListener('click', close);
+      $('#pdOpen').addEventListener('click', async () => {
+        const day = $('#pdDay').value;
+        if (!day) { $('#pdError').textContent = '날짜를 고르세요.'; return; }
+        const btn = $('#pdOpen');
+        btn.disabled = true;  // 실행 중 두 번 누름 막기
+        try {
+          const r = await api.post('periodic-documents', { type_code: rule.type_code, date: day });
+          if (!r.ok) { $('#pdError').textContent = periodicOpenError(r); return; }
+          close();
+          const id = r.data.document_id;
+          if (r.data.result === 'existing') {
+            T.toast(`${r.data.work_date.slice(5)} 문서가 이미 있습니다(#${id} ${T.STATUS[r.data.status]?.label || r.data.status}).`, 'info');
+            this.showDetail(id);
+            return;
+          }
+          const d = await api.get(`documents/${id}`);
+          if (!d.ok) { T.toast(T.errorText(d), 'error'); this.showDetail(id); return; }
+          this.openForm({ document: d.data });
+        } finally { btn.disabled = false; }
+      });
+      $('#pdDay').focus();
     },
 
     // ================================================= DOC-SC-03 작성/수정 폼

@@ -12,6 +12,7 @@ import tempfile
 from pathlib import Path
 from unittest import mock
 
+from django.conf import settings
 from django.core.management import CommandError, call_command
 from django.db import transaction
 from django.test import TestCase, override_settings
@@ -579,3 +580,30 @@ class RequirementLabelTests(RulesFileMixin, TestCase):
         }
         self.assertEqual(listed.get(made["document_id"]), None)
         self.assertEqual(listed.get(lot[0]["document_id"]), "lot")
+
+
+@override_settings(
+    ROOT_URLCONF="apps.devtools.test_urls",
+    MIDDLEWARE=[*settings.MIDDLEWARE, "apps.devtools.middleware.TraceMiddleware"],
+)
+class DevSnapshotTests(RulesFileMixin, TestCase):
+    """C4 S5: 개발 콘솔 ④ 패널 — 기간의 주기 문서(작업일 범위, weekly는 그 주 월요일부터)."""
+
+    def setUp(self):
+        super().setUp()
+        setup_req()
+        setup_p8()
+
+    def test_periodic_scope_snapshot(self):
+        with today(FRI):
+            run(WED, FRI)
+        with transaction.atomic():
+            lot = req.require_for_lot(3, 88)["documents"][0]["document_id"]
+        data = self.client.get(f"/api/dev/snapshot?periodic_from={WED}&periodic_to={WED}").json()
+        self.assertEqual(data["scope"], {"periodic_from": WED, "periodic_to": WED})
+        keys = sorted(r["record_key"] for r in data["tables"]["document"])
+        self.assertEqual(keys, [f"D10|day:{WED}", f"D11|week:{MON}", f"D12|day:{WED}"])
+        self.assertTrue(data["tables"]["doc_section"])
+        self.assertNotIn(lot, [r["document_id"] for r in data["tables"]["document"]])
+        bad = self.client.get("/api/dev/snapshot?periodic_from=2026-13-01")
+        self.assertEqual(bad.status_code, 400)

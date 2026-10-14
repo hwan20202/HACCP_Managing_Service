@@ -1,5 +1,6 @@
 """개발 콘솔용 읽기 전용 API (/api/dev/). 허용 목록 테이블만, 문서 단위로 읽는다."""
 
+from django.db.models import Q
 from django.http import JsonResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_safe
@@ -105,8 +106,41 @@ def _valid_day(value):
         return False
 
 
+def _periodic_snapshot(day_from, day_to):
+    """P9 ④ 패널(C4 S5): 기간의 주기 문서(`record_key` `…|day:`·`…|week:`)와 그 섹션.
+
+    주기 생성은 실행 전에 문서 id를 모르므로 작업일 범위로 잡는다. weekly 문서의 작업일은 그 주
+    월요일이라 시작일을 그 주 월요일로 넓힌다. 논리 삭제 문서도 포함한다.
+    """
+    import datetime
+
+    start = datetime.date.fromisoformat(day_from)
+    start -= datetime.timedelta(days=start.weekday())
+    periodic = Q(record_key__contains="|day:") | Q(record_key__contains="|week:")
+    docs = Document.objects.filter(
+        periodic, work_date__gte=start, work_date__lte=datetime.date.fromisoformat(day_to)
+    ).order_by("document_id")
+    doc_ids = list(docs.values_list("document_id", flat=True))
+    tables = {
+        "document": _rows(docs),
+        "doc_section": _rows(
+            DocSection.objects.filter(document_id__in=doc_ids).order_by("section_id")
+        ),
+    }
+    scope = {"periodic_from": day_from, "periodic_to": day_to}
+    return _json({"scope": scope, "exists": True, "tables": tables})
+
+
 @require_safe
 def snapshot(request):
+    if "periodic_from" in request.GET:
+        day_from = request.GET["periodic_from"]
+        day_to = request.GET.get("periodic_to", day_from)
+        if not (_valid_day(day_from) and _valid_day(day_to)):
+            return _json(
+                {"code": "INVALID_REQUEST", "message": "periodic_from·to는 YYYY-MM-DD입니다."}, 400
+            )
+        return _periodic_snapshot(day_from, day_to)
     for kind, key in (("lot", "lot_id"), ("batch", "batch_id")):
         if key in request.GET:
             value = request.GET[key]

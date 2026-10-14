@@ -3,6 +3,7 @@
 // 화면: REQ-SC-01 작성 요구 테스트 · 02 테스트 입고 모달 · 03 테스트 배치 모달 · 04 호출 결과 패널
 //       05 LOT별 연결 문서(P7: 입고일 → 육안검사 묶음 상세 DOC-SC-10 링크)
 //       REQ-SC-05 LOT별 연결 문서(문서 상세의 LOT 링크로도 들어온다)
+//       P9(C4 S5): REQ-SC-07 주기 문서 만들기 모달 · 08 주기 생성 결과 패널(04 자리) — doc-requirements/p9-s1-screens.md 2~4장, API REQ-A05·A07
 // 설계: dev-notes/doc-requirements/s1-screens.md, API: s2-spec.md 2.2(A01·A02, 개발 D01~D07)
 // 수불·생산이 할 호출(입고 등록·생산 시작 + 작성 요구)을 개발용 가상 데이터로 흉내 낸다.
 // =============================================
@@ -63,6 +64,68 @@
     return templateNames;
   }
   const formName = (code) => `${esc((templateNames && templateNames[code]) || code)} ${esc(code)}`;
+
+  // ---------------------------------------------------------------- P9 주기 (REQ-SC-07·08)
+  const WEEKDAY = ['일', '월', '화', '수', '목', '금', '토'];
+  const seoulToday = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
+  const dowOf = (day) => WEEKDAY[new Date(`${day}T00:00:00Z`).getUTCDay()];
+  const daysBetween = (a, b) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000);
+  // 규칙 설명: 요일(1=월 … 7=일) + 주기. 월~금 연속이면 "월~금"
+  function ruleText(rule) {
+    const days = rule.weekdays.map((n) => WEEKDAY[n % 7]);
+    const same = (a) => a.length === rule.weekdays.length && a.every((n, i) => n === rule.weekdays[i]);
+    const span = same([1, 2, 3, 4, 5]) ? '월~금' : same([1, 2, 3, 4, 5, 6, 7]) ? '매일' : days.join('·');
+    return rule.cadence === 'weekly' ? `매주 — 그 주 월요일 문서, 대상 요일 ${span}` : `${span} 매일`;
+  }
+  const PRD_RESULT = { created: '새로 만듦', existing: '이미 있음', failed: '실패' };
+  function skipText(line) {
+    if (line.reason === 'before_start') return '대상 아님(시작 전)';
+    if (line.reason === 'disabled') return '대상 아님(꺼진 규칙)';
+    return `대상 아님(${line.type_code === 'D11' || line.reason !== 'weekday' ? '요일' : dowOf(line.work_date)})`;
+  }
+  // 호출 전체 오류(4장) — 아무것도 만들지 않음
+  function periodicErrorText(record) {
+    const d = record.data || {};
+    if (d.code === 'RULES_INVALID') return `주기 규칙 파일에 오류가 있습니다: ${d.message}. 아무것도 만들지 않았습니다.`;
+    if (d.code === 'STAFF_HEADER_MISSING' || d.code === 'INVALID_STAFF') return '현재 사용자를 찾을 수 없습니다. 사용자를 다시 고르세요.';
+    if (d.code === 'VALIDATION_ERROR') {
+      const first = (d.details || [])[0] || {};
+      const text = { future: '미래 날짜는 만들 수 없습니다(오늘까지).', order: '시작일이 끝일보다 늦습니다.', max: '한 번에 31일까지 만들 수 있습니다.' }[first.code];
+      return `${text || first.message || d.message} 아무것도 만들지 않았습니다.`;
+    }
+    return `${T.errorText(record)} 아무것도 만들지 않았습니다.`;
+  }
+  // REQ-SC-08 주기 생성 결과 패널
+  function periodicResultHtml(r) {
+    const body = r.record.data || {};
+    const traceLink = T.config.devConsole && r.traceId ? `<a class="btn btn-secondary btn-sm" target="_blank" rel="noopener" id="reqTraceLink" href="${T.config.devConsoleUrl}?trace=${encodeURIComponent(r.traceId)}">개발 콘솔에서 보기 ↗</a>` : '';
+    if (!r.ok) {
+      return `<div class="te-req-result te-req-fail" id="teReqResult">
+        <div class="te-req-result-head"><b>주기 생성 결과</b> <span class="te-hint">${esc(r.at)} · ${r.ms}ms</span> ${traceLink}</div>
+        <div class="te-reject-reason" id="prdError"><b>${esc(periodicErrorText(r.record))}</b></div></div>`;
+    }
+    const t = body.totals;
+    const range = body.date_from === body.date_to ? body.date_from : `${body.date_from} ~ ${body.date_to.slice(5)}`;
+    const fold = !r.unfolded && body.lines.length > 25;
+    const shown = fold ? body.lines.filter((x) => x.result !== 'skipped_rule') : body.lines;
+    const hidden = body.lines.length - shown.length;
+    const rows = shown.map((x) => `
+      <tr data-prd="${esc(x.record_key)}" class="te-prd-${esc(x.result)}">
+        <td>${esc(x.work_date.slice(5))}(${dowOf(x.work_date)})</td><td>${esc(x.type_code)}</td>
+        <td class="te-req-res-${esc(x.result)}">${x.result === 'skipped_rule' ? esc(skipText(x)) : x.result === 'failed' ? `실패 — [${esc(x.code)}] ${esc(x.message)}` : esc(PRD_RESULT[x.result] || x.result)}</td>
+        <td>${x.document_id ? `<a href="#" data-open-doc="${x.document_id}">#${x.document_id}</a> ${T.statusBadge(x.status)}` : '<span class="te-hint">–</span>'}</td>
+      </tr>`).join('');
+    return `<div class="te-req-result" id="teReqResult">
+      <div class="te-req-result-head"><b>주기 생성 결과</b> <span>${esc(range)} · 실행 staff ${esc(body.actor_id)}</span>
+        <span id="prdTotals">만듦 ${t.created} · 이미 있음 ${t.existing} · 대상 아님 ${t.skipped_rule} · <span class="${t.failed ? 'te-prd-failcount' : ''}">실패 ${t.failed}</span></span>
+        <span class="te-hint">${esc(r.at)} · ${r.ms}ms</span> ${traceLink}</div>
+      ${t.failed ? `<div class="te-prd-failnote" id="prdFailNote">실패 ${t.failed}건 — 나머지는 만들어졌습니다.</div>` : ''}
+      <div class="te-table-wrap"><table class="data-table" id="prdLines">
+        <thead><tr><th>날짜</th><th>양식</th><th>결과</th><th>문서</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="4" class="te-hint">줄이 없습니다.</td></tr>'}</tbody></table></div>
+      ${hidden ? `<div class="te-actions"><button class="btn btn-secondary btn-sm" id="prdUnfold">대상 아님 ${hidden}줄 펼치기</button></div>` : ''}
+    </div>`;
+  }
 
   // ---------------------------------------------------------------- 모달(입력 오류가 있으면 닫지 않는다)
   function formModal({ title, body, okLabel, onSubmit, wide }) {
@@ -139,6 +202,7 @@
             <div class="te-req-actions">
               <button class="btn btn-primary" id="btnNewLot" ${noStaff ? 'disabled' : ''}>LOT 생성</button>
               <button class="btn btn-primary" id="btnNewBatch" ${noStaff ? 'disabled' : ''}>생산 시작</button>
+              <button class="btn btn-primary" id="btnPeriodic" ${noStaff ? 'disabled' : ''} title="운영에서는 관리 명령(make_periodic_documents)이 하루 한 번 만듭니다 — 예약 실행 설정은 deployment.md 3.1">주기 문서 만들기</button>
               <span class="te-hint">LOT 생성 = 입고 등록 + require_for_lot, 생산 시작 = 배치 진행 중 + require_for_batch (한 트랜잭션)</span>
               <label class="te-req-day">작업일 <input type="date" class="form-control" id="reqDay" value="${esc(this.day)}"></label>
               <button class="btn btn-secondary btn-sm" id="reqAllDays">전체</button>
@@ -154,6 +218,7 @@
       const $ = (sel) => this.root.querySelector(sel);
       $('#btnNewLot').addEventListener('click', () => this.openLotModal());
       $('#btnNewBatch').addEventListener('click', () => this.openBatchModal());
+      $('#btnPeriodic').addEventListener('click', () => this.openPeriodicModal());
       $('#reqDay').addEventListener('change', (e) => { this.day = e.target.value; this.render(); });
       $('#reqAllDays').addEventListener('click', () => { this.day = null; this.render(); });
       this.root.querySelectorAll('[data-recall-lot]').forEach((b) => b.addEventListener('click', () => this.recall('lot', b.dataset.recallLot)));
@@ -213,6 +278,7 @@
 
     // ================================================= REQ-SC-04 호출 결과
     resultHtml(r) {
+      if (r.kind === 'periodic') return periodicResultHtml(r);
       const head = `<div class="te-req-result-head"><b>호출 결과</b> <span class="mono">${esc(r.call)}</span>
         <span class="te-hint">${esc(r.at)} · ${r.ms}ms</span>
         ${T.config.devConsole && r.traceId ? `<a class="btn btn-secondary btn-sm" target="_blank" rel="noopener" id="reqTraceLink" href="${T.config.devConsoleUrl}?trace=${encodeURIComponent(r.traceId)}">개발 콘솔에서 보기 ↗</a>` : ''}</div>`;
@@ -234,7 +300,8 @@
     },
 
     bindResult() {
-      this.root.querySelectorAll('[data-open-doc]').forEach((b) => b.addEventListener('click', () => T.open('temp-doc', { documentId: Number(b.dataset.openDoc) })));
+      this.root.querySelectorAll('[data-open-doc]').forEach((b) => b.addEventListener('click', (e) => { e.preventDefault(); T.open('temp-doc', { documentId: Number(b.dataset.openDoc) }); }));
+      this.root.querySelector('#prdUnfold')?.addEventListener('click', () => { this.lastResult.unfolded = true; this.render(); });
     },
 
     async remember(call, record, rolledBack, sentInspection = false) {
@@ -259,6 +326,64 @@
       const record = await api.post(`${DEV}/${kind === 'lot' ? 'lots' : 'batches'}/${id}/require`, {});
       const fn = kind === 'lot' ? 'require_for_lot' : 'require_for_batch';
       await this.remember(`${fn}(staff ${api.staffId}, ${kind} ${id}) — 다시 호출`, record, '아무것도 바뀌지 않았습니다(롤백).');
+    },
+
+    // ================================================= REQ-SC-07 주기 문서 만들기 모달 (P9)
+    async openPeriodicModal() {
+      const r = await api.get('periodic-rules');
+      if (!r.ok) {
+        // 규칙 파일 오류(RULES_INVALID)는 모달 대신 결과 패널 머리에(REQ-SC-08)
+        this.rememberPeriodic(null, r);
+        return;
+      }
+      const rules = r.data.rules.filter((x) => x.enabled);
+      const day = seoulToday();
+      formModal({
+        title: '주기 문서 만들기',
+        okLabel: '만들기',
+        body: `
+          <div class="te-field"><label>날짜</label>
+            <div class="te-radio te-prd-dates">
+              <label><input type="radio" name="prd_mode" value="day" checked> 하루 <input type="date" class="form-control" name="prd_day" value="${day}" max="${day}"></label>
+              <label><input type="radio" name="prd_mode" value="range"> 기간 <input type="date" class="form-control" name="prd_from" value="${day}" max="${day}"> ~ <input type="date" class="form-control" name="prd_to" value="${day}" max="${day}"></label>
+            </div></div>
+          <div class="te-field"><label>양식</label>
+            ${rules.length ? rules.map((x) => `<label class="te-check"><input type="checkbox" name="prd_type" value="${esc(x.type_code)}" checked> ${esc(x.type_code)} ${esc(x.name || '(사용 중인 양식 없음)')} <span class="te-hint">(${esc(ruleText(x))})</span></label>`).join('')
+              : '<p class="te-hint">켜진 주기 규칙이 없습니다(periodic_rules.json).</p>'}</div>
+          <div class="te-field"><label>실행자</label><div class="te-ro-block">staff ${esc(api.staffId)} (현재 사용자)</div></div>
+          <p class="te-status-note">이미 있는 날은 건드리지 않습니다. 미래 날짜는 만들 수 없습니다.</p>`,
+        onSubmit: async (wrap) => {
+          const v = (name) => wrap.querySelector(`[name="${name}"]`);
+          const range = wrap.querySelector('[name=prd_mode]:checked').value === 'range';
+          const from = range ? v('prd_from').value : v('prd_day').value;
+          const to = range ? v('prd_to').value : v('prd_day').value;
+          const types = [...wrap.querySelectorAll('[name=prd_type]:checked')].map((x) => x.value);
+          const today = seoulToday();
+          const err = wrap.querySelector('#reqFormError');
+          // 3장 입력 오류(호출 전)
+          let msg = '';
+          if (!from || !to) msg = '날짜를 고르세요.';
+          else if (from > today || to > today) msg = '미래 날짜는 만들 수 없습니다(오늘까지).';
+          else if (from > to) msg = '시작일이 끝일보다 늦습니다.';
+          else if (daysBetween(from, to) + 1 > 31) msg = '한 번에 31일까지 만들 수 있습니다.';
+          else if (!types.length) msg = '양식을 하나 이상 고르세요.';
+          err.textContent = msg;
+          if (msg) return true;
+          const record = await api.post('periodic-runs', { date_from: from, date_to: to, type_codes: types });
+          this.rememberPeriodic({ from, to }, record);
+          return false;
+        },
+      });
+    },
+
+    async rememberPeriodic(range, record) {
+      this.lastResult = {
+        kind: 'periodic', call: `run_periodic(staff ${api.staffId}${range ? `, ${range.from} ~ ${range.to}` : ''})`,
+        record, ok: record.ok, ms: record.ms, traceId: record.traceId, staff: api.staffId,
+        at: new Date().toTimeString().slice(0, 8), unfolded: false,
+      };
+      await this.render();
+      this.root.querySelector('#teReqResult')?.scrollIntoView({ block: 'nearest' });
     },
 
     // ================================================= REQ-SC-02 테스트 입고 모달

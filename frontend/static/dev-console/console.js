@@ -75,7 +75,22 @@
     unskip: { label: '되돌리기 (F28·A25)', method: 'POST', flow: 'DOC-USK', uses: ['id', 'body'], path: (s) => `documents/${s.id}/unskip`, doc: (s) => s.id },
     recentValues: { label: '최근 값 (F29·A26)', method: 'GET', flow: 'DOC-RCV', uses: ['query'], path: (s) => `documents/recent-values${s.query ? `?${s.query}` : ''}` },
     periodicBundle: { label: 'REQ 주 묶음 (F06·A04)', method: 'GET', flow: 'REQ-PWB', uses: ['query'], path: (s) => `periodic-bundles${s.query ? `?${s.query}` : ''}` },
+    // ---- P9 주기형 작성 요구 — doc-requirements/p9-s2-spec.md(+ 6.1 단계 ID). ④ = 기간의 주기 문서(개발 API periodic_from·to)
+    // 만들 줄이 없으면(모두 대상 아님) 05가 없는 도식
+    periodicRun: { label: 'REQ 주기 문서 만들기 (F07·A05)', method: 'POST', uses: ['body'], path: () => 'periodic-runs',
+      flow: (record, trace) => (trace && !trace.steps.some((x) => x.step_id === 'REQ-PRN-05') && record.ok ? 'REQ-PRN-NONE' : 'REQ-PRN'),
+      scope: (s) => periodicScope(s, 'date_from', 'date_to') },
+    periodicOpen: { label: 'REQ 주기 문서 하나 (F08·A06)', method: 'POST', flow: 'REQ-POD', uses: ['body'], path: () => 'periodic-documents',
+      scope: (s) => periodicScope(s, 'date', 'date') },
+    periodicRules: { label: 'REQ 주기 규칙 목록 (F09·A07)', method: 'GET', flow: 'REQ-PRL', uses: [], path: () => 'periodic-rules' },
   };
+  function periodicScope(spec, fromKey, toKey) {
+    try {
+      const b = JSON.parse(spec.body || '{}');
+      const ok = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
+      return ok(b[fromKey]) && ok(b[toKey]) && b[fromKey] <= b[toKey] ? `periodic_from=${b[fromKey]}&periodic_to=${b[toKey]}` : null;
+    } catch (e) { return null; }
+  }
   // 견본 파일(콘솔 전용): 서명만 맞으면 서버 검사(DOC-VR-20)를 통과한다. bad = 이름은 .pdf, 내용은 글자
   const SAMPLE = {
     pdf: () => new Blob(['%PDF-1.4\n% console sample\n%%EOF\n'], { type: 'application/pdf' }),
@@ -1348,6 +1363,64 @@
       } }),
   );
 
+  // ---------------------------------------------------------------- 프리셋 REQ-PS-14~16 · DOC-PS-30·31 (C4 S5 — p9-s1-screens 8장)
+  // 날짜는 실행하는 날 기준(Asia/Seoul). 같은 날 다시 실행하면 이미 있는 문서는 existing — 기대 문구도 그 경우를 포함한다(D-146 Q2).
+  const p9 = (preset) => ({ unit: 'P9', ...preset });
+  const seoulToday = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
+  const isoDow = (day) => { const n = new Date(`${day}T00:00:00Z`).getUTCDay(); return n === 0 ? 7 : n; };
+  // 오늘이 주말이면 지난 금요일(REQ-PS-14 — 평일 날짜)
+  const lastWeekday = () => { const t = seoulToday(); const n = isoDow(t); return n > 5 ? dayAfter(t, 5 - n) : t; };
+  const nextSaturday = () => { const t = seoulToday(); return dayAfter(t, 13 - isoDow(t)); };  // 다음 주 토요일
+  async function quietPostAs(path, body, staff) {
+    const r = await fetch(`/api/v1/${path}`, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-Staff-Id': String(staff) }, body: JSON.stringify(body) });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) throw new Error(`사전 조건을 만들지 못했습니다: ${(data && (data.message || data.code)) || r.status}`);
+    return data;
+  }
+
+  PRESETS.push(
+    p9({ id: 'REQ-PS-14', label: '주기 문서 오늘 두 번', expect: '1회 200 · REQ-PRN 도식 일치(01~06, 05는 줄마다) · D10·D12 그날 문서와 D11 그 주 문서 3줄 — 없던 것은 created, 있던 것은 existing / 2회 200 · 3줄 모두 existing, ④ 문서 수 그대로(document·doc_section 변화 없음)',
+      prepare: async () => {
+        const day = lastWeekday();
+        const body = J({ date_from: day, date_to: day });
+        return { func: 'periodicRun', staff: '3', body,
+          script: async (exec) => {
+            await exec({ func: 'periodicRun', body, staff: '3' });
+            await exec({ func: 'periodicRun', body, staff: '3' });
+          } };
+      } }),
+    p9({ id: 'REQ-PS-15', label: '기간 보충과 주말', expect: '200 · REQ-PRN 도식 일치 · 14일: 토·일 D10·D12 줄은 skipped_rule(reason weekday), 규칙 시작일(periodic_rules.json start_date) 전 날은 skipped_rule(before_start), D11은 주마다 1줄(work_date 월요일) · ④ created 줄만큼 document +, 이미 있던 문서는 그대로',
+      prepare: async () => {
+        const end = seoulToday();
+        return { func: 'periodicRun', staff: '3', body: J({ date_from: dayAfter(end, -13), date_to: end }) };
+      } }),
+    p9({ id: 'REQ-PS-16', label: '입력 거절(미래 · 32일 · 시작>끝)', expect: '3번 모두 400 VALIDATION_ERROR(details: date_to future / date_to max / date_from order) · REQ-PRN-02 실패, 03 이후 없음 · ④ 변화 없음',
+      prepare: async () => {
+        const t = seoulToday();
+        const cases = [{ date_from: t, date_to: dayAfter(t, 1) }, { date_from: dayAfter(t, -31), date_to: t }, { date_from: t, date_to: dayAfter(t, -1) }];
+        return { func: 'periodicRun', staff: '3', body: J(cases[0]),
+          script: async (exec) => { for (const c of cases) await exec({ func: 'periodicRun', body: J(c), staff: '3' }); } };
+      } }),
+    p9({ id: 'DOC-PS-30', label: '새 문서 → 이미 있는 날', expect: '200 · REQ-POD 도식 일치(01~04) · result existing, 준비에서 만든(또는 있던) 그날 D10과 같은 document_id · ④ 변화 없음',
+      prepare: async () => {
+        const day = lastWeekday();
+        const made = await quietPostAs('periodic-runs', { date_from: day, date_to: day, type_codes: ['D10'] }, 3);
+        const line = made.lines[0];
+        prepared.push({ lot_number: '-', document_id: line.document_id, status: `D10 ${day} ${line.status} — ${line.result}` });
+        return { func: 'periodicOpen', staff: '3', body: J({ type_code: 'D10', date: day }) };
+      } }),
+    p9({ id: 'DOC-PS-31', label: '새 문서 → 미래·주말(다음 주 토요일 D12)', expect: '1번째 200 · REQ-POD 도식 일치 · result created(이번 주에 다시 실행하면 existing), record_key D12|day:<토요일> · ④ document +1 / 2번째 삭제 409 DOCUMENT_NOT_DELETABLE(주기 문서 — ISS-028) · ④ 변화 없음. 만든 문서는 남음 — 필요 없으면 [작성 안 함]',
+      prepare: async () => {
+        const body = J({ type_code: 'D12', date: nextSaturday() });
+        return { func: 'periodicOpen', staff: '3', body,
+          script: async (exec) => {
+            const first = await exec({ func: 'periodicOpen', body, staff: '3' });
+            const id = first.record.ok ? String(first.record.data.document_id) : '0';
+            await exec({ func: 'delete', id, staff: '3' });
+          } };
+      } }),
+  );
+
   function preparedText(m) {
     if (m.document_id === null) return `새 LOT ${esc(m.lot_number)} · 문서 없음(작성 요구 안 부름)`;
     if (m.lot_number === '-') return `문서 #${esc(m.document_id)}(${esc(m.status)})`;
@@ -1419,7 +1492,7 @@
     $('#dcStaff').addEventListener('change', (e) => api.setStaff(e.target.value));
     $('#dcFunc').innerHTML = Object.entries(FUNCS).map(([k, f]) => `<option value="${k}">${esc(f.label)}</option>`).join('');
     const group = (unit, label) => `<optgroup label="${label}">${PRESETS.filter((p) => (p.unit || p.id.split('-')[0]) === unit).map((p) => `<option value="${p.id}">${p.id} ${esc(p.label)}</option>`).join('')}</optgroup>`;
-    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)') + group('FILE', '파일 업로드 (스프린트 3)') + group('P8', '점검표·작성 안 함 (P8)');
+    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)') + group('FILE', '파일 업로드 (스프린트 3)') + group('P8', '점검표·작성 안 함 (P8)') + group('P9', '주기형 작성 요구 (P9)');
     $('#dcFunc').addEventListener('change', () => { state.preset = null; toggleInputs(); });
     ['#dcId', '#dcQuery', '#dcBody', '#dcDocId'].forEach((sel) => $(sel).addEventListener('input', () => { if (state.preset && state.preset.script) state.preset = null; }));
     $('#dcLoadPreset').addEventListener('click', loadPreset);

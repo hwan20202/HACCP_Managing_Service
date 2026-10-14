@@ -207,3 +207,12 @@
 .te-skip-note { background: #eceff1; border-radius: var(--radius-md); padding: 0.6rem 0.8rem; margin-top: 0.75rem; font-size: 0.88rem; }
 .te-quick { display: flex; gap: 0.4rem; margin-bottom: 0.4rem; }
 .te-row-skipped td { color: var(--text-muted); }
+/* P9 주기 생성 (REQ-SC-07·08, C4 S5) */
+.te-prd-dates { display: flex; flex-direction: column; gap: 0.4rem; }
+.te-prd-dates label { display: flex; align-items: center; gap: 0.4rem; }
+.te-prd-dates input[type=date] { width: auto; }
+.te-req-res-skipped_rule { color: var(--text-tertiary, var(--text-secondary)); }
+.te-req-res-failed, .te-prd-failcount, .te-prd-failnote { color: var(--color-danger); font-weight: 600; }
+.te-prd-failnote { margin-bottom: 0.5rem; }
+.te-prd-day { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem; }
+.te-prd-day input[type=date] { width: auto; }
