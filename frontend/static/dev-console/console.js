@@ -803,7 +803,8 @@
       } },
     { id: 'WF-PS-12', label: '재상신(수정 → 작성완료 → 상신)', expect: 'PATCH 200 → 작성완료 200 → 상신 201 · DOC-LCK가 completed 통과 · approval_request +1(n+1회차), 이전 회차 행·스냅샷 그대로 · document rejected→completed→submitted',
       prepare: async () => {
-        const d = need(await findDoc('rejected'), 'rejected');
+        // C3 S6(ISS-032): 파일 필수 양식(D01·D02)의 반려 문서는 파일을 끊었으면 작성완료가 files_required로 막힌다 → 빼고 고름
+        const d = need(await findDoc('rejected', (x) => !['D01', 'D02'].includes(x.template && x.template.type_code)), 'rejected');
         const req = await latestRequest(d.document_id);
         const slots = req ? req.slots.map((s) => ({ slot_no: s.slot_no, label: s.label || undefined, approver_id: s.approver_id })) : SLOTS3;
         return { func: 'submit', id: d.document_id, body: J({ expected_version: d.version + 2, slots }),

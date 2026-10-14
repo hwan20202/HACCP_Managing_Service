@@ -199,6 +199,7 @@
 .te-ox button:disabled { cursor: default; }
 .te-prefilled { font-size: 0.7rem; color: #78909c; border: 1px dashed #b0bec5; border-radius: 4px; padding: 0 0.25rem; }
 .te-check-row-ng td { background: #fdecea; }
+.te-check-row-ng td:first-child { box-shadow: inset 3px 0 0 var(--color-danger); }  /* C3 S6(ISS-033): X 줄만 강조 */
 .te-check-sum { display: flex; gap: 0.9rem; flex-wrap: wrap; font-size: 0.85rem; margin: 0.5rem 0; }
 .te-week-strip { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; font-size: 0.85rem; }
 .te-week-strip a, .te-week-strip span.te-day { padding: 0.1rem 0.45rem; border-radius: var(--radius-md); border: 1px solid var(--border); text-decoration: none; color: inherit; }

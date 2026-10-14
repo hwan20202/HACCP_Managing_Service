@@ -564,7 +564,7 @@
           <td><a href="#" class="te-lot-link" data-open-doc="${d.document_id}">#${d.document_id}</a></td>
           <td>${statusCell(d.status, d.correcting)}</td>
           <td>${d.inspector_id ? `staff ${esc(d.inspector_id)}` : '<span class="te-hint">-</span>'}</td>
-          <td>${counts(d.check_counts)}</td>
+          <td>${d.status === 'skipped' ? '<span class="te-hint">–</span>' : counts(d.check_counts)}</td>
           <td>${d.nonconforming ? '<span class="te-judge-ng">부적합</span>' : (d.nonconforming === false ? '적합' : '<span class="te-hint">–</span>')}</td>
           <td>${approval({ ...d, my_slot: d.my_slot })}</td>
         </tr>`;
@@ -960,8 +960,9 @@
           ${pre.has(`${s.key}.${fd.key}`) && untouched ? '<span class="te-prefilled" title="새 문서에 미리 채운 값 — 바꿀 수 있음">미리</span>' : ''}
           ${v === 'X' ? '<span class="te-judge-ng" title="저장 뒤 상세에서 이탈·개선조치를 적으세요">⚠</span>' : ''}${this.errorFor(row.uid, fd.key)}`;
       };
+      // C3 S6(ISS-033): 점검표는 섹션 전체 강조 대신 X 줄만 강조(p8-s1 "X 줄 강조") — 섹션째 칠하면 X 줄이 묻힌다
       const ng = isNonconforming(s, row.values);
-      return `<div class="te-section${ng ? ' te-section-ng' : ''}" id="teChecklist">
+      return `<div class="te-section te-check-section" id="teChecklist">
         <div class="te-section-head"><span class="te-section-title">${esc(s.label)} <span class="te-hint">${s.fields.filter(isResult).length}항목 · 다시 누르면 빈칸</span></span>
           ${daily.length ? `<button class="btn btn-secondary btn-sm" data-all-o="${row.uid}" id="teAllO" title="매일 항목 ${daily.length}개 중 빈칸만 O로(이미 고른 값은 그대로)">매일 항목 모두 O</button>` : ''}</div>${sectionErr}
         ${ng ? '<div class="te-error-text">X(불량·부적합)가 있습니다 — 저장한 뒤 상세 화면에서 이탈·개선조치를 1건 이상 적어야 작성완료할 수 있습니다.</div>' : ''}
@@ -981,8 +982,8 @@
         if (value !== 'X') return value === 'NA' ? `<span class="te-hint">${text}</span>` : text;
         return `<span class="te-judge-ng">⚠ ${text}</span>${canDev ? ` <button class="btn btn-secondary btn-sm te-dev-add" data-dev-for="" data-dev-text="${esc(`${fd.label} — 불량`)}">개선조치 추가</button>` : ''}`;
       };
-      const ng = isNonconforming(s, v);
-      return `<div class="te-section${ng ? ' te-section-ng' : ''}"><div class="te-section-title">${esc(s.label)}${ng ? ' <span class="te-judge-ng">⚠ 부적합</span>' : ''}</div>
+      const ng = isNonconforming(s, v);  // 머리 ⚠ 부적합은 유지, 강조는 X 줄만(ISS-033)
+      return `<div class="te-section te-check-section"><div class="te-section-title">${esc(s.label)}${ng ? ' <span class="te-judge-ng">⚠ 부적합</span>' : ''}</div>
         <div class="te-table-wrap"><table class="data-table te-check-table" id="teCheckView">
           <thead><tr><th>주기</th><th>관리</th><th>검증 내용</th><th>결과</th></tr></thead>
           <tbody>${this.checkRows(s, v, cell)}</tbody></table></div></div>`;
