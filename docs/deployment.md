@@ -160,6 +160,31 @@ icacls C:\HACCPData /grant '*S-1-5-19:(OI)(CI)M' /T
 .\tools\services\haccp-app.exe uninstall
 ```
 
+### 3.1 점검표 주기 문서 자동 생성 (문서 영역)
+
+일반위생관리 점검표(D10)·공정별 이물관리 점검표(D12)는 평일 매일, 방충방서점검표(D11)는 매주 문서가 필요합니다. 규칙은 `backend/apps/doc_requirements/periodic_rules.json`(요일·시작일·켜기/끄기)에 있고, 아래 명령이 **오늘** 문서를 만듭니다(이미 있으면 그대로). 하루 한 번, 작업 시작 전에 Windows 작업 스케줄러로 실행합니다.
+
+1. 실행 파일 `tools\periodic.cmd`를 만듭니다(경로·staff id는 실제 값으로). `--actor`는 "만든 사람"으로 기록될 직원 id입니다.
+
+```bat
+@echo off
+cd /d C:\HACCP
+set HACCP_ENV_FILE=.env.production
+.venv\Scripts\python.exe backend\manage.py make_periodic_documents --actor 1 --settings=config.settings.production >> C:\HACCPData\logs\periodic.log 2>&1
+```
+
+2. 관리자 PowerShell에서 평일 오전 6시 작업으로 등록합니다(서비스와 같은 LocalService 계정).
+
+```powershell
+schtasks /Create /TN "HACCP 주기 문서" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 06:00 /RU "NT AUTHORITY\LOCAL SERVICE" /TR "C:\HACCP\tools\periodic.cmd"
+schtasks /Run /TN "HACCP 주기 문서"      # 한 번 실행해 로그 확인
+```
+
+- 종료 코드: 0 정상 · 1 일부 줄 실패(양식 비활성 등, 나머지는 만들어짐) · 2 입력·직원·규칙 파일 오류(아무것도 안 만듦). 로그의 마지막 줄이 `합계: 만듦 n · 이미 있음 n · 대상 아님 n · 실패 n`입니다.
+- PC가 꺼져 있어 빠진 날은 자동으로 채우지 않습니다. 필요하면 직접 보충합니다(최대 31일, 미래 날짜 불가): `make_periodic_documents --actor 1 --from 2026-10-01 --to 2026-10-14`.
+- 규칙 파일을 바꾸면 재시작 없이 다음 실행부터 반영됩니다. 운영 시작일이 정해지면 `start_date`를 고쳐 커밋합니다. 다른 경로의 규칙 파일은 `.env.production`의 `HACCP_PERIODIC_RULES`로 지정합니다.
+- 화면에서도 같은 일을 할 수 있게 됩니다(작성 요구 화면의 [주기 문서 만들기], 날짜를 골라 하나만 만드는 [새 문서] — 문서 영역 C4 S5 화면 구현 뒤).
+
 ## 4. 코드 업데이트
 
 1. 서비스를 중지하고 아래 방법으로 DB·업로드를 백업합니다.
