@@ -317,6 +317,7 @@
               <label class="te-check" title="내가 점검자·담당자인 문서만(작성자는 보지 않음). 문서 없음 줄은 빠짐"><input type="checkbox" id="tdMine" ${s.mine ? 'checked' : ''}> 내 담당만</label>
               <span style="flex:1"></span>
               <span class="te-hint" id="tdSummary"></span>
+              <span id="tdOlderSlot"></span>
             </div>
             <div id="teTodoBody">${this.skeleton()}</div>
           </div>
@@ -398,14 +399,14 @@
             ${this.todoTable(data.awaiting_submit.rows)}
           </div>`);
       }
-      if (data.older.count) {
-        parts.push(`<div class="te-todo-older"><a href="#" id="tdOlder">30일 넘은 미완료 ${data.older.count}건 → 전체 문서</a></div>`);
-      }
+      // ISS-037(C5 S6 r2): 30일 넘은 미완료 링크는 위쪽 요약 줄 옆(맨 아래에서는 찾기 어려움)
+      const slot = this.root.querySelector('#tdOlderSlot');
+      slot.innerHTML = data.older.count ? `<a href="#" id="tdOlder" class="te-todo-older">30일 넘은 미완료 ${data.older.count}건 → 전체 문서</a>` : '';
       body.innerHTML = parts.join('');
       body.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => this.showDetail(Number(b.dataset.open))));
       body.querySelectorAll('[data-bundle-day]').forEach((b) => b.addEventListener('click', () => this.showBundle(b.dataset.bundleDay, { page: 'list' })));
       body.querySelectorAll('[data-make]').forEach((b) => b.addEventListener('click', () => this.makeMissing(b, b.dataset.make, b.dataset.day)));
-      body.querySelector('#tdOlder')?.addEventListener('click', (e) => {
+      slot.querySelector('#tdOlder')?.addEventListener('click', (e) => {
         e.preventDefault();
         // 전체 문서 탭: 그 전 1년 · 상태는 전체(작성중·반려·정정 중을 한 번에 고르는 필터가 없음)
         Object.assign(this.filters, { from: shiftDay(data.older.before, -365), to: shiftDay(data.older.before, -1), template_id: '', status: '', target: '', mine: false, assigned: false, correcting: false, page: 1 });

@@ -486,7 +486,7 @@
         if (latest.status === 'in_progress') {
           body += `<div class="te-hint te-progress">진행 ${approvedCount(latest)}/${latest.slots.length} 승인</div>${myLine(latest)}`;
           // P10 WF-SC-01: 이 회차 상신자에게만 [상신 취소](칸을 이미 받았어도 — P10-Q4 a)
-          if (api.staffId && String(latest.requested_by) === api.staffId) action = '<button class="btn btn-sm te-btn-outline-danger" id="apCancel">상신 취소</button>';
+          if (api.staffId && String(latest.requested_by) === api.staffId) action = '<button class="btn btn-sm te-btn-outline-danger" id="apCancelSubmit">상신 취소</button>';
         } else if (latest.status === 'cancelled') {
           body += `<div class="te-status-note" id="apCancelledNote">상신을 취소했습니다 (${T.fmtDateTime(latest.closed_at)}). 받은 승인은 무효입니다. ${canSubmit ? '작성완료된 내용으로 재상신할 수 있습니다.' : '작성완료한 뒤 재상신하세요.'}</div>`;
           if (canSubmit) action = `<button class="btn btn-primary btn-sm" id="apSubmit" ${disabled}>재상신</button>`;
@@ -515,7 +515,7 @@
           ${body}${history}
         </div>`;
       el.querySelector('#apSubmit')?.addEventListener('click', () => this.openSubmit(d, latest, reload));
-      el.querySelector('#apCancel')?.addEventListener('click', () => this.openCancel(d, latest, items, reload));
+      el.querySelector('#apCancelSubmit')?.addEventListener('click', () => this.openCancel(d, latest, items, reload));
       el.querySelectorAll('[data-open-request]').forEach((b) => b.addEventListener('click', () =>
         this.showRequest(Number(b.dataset.openRequest), { from: 'doc', documentId: d.document_id })));
       if (latest && !mismatch) bindMyLine(el, latest, reload);

@@ -226,7 +226,7 @@
 .te-todo-empty { padding: 0.25rem 0.5rem 0.5rem; }
 .te-todo-past { margin: 0.35rem 0 0.25rem; }
 .te-todo-past > summary { cursor: pointer; color: var(--text-secondary, #555); padding: 0.25rem 0.5rem; }
-.te-todo-older { margin-top: 1rem; text-align: right; }
+.te-todo-older { margin-left: 0.75rem; font-weight: 600; color: var(--color-danger, #c62828); white-space: nowrap; }
 .te-todo-table td:first-child { white-space: nowrap; width: 7rem; }
 .te-todo-table td:last-child { text-align: right; width: 6rem; }
 .badge.te-badge-missing { background: transparent; color: #607d8b; border: 1px dashed #90a4ae; }
