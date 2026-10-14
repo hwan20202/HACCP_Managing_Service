@@ -26,6 +26,8 @@ def home(request):
         "req_test_enabled": settings.DEBUG and settings.HACCP_DEV_CONSOLE,
         # P10 문서함·결재함 메뉴 자리(dev·haccp — p10-s2-spec 4장)
         "doc_menu": settings.HACCP_DOC_MENU,
+        # 문서함·결재함 스크립트: 개발 검증 탭이 켜졌거나 HACCP 관리 섹션에 메뉴가 있을 때
+        "doc_entry_enabled": settings.HACCP_TEMP_ENTRY or settings.HACCP_DOC_MENU == "haccp",
     }
     return render(request, "index.html", context)
 
