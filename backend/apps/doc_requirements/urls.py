@@ -13,4 +13,6 @@ urlpatterns = [
     path("periodic-runs", api.periodic_runs, name="api-periodic-runs"),
     path("periodic-documents", api.periodic_documents, name="api-periodic-documents"),
     path("periodic-rules", api.periodic_rules, name="api-periodic-rules"),
+    # P10 작성 필요 목록(REQ-A08)
+    path("todo", api.todo_list, name="api-todo"),
 ]

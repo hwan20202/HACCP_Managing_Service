@@ -9,4 +9,10 @@ urlpatterns = [
     path("approvals/batch-decision", api.batch_decision, name="wf-batch-decision"),
     path("documents/batch-submit", api.batch_submit, name="wf-batch-submit"),
     path("workflow/batch-config", api.batch_config, name="wf-batch-config"),
+    # P10 상신 취소(WF-F05)
+    path(
+        "approval-requests/<int:request_id>/cancel",
+        api.cancel_submission,
+        name="wf-cancel-submission",
+    ),
 ]

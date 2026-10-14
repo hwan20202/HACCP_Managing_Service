@@ -1424,6 +1424,25 @@ def mark_rejected(document_id):
         return _lifecycle_result(document_id)
 
 
+def unlock_for_review(document_id):
+    """F23 상신 취소 되돌림: submitted → completed (P10, p10-s2-spec 3.1). WF 트랜잭션 안에서만.
+
+    작성완료 기록(completed_at·completed_by)·submitted_at·열린 정정은 그대로 둔다 — 정정 재상신을
+    취소하면 "작성완료 · 정정". 신호 없음(결재가 끝나지 않음).
+    """
+    with step("DOC-ULK-00", "DOC", "트랜잭션 확인"):
+        _require_transaction()
+    with step("DOC-ULK-01", "DOC", "상신 취소 되돌림(조건부 UPDATE)") as s:
+        changed = Document.objects.filter(
+            pk=document_id, deleted_at__isnull=True, status="submitted"
+        ).update(status="completed", updated_at=timezone.now(), version=F("version") + 1)
+        s.note(f"영향 행 {changed}")
+    if changed == 0:
+        _transition_failure(document_id, "DOC-ULK-01a")
+    with step("DOC-ULK-02", "DOC", "결과"):
+        return _lifecycle_result(document_id)
+
+
 # ---------------------------------------------------------------- F12·F13 작성완료·작성 재개
 
 
@@ -2672,6 +2691,162 @@ def documents_on_dates(type_codes, date_from, date_to):
             .values_list("document_id", "template__type_code", "work_date")
         )
         return [{"document_id": i, "type_code": t, "work_date": _iso(day)} for i, t, day in rows]
+
+
+# ---------------------------------------------------------------- P10 N7 작성 요구 문서 기간 조회
+
+REQUIREMENT_RANGE_MAX = 62  # 양 끝 포함(p10-s2-spec 2.3)
+TODO_STATUSES = ("draft", "rejected", "correcting")  # 작성 필요 상태(P10 S1a-Q4 a)
+TAG_LABELS = {"weekday": "주 항목", "first_weekday_of_month": "월 항목"}
+
+
+def tag_rules(schema):
+    """양식 na_default에서 꼬리표 규칙(P10 A3 a — 날짜 규칙 기준). {}(연간)은 꼬리표 없음.
+
+    반환 [{label, weekday} | {label, first_weekday_of_month}] — 같은 규칙은 한 번.
+    """
+    rules, seen = [], set()
+    for section in (schema or {}).get("sections", []):
+        for field in section.get("fields", []):
+            rule = field.get("na_default")
+            if not isinstance(rule, dict) or not rule:
+                continue
+            for key, label in TAG_LABELS.items():
+                if key in rule and (key, rule[key]) not in seen:
+                    seen.add((key, rule[key]))
+                    rules.append({"label": label, key: rule[key]})
+    return rules
+
+
+def tags_for(rules, day):
+    """그날 맞는 꼬리표: weekday = 그 요일, first_weekday_of_month = 그 달 첫 그 요일."""
+    tags = []
+    for rule in rules:
+        if "weekday" in rule:
+            hit = day.isoweekday() == rule["weekday"]
+        else:
+            hit = day.isoweekday() == rule["first_weekday_of_month"] and day.day <= 7
+        if hit and rule["label"] not in tags:
+            tags.append(rule["label"])
+    return tags
+
+
+def _as_day(value):
+    from datetime import date
+
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str) and len(value) == 10:
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError:
+            return None
+        return parsed if parsed.isoformat() == value else None
+    return None
+
+
+def requirement_documents(date_from, date_to, type_codes=(), count_older=False):
+    """N7(P10, REQ-F10용): 작업일 기간의 작성 요구 문서(record_key 있음, 삭제 제외) — 모든 상태.
+
+    SQL 5 이하: 문서·양식 1 · 참조 1 · info 1 · (양식 1 — type_codes) · (건수 1 — count_older).
+    반환 {rows, templates, older_count?}. 쓰기 없음.
+    """
+    with step("DOC-RQD-01", "DOC", "입력 확인"):
+        start, end = _as_day(date_from), _as_day(date_to)
+        problems = []
+        if start is None:
+            problems.append(validation.error("date_from", "invalid", "YYYY-MM-DD 형식입니다."))
+        if end is None:
+            problems.append(validation.error("date_to", "invalid", "YYYY-MM-DD 형식입니다."))
+        if start and end:
+            if start > end:
+                problems.append(validation.error("date_from", "order", "시작일이 늦습니다."))
+            elif (end - start).days + 1 > REQUIREMENT_RANGE_MAX:
+                problems.append(
+                    validation.error(
+                        "date_to", "max", f"기간은 {REQUIREMENT_RANGE_MAX}일까지입니다."
+                    )
+                )
+        codes = sorted({c for c in type_codes if isinstance(c, str) and c})
+        if problems:
+            raise errors.ValidationFailed(details=problems)
+    with step("DOC-RQD-02", "DOC", "기간의 작성 요구 문서·양식") as s:
+        documents = list(
+            Document.objects.select_related("template")
+            .filter(
+                deleted_at__isnull=True,
+                record_key__isnull=False,
+                work_date__gte=start,
+                work_date__lte=end,
+            )
+            .order_by("work_date", "document_id")
+        )
+        s.note(f"{len(documents)}건")
+    ids = [d.document_id for d in documents]
+    with step("DOC-RQD-03", "DOC", "참조·info") as s:
+        refs, info = {i: [] for i in ids}, {}
+        if ids:
+            for ref in DocumentRef.objects.filter(document_id__in=ids).order_by("ref_id"):
+                refs[ref.document_id].append(_ref_row(ref))
+            for document_id, values in DocSection.objects.filter(
+                document_id__in=ids, section_def="info"
+            ).values_list("document_id", "values_json"):
+                info[document_id] = values or {}
+        else:
+            s.skip("문서 없음")
+    with step("DOC-RQD-04", "DOC", "조립"):
+        rules_by_template, rows = {}, []
+        for d in documents:
+            if d.template_id not in rules_by_template:
+                rules_by_template[d.template_id] = tag_rules(d.template.schema_json)
+            own = info.get(d.document_id, {})
+            row = {
+                "document_id": d.document_id,
+                "type_code": d.template.type_code,
+                "template_name": d.template.name,
+                "work_date": _iso(d.work_date),
+                "record_key": d.record_key,
+                "status": d.status,
+                "version": d.version,
+                "assignee_id": d.assignee_id,
+                "inspector_id": own.get("inspector"),
+                "created_by": d.created_by_id,
+                "updated_at": _iso(d.updated_at),
+                "requirement": _requirement(d.record_key, refs[d.document_id]),
+                "target_summary": _target_summary(d, refs[d.document_id], own.get("item_name")),
+                "tags": tags_for(rules_by_template[d.template_id], d.work_date),
+            }
+            if d.template.type_code == "D03":
+                row["received_date"] = own.get("received_date") or row["work_date"]
+            rows.append(row)
+        result = {"rows": rows, "templates": {}}
+    with step("DOC-RQD-05", "DOC", "양식 이름·꼬리표 규칙") as s:
+        if codes:
+            latest = (
+                DocumentTemplate.objects.filter(type_code=OuterRef("type_code"), is_active=True)
+                .order_by("-version")
+                .values("version")[:1]
+            )
+            for t in DocumentTemplate.objects.filter(
+                type_code__in=codes, is_active=True, version=Subquery(latest)
+            ):
+                result["templates"][t.type_code] = {
+                    "name": t.name,
+                    "tag_rules": tag_rules(t.schema_json),
+                }
+        else:
+            s.skip("양식 없음")
+    with step("DOC-RQD-06", "DOC", "기간 앞 미완료 건수") as s:
+        if count_older:
+            result["older_count"] = Document.objects.filter(
+                deleted_at__isnull=True,
+                record_key__isnull=False,
+                work_date__lt=start,
+                status__in=TODO_STATUSES,
+            ).count()
+        else:
+            s.skip("요청 안 함")
+    return result
 
 
 def connection_cursor():

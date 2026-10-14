@@ -24,6 +24,8 @@ def home(request):
         "dev_console_enabled": settings.DEBUG and settings.HACCP_DEV_CONSOLE,
         # P5 REQ-SC-01 작성 요구 테스트 화면: 개발 콘솔이 켜져 있을 때만(REQ-S1-Q1)
         "req_test_enabled": settings.DEBUG and settings.HACCP_DEV_CONSOLE,
+        # P10 문서함·결재함 메뉴 자리(dev·haccp — p10-s2-spec 4장)
+        "doc_menu": settings.HACCP_DOC_MENU,
     }
     return render(request, "index.html", context)
 

@@ -32,11 +32,17 @@ ALLOWED_PAIRS = {
     # P8 작성 안 함(작성중에서만, 되돌리면 작성중) — draft와 같은 짝
     ("skipped", None),
     ("skipped", "rejected"),
+    # P10 상신 취소: 문서는 작성완료로 — 그 뒤 작성 재개·작성 안 함·정정 중(열린 정정)도 가능
+    ("completed", "cancelled"),
+    ("draft", "cancelled"),
+    ("skipped", "cancelled"),
+    ("correcting", "cancelled"),
 }
 NEEDS_OPEN_CORRECTION = {
     ("correcting", "approved"),
     ("correcting", "rejected"),
     ("completed", "approved"),
+    ("correcting", "cancelled"),
 }
 CORRECTION_STATES = {"correcting", "completed", "submitted"}
 

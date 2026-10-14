@@ -91,6 +91,26 @@ def decide(actor_id, approval_id, result, comment=None):
         return outcome
 
 
+# ---------------------------------------------------------------- P10 상신 취소 (p10-s2-spec 3.1)
+
+
+def cancel_submission(actor_id, request_id):
+    """WF-F05: [회차 취소(APR A7) → 문서 되돌림(DOC F23)] 한 트랜잭션. 사유 없음(S1a-Q9 a)."""
+    with step("WF-CAN-02", "WF", "트랜잭션") as tx:
+        try:
+            with transaction.atomic():
+                with step("WF-CAN-03", "WF", "회차 취소"):
+                    request = apr.cancel_request(request_id, actor_id)
+                with step("WF-CAN-04", "WF", "문서 되돌림"):
+                    document = doc.unlock_for_review(request["document_id"])
+        except ApiError as error:
+            _rollback_note(tx, error)
+            raise
+        tx.note(f"커밋: {request['attempt']}회차 취소, 문서 v{document['version']}")
+    with step("WF-CAN-05", "WF", "결과"):
+        return {"request": request, "document": document}
+
+
 # ---------------------------------------------------------------- P7 일괄 (p7-s2-spec 3.1)
 
 DEFAULT_BATCH_TYPES = ("D03", "D10", "D11", "D12")  # P8 4.3

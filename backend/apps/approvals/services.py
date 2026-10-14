@@ -388,6 +388,52 @@ def decide(approval_id, actor_id, result, comment=None):
         }
 
 
+# ---------------------------------------------------------------- A7 상신 취소 (P10)
+
+
+def _cancel_failure(request_id, actor_id):
+    """조건부 UPDATE가 0행일 때 이유: 없음 → 상신자 아님 → 진행 중 아님(p10-s2-spec 3.1)."""
+    with step("APR-CAN-01a", "APR", "취소 실패 사유 확인"):
+        row = ApprovalRequest.objects.filter(pk=request_id).values("requested_by_id", "status")
+        row = row.first()
+        if row is None:
+            raise errors.RequestNotFound()
+        if row["requested_by_id"] != actor_id:
+            raise errors.NotRequester()
+        raise errors.RequestClosed()
+
+
+def cancel_request(request_id, actor_id):
+    """A7: 진행 중 회차를 상신자가 취소한다(P6-S2-Q7 a — 받은 승인·반려 칸은 그대로,
+    대기 칸만 skipped). WF 트랜잭션 안에서만 호출한다. 첫 쓰기 = 회차 조건부 UPDATE(D-067).
+
+    반환: 회차(스냅샷 없음). 결재 완료 신호는 없다(회차가 승인으로 끝나지 않음).
+    """
+    with step("APR-CAN-00", "APR", "트랜잭션 확인"):
+        _require_transaction()
+    now = timezone.now()
+    with step("APR-CAN-01", "APR", "회차 취소(조건부 UPDATE)") as s:
+        changed = ApprovalRequest.objects.filter(
+            pk=request_id, status="in_progress", requested_by_id=actor_id
+        ).update(status="cancelled", closed_at=now)
+        s.note(f"영향 행 {changed}")
+    if changed == 0:
+        _cancel_failure(request_id, actor_id)
+    with step("APR-CAN-02", "APR", "대기 칸 건너뜀") as s:
+        skipped = Approval.objects.filter(request_id=request_id, state="pending").update(
+            state="skipped", decided_at=now
+        )
+        s.note(f"skipped {skipped}")
+    with step("APR-CAN-03", "APR", "결과"):
+        req = (
+            ApprovalRequest.objects.defer("snapshot_json")
+            .annotate(snapshot_correction_reason=_snapshot_reason("snapshot_json"))
+            .get(pk=request_id)
+        )
+        slots = list(Approval.objects.filter(request_id=request_id).order_by("slot_no"))
+        return _request_dict(req, slots, with_snapshot=False)
+
+
 # ---------------------------------------------------------------- F04·F05 조회
 
 
@@ -554,6 +600,7 @@ def list_inbox(actor_id, box="pending", filters=None, page=1):
                     "label": slot.label,
                     "state": slot.state,
                     "decided_at": _iso(slot.decided_at),
+                    "request_status": req.status,  # P10: 처리 완료 줄 "취소됨"
                     "request": {
                         "request_id": req.request_id,
                         "document_id": req.document_id,

@@ -38,6 +38,8 @@ FLOWS = {
     "REQ-PRN-NONE": ["REQ-PRN-01", "REQ-PRN-02", "REQ-PRN-03", "REQ-PRN-04", "REQ-PRN-06"],
     "REQ-POD": [f"REQ-POD-0{n}" for n in range(1, 5)],
     "REQ-PRL": ["REQ-PRL-01", "REQ-PRL-02"],
+    # P10 작성 필요 목록(document-workflow/p10-s2-spec.md 5장) — 04 안에 DOC N7(DOC-RQD)
+    "REQ-TDO": [f"REQ-TDO-0{n}" for n in range(1, 7)],
 }
 
 

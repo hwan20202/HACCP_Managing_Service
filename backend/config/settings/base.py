@@ -21,6 +21,16 @@ def env_bool(name, default=False):
     return value in {"true", "1"}
 
 
+def env_choice(name, choices, default):
+    """값이 choices 중 하나여야 하는 설정. 비어 있으면 default, 그 밖 값은 시작 오류."""
+    value = os.environ.get(name, "").strip().lower() or default
+    if value not in choices:
+        from django.core.exceptions import ImproperlyConfigured
+
+        raise ImproperlyConfigured(f"{name} must be one of: {', '.join(choices)}.")
+    return value
+
+
 data_path = Path(os.environ.get("HACCP_DATA_DIR", "data")).expanduser()
 DATA_DIR = (data_path if data_path.is_absolute() else ROOT_DIR / data_path).resolve()
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "")
@@ -114,3 +124,5 @@ HACCP_BATCH_TYPES = env_list("HACCP_BATCH_TYPES", "D03,D10,D11,D12")  # P8 4.3
 HACCP_PERIODIC_RULES = os.environ.get("HACCP_PERIODIC_RULES") or None
 # [임시 진입점 T5] 시제품 사이드바의 "개발 검증 (임시)" 탭. 운영(사용 테스트)에서도 켤 수 있다.
 HACCP_TEMP_ENTRY = env_bool("HACCP_TEMP_ENTRY", False)
+# [P10] 문서함·결재함 메뉴 자리: dev = 개발 검증 섹션(지금), haccp = HACCP 관리 섹션 맨 위
+HACCP_DOC_MENU = env_choice("HACCP_DOC_MENU", ("dev", "haccp"), "dev")

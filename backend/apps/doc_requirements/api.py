@@ -14,7 +14,7 @@ from apps.core.http import (
 from apps.core.trace import step
 from apps.staff.services import actor_from_header
 
-from . import errors, periodic, services
+from . import errors, periodic, services, todo
 
 
 def _api(view):
@@ -132,3 +132,15 @@ def periodic_documents(request):
 def periodic_rules(request):
     """REQ-A07: 주기 규칙 목록(F09)."""
     return json_response(periodic.periodic_rules())
+
+
+# -------------------------------------------------------- P10 작성 필요 목록 (p10-s2-spec 2.1)
+
+
+@require_http_methods(["GET"])
+@_api
+def todo_list(request):
+    """REQ-A08: 작성 필요 목록 ?date=YYYY-MM-DD&mine=1 (X-Staff-Id 필수, date 없으면 오늘)."""
+    with step("REQ-TDO-01", "API", "현재 사용자"):
+        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+    return json_response(todo.todo_list(actor, request.GET.get("date"), request.GET.get("mine")))

@@ -50,3 +50,8 @@ class RulesInvalid(RequirementError):
 class NotPeriodic(RequirementError):
     # P9 VR-P9-11: 규칙 파일에 없는 양식으로 주기 문서를 직접 만들려 함
     status, code, message = 400, "NOT_PERIODIC", "주기 작성 요구 양식이 아닙니다."
+
+
+class InvalidFilter(RequirementError):
+    # P10 REQ-F10·A08: GET 목록 조회라 DOC F04·APR 결재함과 같은 코드(p10-s2-spec 2.1 B5)
+    status, code, message = 400, "INVALID_FILTER", "조회 조건을 확인하세요."

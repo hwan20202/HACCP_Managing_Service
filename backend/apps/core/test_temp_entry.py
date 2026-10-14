@@ -53,3 +53,34 @@ class TempEntryTabTests(SimpleTestCase):
         with override_settings(HACCP_TEMP_ENTRY=True):
             html = self.client.get("/").content.decode()
         self.assertLess(html.index("temp-entry/core.js"), html.index("prototype/js/app.js"))
+
+
+class DocMenuSettingTests(SimpleTestCase):
+    """P10-TC-030(서버 부분): HACCP_DOC_MENU 값 검사·화면 값. 메뉴 자리 HTML은 S5."""
+
+    def test_env_choice(self):
+        import os
+        from unittest import mock
+
+        from config.settings.base import env_choice
+        from django.core.exceptions import ImproperlyConfigured
+
+        cases = (("", "dev"), ("haccp", "haccp"), (" HACCP ", "haccp"), ("dev", "dev"))
+        for raw, expected in cases:
+            with self.subTest(raw=raw), mock.patch.dict(os.environ, {"HACCP_DOC_MENU": raw}):
+                self.assertEqual(env_choice("HACCP_DOC_MENU", ("dev", "haccp"), "dev"), expected)
+        with mock.patch.dict(os.environ, {"HACCP_DOC_MENU": "menu"}):
+            with self.assertRaises(ImproperlyConfigured):
+                env_choice("HACCP_DOC_MENU", ("dev", "haccp"), "dev")
+
+    def test_context_value(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        data_file = Path(directory.name) / "data.js"
+        data_file.write_text("const HACCP_DATA = {};", encoding="utf-8")
+        for value in ("dev", "haccp"):
+            with (
+                self.subTest(value=value),
+                override_settings(PROTOTYPE_DATA_FILE=data_file, HACCP_DOC_MENU=value),
+            ):
+                self.assertEqual(self.client.get("/").context["doc_menu"], value)
