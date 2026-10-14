@@ -21,6 +21,7 @@ from .production import add_output, add_usage, create_batch, fefo_candidates
 from .quantity import to_e6
 from .receiving import ReceiptInput, ReceivingError, register_receipt
 from .stock import lot_stock
+from .test_support import seed_document_forms
 
 BASE = "/api/v1/inventory"
 
@@ -28,6 +29,7 @@ BASE = "/api/v1/inventory"
 class ExpirationTestCase(TestCase):
     @classmethod
     def setUpTestData(cls):
+        seed_document_forms()
         call_command("seed_master", "--sample", stdout=StringIO())
         cls.raw = Item.objects.get(item_code="1000001")  # LOT 약어 AGA
         cls.pouch = Item.objects.get(item_code="2000001")  # CGP

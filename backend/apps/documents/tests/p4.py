@@ -70,9 +70,32 @@ def stub(table, **values):
         marks = ", ".join(["%s"] * len(values))
         # TransactionTestCase: 수불 테이블은 managed=False라 flush되지 않고 이동·배치는
         # 삭제 금지 트리거가 있다 → 같은 id 행이 이미 있으면 그대로 쓴다(M6)
-        cursor.execute(
-            f'INSERT OR IGNORE INTO "{table}" ({columns}) VALUES ({marks})', list(values.values())
-        )
+        insert = f'INSERT OR IGNORE INTO "{table}" ({columns}) VALUES ({marks})'
+        if table == "production_batches" and values.get("process_type") == "PACKAGING":
+            _legacy_packaging(cursor, insert, list(values.values()))
+        else:
+            cursor.execute(insert, list(values.values()))
+
+
+# 수불 0006(MVP 벌크 범위): 새 포장배치는 트리거가 막고, 0006 전에 만든 포장배치만 남는다.
+# 포장배치 = CCP 문서 없음(rules.CCP_PROCESSES)을 시험하려고 그 "예전 행"을 흉내 낸다 — 테스트 전용.
+LEGACY_PACKAGING_TRIGGER = "trg_batches_no_packaging"
+
+
+def _legacy_packaging(cursor, insert, params):
+    cursor.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = %s",
+        [LEGACY_PACKAGING_TRIGGER],
+    )
+    row = cursor.fetchone()
+    if row is None:  # 0006 전 스키마
+        cursor.execute(insert, params)
+        return
+    cursor.execute(f'DROP TRIGGER "{LEGACY_PACKAGING_TRIGGER}"')
+    try:
+        cursor.execute(insert, params)
+    finally:
+        cursor.execute(row[0])
 
 
 def _batch_defaults(values):
@@ -90,6 +113,8 @@ _DEFAULTS = {
         "base_unit": "kg",
     },
     "production_batches": _batch_defaults,
+    # 수불 0007: 소비기한 유무(KNOWN 날짜 있음 / NONE 없음). 원료 입고 LOT은 UNKNOWN(미확인) 불가
+    "lots": lambda v: {"expiration_status": "KNOWN" if v.get("expiration_date") else "NONE"},
 }
 
 

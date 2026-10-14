@@ -34,6 +34,7 @@ from .movements import (
 from .quantity import to_e6
 from .receiving import ReceiptInput, cancel_receipt, register_receipt
 from .stock import item_stock, lot_stock
+from .test_support import seed_document_forms
 
 
 def at(day, hour=9):
@@ -43,6 +44,7 @@ def at(day, hour=9):
 class ServiceTestCase(TestCase):
     @classmethod
     def setUpTestData(cls):
+        seed_document_forms()
         call_command("seed_master", "--sample", stdout=StringIO())
         cls.raw_a = Item.objects.get(item_code="1000001")
         cls.raw_b = Item.objects.get(item_code="1000002")

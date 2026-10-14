@@ -39,6 +39,7 @@ from .quantity import from_e6, to_e6
 from .receiving import ReceiptInput, ReceivingError, cancel_receipt, register_receipt
 from .shelf_life import add_months, expiration_for
 from .sql_runner import read_sql, split_statements
+from .test_support import seed_document_forms
 
 CORE_TABLES = {
     "item_types",
@@ -188,6 +189,7 @@ class SchemaTests(TestCase):
 class StockFixtureMixin:
     @classmethod
     def setUpTestData(cls):
+        seed_document_forms()
         cls.staff = Staff.objects.create(staff_code="S001", name="홍길동")
         cls.item = Item.objects.create(
             item_type_id="RAW", item_code="1000019", name="테스트 원료", base_unit="kg"
@@ -391,6 +393,7 @@ class SeqLetterTests(SimpleTestCase):
 class LotNumberTests(TestCase):
     @classmethod
     def setUpTestData(cls):
+        seed_document_forms()
         ensure_default_lot_rules()
         cls.item = Item.objects.create(
             item_type_id="RAW",
@@ -561,6 +564,7 @@ class MasterImportTests(TestCase):
 class ReceivingTests(TestCase):
     @classmethod
     def setUpTestData(cls):
+        seed_document_forms()
         call_command("seed_master", "--sample", stdout=StringIO())
         cls.item = Item.objects.get(item_code="1000001")
         cls.supplier = Supplier.objects.get(supplier_code="V001")
@@ -694,7 +698,9 @@ class ReceivingTests(TestCase):
         self.assertEqual(IncomingReceipt.objects.count(), 0)
         with patch(target) as notify:
             receipt = self.receive()
-        notify.assert_called_once_with(lot_id=receipt.lot_id)
+        notify.assert_called_once_with(
+            lot_id=receipt.lot_id, staff_id=self.staff.pk, inspection=None
+        )
 
     def test_cancel_offsets_stock_and_marks_receipt(self):
         receipt = self.receive()

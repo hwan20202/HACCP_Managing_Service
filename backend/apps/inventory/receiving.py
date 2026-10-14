@@ -1,10 +1,11 @@
 """Incoming receipt registration and cancellation (C2: one receipt = one LOT).
 
 register_receipt():  lots(QUARANTINE) -> stock_movements(RECEIPT) -> incoming_receipts
-                     -> audit_logs -> judgment (if given) -> document_bridge hook
-                                                                    (one transaction)
+                     -> audit_logs -> document_bridge hook (D01·D02·D03)
+                     -> judgment (if given, linked to the D03)      (one transaction)
 cancel_receipt():    stock_movements(CORRECTION_OUT, rest of the quantity) -> receipt CANCELLED
                      -> audit_logs -> document_bridge hook          (one transaction)
+                     Refused while a LOT document is in approval / approved / being corrected.
 
 Both run in transaction.atomic(), which settings turn into BEGIN IMMEDIATE (rule S5).
 Messages in ReceivingError are shown to users, so they are in Korean.
@@ -66,6 +67,9 @@ class ReceiptInput:
     # Visual inspection done with the receipt: PASS / FAIL. None = not decided yet (the LOT
     # stays QUARANTINE until the inspection record is completed).
     judgment: str | None = None
+    # Visual inspection values entered with the receipt, passed to the document app's D03
+    # (keys and options: document side 2.1/2.2). None = filled in later on the document.
+    inspection: dict | None = None
 
 
 def _active(model, pk, label):
@@ -126,8 +130,7 @@ def _existing_receipt(idempotency_key, data, quantity_e6):
 def register_receipt(data: ReceiptInput) -> IncomingReceipt:
     if not data.idempotency_key:
         raise ReceivingError("요청 키(idempotency_key)가 필요합니다.")
-    if data.judgment is not None and data.judgment not in Judgment.values:
-        raise ReceivingError(f"육안검사 판정은 {Judgment.values} 중 하나여야 합니다.")
+    judgment = _receipt_judgment(data)
     quantity_e6 = _quantity_e6(data.quantity)
     if (
         data.manufactured_date
@@ -142,6 +145,7 @@ def register_receipt(data: ReceiptInput) -> IncomingReceipt:
     with transaction.atomic():
         existing = _existing_receipt(data.idempotency_key, data, quantity_e6)
         if existing:
+            existing.documents = None
             return existing
 
         item = _active(Item, data.item_id, "품목")
@@ -194,11 +198,45 @@ def register_receipt(data: ReceiptInput) -> IncomingReceipt:
             after_json=_receipt_snapshot(receipt),
             staff=staff,
         )
-        if data.judgment:
-            apply_incoming_judgment(lot_id=lot.pk, result=data.judgment, staff_id=staff.pk)
+        # Document app first (D01 · D02 · D03, the inspection values go into the new D03), then the
+        # judgment, linked to that D03 (document side 2.1: LOT judgment is applied by inventory).
+        documents = document_bridge.incoming_received(
+            lot_id=lot.pk, staff_id=staff.pk, inspection=data.inspection
+        )
+        if judgment:
+            apply_incoming_judgment(
+                lot_id=lot.pk,
+                result=judgment,
+                staff_id=staff.pk,
+                document_id=_inspection_document_id(documents),
+            )
             lot.refresh_from_db(fields=["status", "updated_at"])
-        document_bridge.incoming_received(lot_id=lot.pk)
+    # What the document app returned for this receipt (not stored; None for a repeated request).
+    receipt.documents = documents
     return receipt
+
+
+def _receipt_judgment(data):
+    """The receipt's judgment: ReceiptInput.judgment, or the verdict of the inspection values
+    entered with it. Both given -> they must agree (document side 2.1)."""
+    judgment = data.judgment
+    if judgment is not None and judgment not in Judgment.values:
+        raise ReceivingError(f"육안검사 판정은 {Judgment.values} 중 하나여야 합니다.")
+    if data.inspection is None:
+        return judgment
+    if not isinstance(data.inspection, dict):
+        raise ReceivingError("육안검사 입력(inspection)은 항목: 값 형식이어야 합니다.")
+    verdict = data.inspection.get("verdict")
+    if judgment is not None and verdict not in (None, "", judgment):
+        raise ReceivingError(f"입고 판정({judgment})과 육안검사 최종판정({verdict})이 다릅니다.")
+    return judgment or verdict or None
+
+
+def _inspection_document_id(documents):
+    for document in (documents or {}).get("documents", []):
+        if document.get("type_code") == "D03":
+            return document.get("document_id")
+    return None
 
 
 def cancel_receipt(*, receipt_id: int, staff_id: int, reason: str) -> IncomingReceipt:
@@ -234,6 +272,13 @@ def cancel_receipt(*, receipt_id: int, staff_id: int, reason: str) -> IncomingRe
             raise ReceivingError(
                 "이미 사용·조정된 LOT은 입고 취소할 수 없습니다. "
                 f"(입고 {from_e6(received)}, 현재 {from_e6(current)})"
+            )
+
+        blockers = document_bridge.receipt_cancel_blockers(lot_id=receipt.lot_id)
+        if blockers:
+            listed = ", ".join(f"{code}({status})" for code, status in blockers)
+            raise ReceivingError(
+                f"결재 중이거나 결재된 문서가 있는 LOT은 입고 취소할 수 없습니다: {listed}"
             )
 
         before = _receipt_snapshot(receipt)

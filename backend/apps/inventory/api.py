@@ -21,6 +21,8 @@ from django.db.models import Q
 from django.http import JsonResponse
 from django.views.decorators.csrf import ensure_csrf_cookie
 
+from apps.core.http import ApiError
+
 from . import serializers as out
 from .errors import InventoryError, NotFound
 from .fields import KST
@@ -82,8 +84,10 @@ class Conflict(InventoryError):
     pass
 
 
-def error_response(status, message, fields=None):
+def error_response(status, message, fields=None, code=None):
     body = {"message": message}
+    if code:
+        body["code"] = code
     if fields:
         body["fields"] = fields
     return JsonResponse({"error": body}, status=status, json_dumps_params={"ensure_ascii": False})
@@ -119,6 +123,8 @@ def endpoint(*methods):
                 return error_response(400, str(error), error.fields)
             except InventoryError as error:
                 return error_response(400, str(error))
+            except ApiError as error:  # raised by the document app inside a hook (rolled back)
+                return error_response(error.status, error.message, error.details, error.code)
 
         wrapped = ensure_csrf_cookie(wrapper) if "GET" in methods else wrapper
         return wrapped
@@ -313,6 +319,15 @@ item_detail = _master_detail("items")
 RECEIPT_RELATED = ("lot__item", "supplier", "staff")
 
 
+def _inspection(value):
+    """Visual inspection values for the document app's D03 (checked there). Object or empty."""
+    if value in (None, ""):
+        return None
+    if not isinstance(value, dict):
+        raise BadRequest("inspection은 객체여야 합니다.", {"inspection": "객체여야 합니다."})
+    return value
+
+
 @endpoint("GET", "POST")
 def receipt_collection(request):
     if request.method == "POST":
@@ -331,6 +346,7 @@ def receipt_collection(request):
                 expiration_date=_date(data.get("expiration_date"), "expiration_date"),
                 expiration_status=data.get("expiration_status"),
                 judgment=str(data["judgment"]).upper() if data.get("judgment") else None,
+                inspection=_inspection(data.get("inspection")),
             )
         )
         receipt = IncomingReceipt.objects.select_related(*RECEIPT_RELATED).get(pk=receipt.pk)

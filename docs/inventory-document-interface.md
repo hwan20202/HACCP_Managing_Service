@@ -155,17 +155,24 @@ release_hold(hold_id=..., disposition="RELEASE", reason=..., staff_id=...)
 - 배치 보류 해제 시 열린 전파 보류도 같이 해제. LOT 별로 먼저 해제 가능
 - 이미 열린 보류가 있으면 새로 만들지 않고 그 보류를 돌려줌
 
-## 5. 수불 → 문서 호출 (문서 쪽 함수 요청)
+## 5. 수불 → 문서 호출
 
-`apps/inventory/document_bridge.py` 에서 호출합니다. 수불 트랜잭션 안에서 불리므로 문서 쪽에서 오류가 나면 입고·취소도 롤백됩니다. 지금은 빈 함수이고, 문서 쪽 함수가 정해지면 연결합니다.
+`apps/inventory/document_bridge.py` 에서 문서 쪽 함수(`apps.doc_requirements.services`)를 부릅니다. 계약은 문서 쪽 [document-inventory-interface.md](document-inventory-interface.md). 수불 트랜잭션 안에서 수불 쓰기를 먼저 한 뒤 부르므로, 문서 쪽 오류(`ApiError`)가 나면 입고·취소·생산 시작도 롤백됩니다. API 응답은 문서 쪽 상태 코드와 `error.code`(예: `VALIDATION_ERROR`, `TEMPLATE_NOT_FOUND`)를 그대로 돌려줍니다.
 
-| 시점 | 수불 쪽 훅 | 문서 쪽에 필요한 것 |
+| 시점 | 수불 쪽 훅 | 문서 쪽 함수 |
 |---|---|---|
-| 입고 화면 그리기 | — | `get_incoming_inspection_form()` — 체크리스트 항목·검증 기준 |
-| 입고 등록 | `incoming_received(lot_id=...)` | `create_incoming_inspection(lot_id, answers, staff_id)` — 그날 육안검사일지에 LOT 행 추가 (작성완료·결재중이면 새 일지?) |
-| 입고 취소 | `incoming_receipt_cancelled(lot_id=..., reason=..., staff_id=...)` | 육안검사일지의 해당 LOT 행 처리 방식 |
+| 입고 등록 | `incoming_received(lot_id=..., staff_id=..., inspection=None)` | `require_for_lot(staff_id, lot_id, inspection)` — LOT 마다 D01·D02·D03 (작성중). `inspection` 은 새 D03 에만 채움 |
+| 입고 등록 + 육안검사 | `ReceiptInput.inspection` / API `inspection` | 문서 생성 뒤 판정을 수불이 반영(`apply_incoming_judgment`, `document_id` = D03). `judgment` 를 안 주면 `inspection.verdict` 를 판정으로 씀. 둘 다 주면 같아야 함 |
+| 입고 취소 전 | `receipt_cancel_blockers(lot_id=...)` | `docs_for_lot(lot_id)` — LOT 문서가 `submitted`·`approved`·`correcting`(정정 중) 이면 취소 거부. 작성중·작성완료·반려는 취소 가능 |
+| 입고 취소 | `incoming_receipt_cancelled(lot_id=..., reason=..., staff_id=...)` | 없음 — 문서 쪽 처리 미정(빈 함수 유지) |
 | HOLD 근거 문서 | `holds.source_document_id` 에 `document_id` 저장 (0003 에서 `lot_holds` → `holds`) | ⑥ `get_source_document` 로 조회 |
-| 생산 시작 (계획 없이 바로 완료한 경우는 완료 때) | `batch_started(batch_id=..., staff_id=...)` | `require_for_batch(batch_id, staff_id)` — CCP 일지 작성 요구 (ERD v7 ③) |
+| 생산 시작 (계획 없이 바로 완료한 경우는 완료 때) | `batch_started(batch_id=..., staff_id=...)` | `require_for_batch(staff_id, batch_id)` — 제조 배치면 CCP-1P·2B·3P 일지 (ERD v7 ③) |
+
+주의
+
+- 문서 양식(D01·D02·D03, CCP-1P·2B·3P)이 DB 에 있어야 입고·생산 시작이 됩니다. 없으면 `TEMPLATE_NOT_FOUND` 로 입고가 롤백됩니다. 개발 DB 는 `seed_dev_p4`·`seed_dev_workflow` 가 넣고, 운영 DB 에 양식을 넣는 방법은 문서 쪽과 정해야 합니다.
+- 담당자(`staff_id`)는 문서 쪽에서도 활성 직원이어야 합니다(`INVALID_STAFF`).
+- 문서 쪽 명세의 `create_incoming_inspection`·`get_incoming_inspection_form`·`get_source_document`·`ledger_approved_until` 은 아직 코드에 없습니다. 지금 연결한 것은 실제로 있는 `require_for_lot`·`require_for_batch`·`docs_for_lot` 입니다. 수불대장 잠금(`ledger_approved_until` 이하 날짜의 수불 등록·정정 막기)은 문서 함수가 나오면 반영합니다.
 
 ## 6. 직접 확인하기
 

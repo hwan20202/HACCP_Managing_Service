@@ -85,8 +85,10 @@
 
 | 항목 | 기다리는 것 | 현재 상태 |
 |---|---|---|
-| 문서 쪽 훅 내용 | 문서 앱 함수 제공 | `document_bridge.incoming_received(lot_id)`, `incoming_receipt_cancelled(lot_id, reason, staff_id)` — 지금은 아무것도 안 함 |
-| 통합 입고 (육안검사 동시 저장) | 문서 쪽 `get_incoming_inspection_form()`, `create_incoming_inspection(...)` 형식 합의 | 판정 동시 반영(`ReceiptInput.judgment`)은 완료. 체크리스트 저장은 문서 함수 대기 |
+| 입고 취소 때 문서 처리 | 문서 쪽 결정 | 결재중·승인·정정 중 문서가 있으면 취소 거부(연결 완료). 그 밖의 문서 처리는 미정 — `incoming_receipt_cancelled` 빈 함수 |
+| 통합 입고 화면의 검사 항목 | 문서 쪽 `get_incoming_inspection_form()` | 입고 + 육안검사 값(`inspection`) 저장·판정 반영은 연결 완료(`require_for_lot`). 화면 항목 조회 함수는 문서 쪽 대기 |
+| 수불대장 잠금 | 문서 쪽 `ledger_approved_until()` | 원료수불일지 결재 마지막 날짜 이하의 수불 등록·정정을 막아 달라는 요청. 함수가 나오면 반영 |
+| 운영 DB 문서 양식 | 문서 쪽 결정 | 입고·생산 시작이 D01~D03·CCP 양식을 요구. 운영에 넣는 방법 미정 |
 | CCP 이탈 보류 연결 | 문서 쪽이 이탈 기록 때 `hold_batch` 를 부를지, 해제 조건(개선조치 완료·근거 문서 승인) | 수불 함수·API 준비됨 (`holds.py`, `/holds/`) |
 | BOM·제조배치·투입 서비스, CCP | 생산 서비스 개발 | 생산 서비스·API 구현 완료. CCP 문서 연동은 문서 브랜치 병합 후 협의 |
 | 화면 | 기존 시제품 활용 여부 | API 까지 완료 |

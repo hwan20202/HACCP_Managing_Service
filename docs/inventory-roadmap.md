@@ -122,7 +122,7 @@
 |---|---|---|
 | LOT 문서 자동 채움 뷰 `v_doc_incoming_lot` | ✅ 10/12 | 모든 LOT, 문서 쪽 요청 컬럼 반영 |
 | 연동 방식 확정: 직접 호출, id 전달 (질의 5) | ✅ 10/10 | `domain_event` 는 문서 쪽 알림용 Outbox |
-| 문서 연동 훅 (`lot_id` 전달) | ✅ `38ef7ab` | 문서 앱 함수가 나오면 내용 채움 |
+| 문서 연동 훅 (`lot_id` 전달) | ✅ `38ef7ab` | 10/14 문서 브랜치 병합 후 연결: 입고 → `require_for_lot`, 생산 시작 → `require_for_batch`, 입고 취소 → 결재중 문서 있으면 거부 |
 | 원료수불대장 제공 (`stock_ledger()`) | ✅ `cfbdd19` | D04 는 뷰 대신 함수 호출 |
 | 승인 이후 수불 변경 감지 + API | ✅ `38ef7ab` | `stock_ledger_changes_since()`. 수불대장 시스템 결재 없음(10/14 D4)으로 사용처 없음 — 제거 후보 |
 | 배치 대상 문서 연결 (생산일지·CCP 일지) | ✅ 10/11 | 문서 쪽 `document_ref.production_batch_id` + `process_code` |

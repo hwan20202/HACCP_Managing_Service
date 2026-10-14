@@ -9,6 +9,7 @@ from django.test import Client, TestCase
 
 from .fields import kst_now
 from .models import Bom, BomLine, Item, Lot, Staff, Supplier
+from .test_support import seed_document_forms
 
 BASE = "/api/v1/inventory"
 
@@ -16,6 +17,7 @@ BASE = "/api/v1/inventory"
 class ApiTestCase(TestCase):
     @classmethod
     def setUpTestData(cls):
+        seed_document_forms()
         call_command("seed_master", "--sample", stdout=StringIO())
         cls.staff = Staff.objects.get(staff_code="S001")
         cls.supplier = Supplier.objects.get(supplier_code="V001")

@@ -41,11 +41,13 @@ from .production import (
 )
 from .quantity import to_e6
 from .receiving import ReceiptInput, register_receipt
+from .test_support import seed_document_forms
 
 
 class ProductionTestCase(TestCase):
     @classmethod
     def setUpTestData(cls):
+        seed_document_forms()
         call_command("seed_master", "--sample", stdout=StringIO())
         cls.raw = Item.objects.get(item_code="1000001")  # LOT 약어 AGA
         cls.pouch = Item.objects.get(item_code="2000001")  # CGP
