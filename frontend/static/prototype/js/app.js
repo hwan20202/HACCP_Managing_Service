@@ -94,9 +94,10 @@ const App = {
     let html = '';
     switch(page) {
       case 'dashboard':      html = DashboardPage.render(); break;
-      case 'raw-materials':  html = InventoryPage.render('raw'); break;
-      case 'sub-materials':  html = InventoryPage.render('sub'); break;
-      case 'finished-goods': html = InventoryPage.render('finished'); break;
+      // 재고 메뉴는 API 연결 화면 (inventory-api.js). 기존 고정 데이터 화면(InventoryPage)은 보존
+      case 'raw-materials':  html = InventoryApiPage.render('raw'); break;
+      case 'sub-materials':  html = InventoryApiPage.render('sub'); break;
+      case 'finished-goods': html = InventoryApiPage.render('finished'); break;
       case 'ccp-monitoring': html = CCPPage.render(); break;
       case 'prerequisite':   html = PrerequisitePage.render(); break;
       case 'production-log': html = ProductionPage.render(); break;

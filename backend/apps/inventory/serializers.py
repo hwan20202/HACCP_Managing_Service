@@ -47,6 +47,7 @@ def item(obj):
         "origin_country": obj.origin_country,
         "food_type": obj.food_type,
         "minimum_stock": qty(obj.minimum_stock_e6),
+        "is_stock_managed": obj.is_stock_managed,
         "is_active": obj.is_active,
     }
 
@@ -86,6 +87,7 @@ def lot(obj, quantity_e6=None):
         "quantity": qty(quantity_e6),
         "manufactured_date": iso(obj.manufactured_date),
         "expiration_date": iso(obj.expiration_date),
+        "expiration_status": obj.expiration_status,
         "created_at": iso(obj.created_at),
     }
 
@@ -110,6 +112,7 @@ def receipt(obj):
         "unit": lot_obj.item.base_unit,
         "manufactured_date": iso(lot_obj.manufactured_date),
         "expiration_date": iso(lot_obj.expiration_date),
+        "expiration_status": lot_obj.expiration_status,
         "staff": {"id": obj.staff_id, "name": obj.staff.name},
         "receipt_status": obj.receipt_status,
         "cancelled_at": iso(obj.cancelled_at),
@@ -137,6 +140,7 @@ def lot_stock(row):
         "active_hold_count": row.active_hold_count,
         "manufactured_date": iso(row.manufactured_date),
         "expiration_date": iso(row.expiration_date),
+        "expiration_status": row.expiration_status,
         "days_to_expiry": row.days_to_expiry,
         "received_date": iso(row.received_date),
         "supplier_name": row.supplier_name,
@@ -182,6 +186,7 @@ def ledger_item(row):
                 "lot_number": lot_row.lot_number,
                 "status": lot_row.status,
                 "expiration_date": iso(lot_row.expiration_date),
+                "expiration_status": lot_row.expiration_status,
                 "opening": qty(lot_row.opening_e6),
                 "in": qty(lot_row.in_e6),
                 "out": qty(lot_row.out_e6),
@@ -224,7 +229,6 @@ def batch(obj):
         "planned_date": iso(obj.planned_date),
         "planned_quantity": qty(obj.planned_quantity_e6),
         "manufactured_date": iso(obj.manufactured_date),
-        "shift": obj.shift,
         "started_at": iso(obj.started_at),
         "completed_at": iso(obj.completed_at),
         "staff": {"id": obj.staff_id, "name": obj.staff.name},
@@ -258,6 +262,13 @@ def batch_detail(summary):
         {"id": row["output_id"], "lot_quantity": qty(row["stock_e6"]), **_batch_line(row)}
         for row in summary["outputs"]
     ]
+    lot = summary["output_lot"]  # 배치의 산출 LOT (하나). 산출 전·예전 다중 LOT 기록은 None
+    data["output_lot"] = lot and {
+        "lot_id": lot["lot_id"],
+        "lot_number": lot["lot_number"],
+        "net_quantity": qty(lot["net_quantity_e6"]),
+        "stock": qty(lot["stock_e6"]),
+    }
     check = summary["bom_check"]
     data["bom_check"] = check and {
         "basis": check["basis"],
@@ -273,6 +284,7 @@ def batch_detail(summary):
                 "unit": row["line"].component_item.base_unit,
                 "standard": qty(row["standard_e6"]),
                 "actual": qty(row["actual_e6"]),
+                "stock_managed": row["stock_managed"],
             }
             for row in check["lines"]
         ],
@@ -346,6 +358,7 @@ def fefo_pick(lot_obj, take_e6, stock_e6):
         "lot_id": lot_obj.pk,
         "lot_number": lot_obj.lot_number,
         "expiration_date": iso(lot_obj.expiration_date),
+        "expiration_status": lot_obj.expiration_status,
         "take": qty(take_e6),
         "stock": qty(stock_e6),
     }

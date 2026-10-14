@@ -3,7 +3,7 @@
 register_receipt():  lots(QUARANTINE) -> stock_movements(RECEIPT) -> incoming_receipts
                      -> audit_logs -> judgment (if given) -> document_bridge hook
                                                                     (one transaction)
-cancel_receipt():    stock_movements(CORRECTION_OUT, full quantity) -> receipt CANCELLED
+cancel_receipt():    stock_movements(CORRECTION_OUT, rest of the quantity) -> receipt CANCELLED
                      -> audit_logs -> document_bridge hook          (one transaction)
 
 Both run in transaction.atomic(), which settings turn into BEGIN IMMEDIATE (rule S5).
@@ -17,6 +17,7 @@ from django.db import transaction
 
 from . import document_bridge
 from .errors import InventoryError, NotFound
+from .expiration import incoming_number_date, resolve_status
 from .fields import KST, kst_now
 from .judgment import Judgment, apply_incoming_judgment
 from .lot_numbers import next_lot_number
@@ -33,9 +34,11 @@ from .models import (
     StockMovement,
     Supplier,
 )
+from .movements import not_stock_managed_error
 from .quantity import from_e6, to_e6
 
-RECEIVABLE_ITEM_TYPES = {"RAW", "PACKAGING"}
+# 반제품도 사 온다 (10/14 PM 미팅 D2). 구매 반제품 LOT 규칙은 INCOMING SEMI (0005, 가정)
+RECEIVABLE_ITEM_TYPES = {"RAW", "PACKAGING", "SEMI"}
 
 
 class ReceivingError(InventoryError):
@@ -57,6 +60,9 @@ class ReceiptInput:
     supplier_lot_number: str | None = None
     manufactured_date: datetime.date | None = None
     expiration_date: datetime.date | None = None
+    # 소비기한 유무: KNOWN(있음) / NONE(없음) / UNKNOWN(미확인). Blank + a date -> KNOWN.
+    # Raw materials must be KNOWN or NONE: KNOWN is numbered by 소비기한, NONE by 입고일 (0007).
+    expiration_status: str | None = None
     # Visual inspection done with the receipt: PASS / FAIL. None = not decided yet (the LOT
     # stays QUARANTINE until the inspection record is completed).
     judgment: str | None = None
@@ -129,6 +135,9 @@ def register_receipt(data: ReceiptInput) -> IncomingReceipt:
         and data.expiration_date < data.manufactured_date
     ):
         raise ReceivingError("소비기한이 제조일보다 빠를 수 없습니다.")
+    expiration_status = resolve_status(
+        data.expiration_status, data.expiration_date, error=ReceivingError
+    )
 
     with transaction.atomic():
         existing = _existing_receipt(data.idempotency_key, data, quantity_e6)
@@ -138,19 +147,28 @@ def register_receipt(data: ReceiptInput) -> IncomingReceipt:
         item = _active(Item, data.item_id, "품목")
         if item.item_type_id not in RECEIVABLE_ITEM_TYPES:
             raise ReceivingError(f"입고 대상 품목이 아닙니다: {item} ({item.item_type_id})")
+        if not item.is_stock_managed:
+            raise not_stock_managed_error(item)
         supplier = _active(Supplier, data.supplier_id, "공급처")
         staff = _active(Staff, data.staff_id, "담당자")
         occurred_at = _occurred_at(data.received_date)
+        expiration_status, number_date = incoming_number_date(
+            item, expiration_status, data.expiration_date, data.received_date, error=ReceivingError
+        )
 
         lot = Lot.objects.create(
             lot_number=next_lot_number(
-                lot_kind=LotKind.INCOMING, item=item, base_date=data.received_date
+                lot_kind=LotKind.INCOMING,
+                item=item,
+                base_date=number_date,
+                rule_date=data.received_date,
             ),
             item=item,
             lot_kind=LotKind.INCOMING,
             status=LotStatus.QUARANTINE,
             manufactured_date=data.manufactured_date,
             expiration_date=data.expiration_date,
+            expiration_status=expiration_status,
         )
         movement = StockMovement.objects.create(
             lot=lot,
@@ -184,9 +202,10 @@ def register_receipt(data: ReceiptInput) -> IncomingReceipt:
 
 
 def cancel_receipt(*, receipt_id: int, staff_id: int, reason: str) -> IncomingReceipt:
-    """Cancel a receipt whose LOT is still untouched (stock = received quantity).
+    """Cancel a receipt whose LOT is still untouched (stock = received quantity, net of any
+    partial receipt corrections).
 
-    The RECEIPT movement stays (I2); a CORRECTION_OUT of the full quantity offsets it.
+    The RECEIPT movement stays (I2); a CORRECTION_OUT of the rest of the quantity offsets it.
     Cancelling an already cancelled receipt returns it unchanged.
     """
     reason = (reason or "").strip()
@@ -207,10 +226,14 @@ def cancel_receipt(*, receipt_id: int, staff_id: int, reason: str) -> IncomingRe
 
         stock = Inventory.objects.filter(lot=receipt.lot).values_list("quantity_e6", flat=True)
         current = stock.first() or 0
-        if current != receipt.quantity_e6:
+        corrected = sum(
+            receipt.stock_movement.corrections.values_list("quantity_e6", flat=True), start=0
+        )
+        received = receipt.quantity_e6 - corrected
+        if current != received:
             raise ReceivingError(
                 "이미 사용·조정된 LOT은 입고 취소할 수 없습니다. "
-                f"(입고 {from_e6(receipt.quantity_e6)}, 현재 {from_e6(current)})"
+                f"(입고 {from_e6(received)}, 현재 {from_e6(current)})"
             )
 
         before = _receipt_snapshot(receipt)
@@ -218,7 +241,7 @@ def cancel_receipt(*, receipt_id: int, staff_id: int, reason: str) -> IncomingRe
         StockMovement.objects.create(
             lot=receipt.lot,
             movement_type_id="CORRECTION_OUT",
-            quantity_e6=receipt.quantity_e6,
+            quantity_e6=received,
             corrects_movement=receipt.stock_movement,
             staff=staff,
             occurred_at=now,

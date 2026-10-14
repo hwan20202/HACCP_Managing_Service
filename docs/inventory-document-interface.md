@@ -20,12 +20,12 @@
 | 테이블 | 주요 컬럼 | 비고 |
 |---|---|---|
 | `staff` | `id`, `staff_code`(UNIQUE), `name`, `is_active` | 작성자·결재자 등은 `staff.id` 참조 |
-| `items` | `id`, `item_code`(UNIQUE), `short_code`(LOT 약어), `name`, `item_type`, `base_unit`, `unit_weight_mg`, `origin_country`, `shelf_life_months` / `shelf_life_days` | `item_type`: RAW 원료 / PACKAGING 포장재 / SEMI 반제품 / FINISHED 완제품 |
-| `lots` | `id`, `lot_number`(**품목 안에서 UNIQUE**), `item_id`, `lot_kind`, `status`, `manufactured_date`, `expiration_date` | `lot_kind`: INCOMING / PRODUCED |
-| `production_batches` | `id`, `batch_number`(UNIQUE), `process_type`, `item_id`, `status`, `manufactured_date`, `shift`, … | `process_type`: MANUFACTURE / PACKAGING, `shift`: A조 / B조 (둘 다 주간) |
+| `items` | `id`, `item_code`(UNIQUE), `short_code`(LOT 약어), `name`, `item_type`, `base_unit`, `unit_weight_mg`, `origin_country`, `shelf_life_months` / `shelf_life_days`, `is_stock_managed` | `item_type`: RAW 원료 / PACKAGING 포장재 / SEMI 반제품 / FINISHED 완제품. `is_stock_managed = 0` 은 정제수 같은 재고 비관리 품목 (LOT 없음, 10/14) |
+| `lots` | `id`, `lot_number`(**품목 안에서 UNIQUE**), `item_id`, `lot_kind`, `status`, `manufactured_date`, `expiration_date`, `expiration_status` | `lot_kind`: INCOMING / PRODUCED |
+| `production_batches` | `id`, `batch_number`(UNIQUE), `process_type`, `item_id`, `status`, `manufactured_date`, `shift`, … | `process_type`: MANUFACTURE / PACKAGING — 10/15 부터 새 배치는 MANUFACTURE 만 (포장배치는 MVP 범위 밖, 예전 행만 PACKAGING). `manufactured_date` = 생산 시작일. `shift` 는 10/14 폐지 (열만 남고 항상 NULL) |
 
-**LOT 번호** (BOM v4 멘토안): 원료·포장재 `LOT 약어 + 입고일` (`AHN261005`), 반제품 `LOT 약어 + 제조일` (`BNY261007`), 완제품 `제조일 + 근무조` (`261011A`). 같은 날 같은 품목이 또 생기면 `-2`, `-3`.
-완제품은 제품이 달라도 번호가 같을 수 있으므로 **LOT 은 `lot_id` 로 식별**하고, 화면·라벨에는 품목코드와 함께 표시합니다 (`4000001 / 261011A`). `document_ref.label` 같은 표시용 값으로 LOT 을 찾지 마세요.
+**LOT 번호**: 원료는 소비기한 있음이면 `LOT 약어 + 소비기한`, 없음이면 `LOT 약어 + 입고일` (0007). 포장재 `LOT 약어 + 입고일`, 구매 반제품 `입고일 + 순번` (가정). 같은 기준일이 또 생기면 `-2`, `-3`. 반제품 LOT 은 제조 시작일 + 품목별 순번 (`261014A`, `261014B`). 근무조는 10/14 폐지.
+반제품 LOT 은 제품이 달라도 번호가 같을 수 있으므로 (완제품 LOT 의 품목 약어는 완제품 채번을 다룰 때 — 10/14 PM 미팅 A1) **LOT 은 `lot_id` 로 식별**하고, 화면·라벨에는 품목코드와 함께 표시합니다 (`4000001 / 261011A`). `document_ref.label` 같은 표시용 값으로 LOT 을 찾지 마세요.
 
 **`lots.status`** — 품질 판정만 나타냄
 
@@ -60,14 +60,17 @@
 | `supplier_name` | 공급처 | 입고 건 없으면 NULL |
 | `supplier_lot_number` | 공급처 LOT 번호 | 있음 |
 | `received_date` | 입고일 (입고 문서 업무일) | 입고 건 없으면 NULL |
-| `quantity_e6` | 입고 수량 (`_e6`) | 입고 건 없으면 NULL |
+| `quantity_e6` | 입고 등록 수량 (`_e6`) | 입고 건 없으면 NULL |
 | `manufactured_date`, `expiration_date` | 제조일, 소비기한 | 있음 |
 | `lot_status` | QUARANTINE / AVAILABLE / REJECTED | |
 | `receipt_status` | COMPLETED / CANCELLED (입고 취소) | 입고 건 없으면 NULL |
 | `subject_label` | `품목코드 품명 / LOT번호 / 입고일(또는 제조일)` 표시용 | |
+| `net_quantity_e6` | 입고 수량 − 입고 정정·취소분 (10/14 추가, 0005). 취소된 입고는 0 | 입고 건 없으면 NULL |
+| `expiration_status` | 소비기한 유무 KNOWN 있음 / NONE 없음 / UNKNOWN 미확인 (0007). 날짜가 없을 때 "없음"과 "미확인"을 이 값으로 구분 | 항상 있음 |
 
 - 생산 LOT, 기초재고 이관 LOT 은 입고 건이 없어 공급처·입고일·입고 수량이 NULL
 - 입고가 취소돼도 행은 남고 `receipt_status = CANCELLED`
+- 입고 수량을 일부 정정하면 `quantity_e6` 는 그대로, `net_quantity_e6` 가 줄어듦 (10/14 PM 미팅 D3)
 
 문서 쪽 요청 대비 바뀐 이름: `quantity` → `quantity_e6`, `unit` → `base_unit`, `material_kind` → `item_type` / `item_type_name`, `origin` → `origin_country`
 
@@ -78,16 +81,17 @@
 | 컬럼 | 뜻 |
 |---|---|
 | `production_batch_id` | `production_batches.id` |
-| `batch_number`, `process_type`, `status` | 배치 번호, MANUFACTURE / PACKAGING, 상태 |
-| `shift` | 근무조 A조 / B조 (둘 다 주간, NULL 가능) |
+| `batch_number`, `process_type`, `status` | 배치 번호, MANUFACTURE / PACKAGING(예전 행만), 상태 |
+| `shift` | 근무조 — 10/14 폐지, 항상 NULL (계약 때문에 열만 유지) |
 | `item_id`, `item_code`, `item_name`, `item_type`, `base_unit` | 산출 품목 |
 | `unit_weight_mg` | 기준단위 1개 무게(mg, NULL 가능). kg 환산: 개수 × `unit_weight_mg` ÷ 1,000,000 (예: 환 10,000개 × 4,000mg = 40kg). 문서 요청 V1 |
 | `bom_id`, `bom_version` | 기준 BOM (없으면 NULL) |
 | `planned_date`, `planned_quantity_e6` | 계획 (NULL 가능 — 사후 입력) |
 | `manufactured_date`, `started_at`, `completed_at` | 제조일, 시작·완료 시각 |
 | `output_quantity_e6` | 산출 합계 (정정 반영, `base_unit` 기준) |
-| `output_lot_count`, `input_line_count` | 산출 LOT 수, 투입 줄 수 |
+| `output_lot_count`, `input_line_count` | 산출 LOT 수(서로 다른 LOT, 0006 부터 0 또는 1), 투입 줄 수 |
 | `staff_name` | 작업 책임자 |
+| `output_lot_number` | 배치의 산출 LOT 번호 (10/15 추가, 0006). 산출 전 NULL, 예전 다중 LOT 배치는 쉼표로 나열 |
 | `subject_label` | `품목코드 품명 / 배치번호 / 제조일` 표시용 |
 
 문서 쪽 요청 대비: `quantity_kg` 대신 `output_quantity_e6` + `base_unit` (완제품은 단위가 `개`). kg 가 필요하면 `unit_weight_mg` 로 환산
@@ -144,6 +148,7 @@ hold_lot(lot_id=..., source_type="CCP", reason=..., staff_id=..., source_documen
 release_hold(hold_id=..., disposition="RELEASE", reason=..., staff_id=...)
 ```
 
+- 한 제조배치의 산출 LOT 은 하나 (10/15, 0006). 산출을 나눠 입력하면 `production_outputs` 행은 늘지만 `lot_id` 는 같음
 - 보류 테이블 하나(`holds`)에 대상은 LOT 또는 배치. 배치를 보류하면 그 배치의 산출 LOT 에 전파 보류가 생기고, 보류 중인 배치에는 투입·산출을 추가할 수 없음
 - `source_type`: CCP / INCOMING_INSPECTION / FINISHED_INSPECTION 은 `source_document_id`(document_id) 필수, MANUAL 은 선택
 - `disposition`: RELEASE / REWORK / RETURN / DISPOSE. 처분은 기록이고 반품·폐기 재고 차감은 수불 이동으로 따로

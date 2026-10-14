@@ -4,8 +4,9 @@ import csv
 
 from django.http import HttpResponse
 
-from .api import endpoint, ledger_params
+from .api import endpoint, ledger_search
 from .ledger import stock_ledger
+from .models import ExpirationStatus
 from .quantity import from_e6
 
 HEADER = [
@@ -31,7 +32,7 @@ def _num(value_e6):
 
 @endpoint("GET")
 def ledger_csv(request):
-    params = ledger_params(request)
+    params = ledger_search(request)
     date_from, date_to = params.pop("date_from"), params.pop("date_to")
     items = stock_ledger(date_from, date_to, **params)
 
@@ -45,7 +46,9 @@ def ledger_csv(request):
     for item in items:
         base = [item.item_code, item.item_name, item.item_type, item.base_unit]
         for lot in item.lots:
-            lot_cols = [lot.lot_number, lot.expiration_date or ""]
+            # 날짜가 없으면 '없음'(NONE)과 '미확인'(UNKNOWN)을 구분해 적는다 (0007)
+            expiry = lot.expiration_date or ExpirationStatus(lot.expiration_status).label
+            lot_cols = [lot.lot_number, expiry]
             writer.writerow(
                 [
                     *base,

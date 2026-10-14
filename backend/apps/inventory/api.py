@@ -32,6 +32,7 @@ from .models import (
     BatchStatus,
     Bom,
     BomLine,
+    ExpirationStatus,
     Hold,
     IncomingReceipt,
     Inventory,
@@ -328,6 +329,7 @@ def receipt_collection(request):
                 supplier_lot_number=data.get("supplier_lot_number"),
                 manufactured_date=_date(data.get("manufactured_date"), "manufactured_date"),
                 expiration_date=_date(data.get("expiration_date"), "expiration_date"),
+                expiration_status=data.get("expiration_status"),
                 judgment=str(data["judgment"]).upper() if data.get("judgment") else None,
             )
         )
@@ -418,12 +420,19 @@ def stock_lots(request):
     status = request.GET.get("status")
     if status and status not in LotStatus.values:
         raise BadRequest(f"status 는 {LotStatus.values} 중 하나여야 합니다.")
+    expiration_status = (request.GET.get("expiration_status") or "").upper() or None
+    if expiration_status and expiration_status not in ExpirationStatus.values:
+        raise BadRequest(f"expiration_status 는 {ExpirationStatus.values} 중 하나여야 합니다.")
     rows = lot_stock(
         item_type=request.GET.get("item_type") or None,
         item_id=_int(request.GET.get("item_id"), "item_id"),
         status=status,
         include_empty=_flag(request.GET.get("include_empty", "0")),
         expiring_within_days=_int(request.GET.get("expiring_within_days"), "expiring_within_days"),
+        lot_number=request.GET.get("lot_number") or None,
+        manufactured_from=_date(request.GET.get("manufactured_from"), "manufactured_from"),
+        manufactured_to=_date(request.GET.get("manufactured_to"), "manufactured_to"),
+        expiration_status=expiration_status,
     )
     return ok({"results": [out.lot_stock(row) for row in rows]})
 
@@ -455,9 +464,14 @@ def ledger_params(request):
     }
 
 
+def ledger_search(request):
+    """ledger_params + LOT 번호 검색 (ledger/, ledger/export.csv)."""
+    return {**ledger_params(request), "lot_number": request.GET.get("lot_number") or None}
+
+
 @endpoint("GET")
 def ledger(request):
-    params = ledger_params(request)
+    params = ledger_search(request)
     items = stock_ledger(params.pop("date_from"), params.pop("date_to"), **params)
     return ok(
         {
@@ -520,6 +534,7 @@ def opening_balance(request):
         expiration_date=_date(data.get("expiration_date"), "expiration_date"),
         status=data.get("status") or LotStatus.AVAILABLE,
         reason=data.get("reason"),
+        expiration_status=data.get("expiration_status"),
     )
     return _movement_response(movement)
 
@@ -594,15 +609,15 @@ def _batch_response(batch_id, status=200):
 def batch_collection(request):
     if request.method == "POST":
         data = request.data
-        _required(data, "item_id", "process_type", "staff_id")
+        _required(data, "item_id", "staff_id")
         batch = create_batch(
             item_id=_int(data["item_id"], "item_id"),
-            process_type=str(data["process_type"]).upper(),
+            # 제조만 (포장배치는 MVP 범위 밖, 10/15). 생략하면 MANUFACTURE
+            process_type=str(data.get("process_type") or ProcessType.MANUFACTURE).upper(),
             staff_id=_int(data["staff_id"], "staff_id"),
             planned_date=_date(data.get("planned_date"), "planned_date"),
             planned_quantity=data.get("planned_quantity"),
             manufactured_date=_date(data.get("manufactured_date"), "manufactured_date"),
-            shift=(str(data["shift"]).upper() if data.get("shift") else None),
             bom_id=_int(data.get("bom_id"), "bom_id"),
             notes=data.get("notes"),
         )
@@ -648,7 +663,6 @@ def batch_start(request, pk):
         staff_id=_int(data["staff_id"], "staff_id"),
         started_at=_datetime(data.get("started_at"), "started_at"),
         manufactured_date=_date(data.get("manufactured_date"), "manufactured_date"),
-        shift=(str(data["shift"]).upper() if data.get("shift") else None),
     )
     return _batch_response(pk)
 

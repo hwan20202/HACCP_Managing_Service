@@ -121,6 +121,8 @@ class Item(models.Model):
     origin_country = models.TextField(null=True, blank=True)
     food_type = models.TextField(null=True, blank=True)
     minimum_stock_e6 = models.BigIntegerField(default=0)
+    # False: 정제수 같은 공정용수 — LOT·재고·투입 기록 없음 (10/14 PM 미팅 C1, 0005)
+    is_stock_managed = models.BooleanField(default=True)
     is_active = models.BooleanField(default=True)
     created_at = KSTDateTimeField(db_default=LocalNow(), editable=False)
 
@@ -151,15 +153,27 @@ class LotStatus(models.TextChoices):
     REJECTED = "REJECTED", "부적합"
 
 
+class ExpirationStatus(models.TextChoices):
+    """소비기한 유무 (0007). 날짜가 비었다고 '없음'으로 보지 않는다."""
+
+    KNOWN = "KNOWN", "있음"
+    NONE = "NONE", "없음"
+    UNKNOWN = "UNKNOWN", "미확인"
+
+
 class Lot(models.Model):
-    # Unique per item (UNIQUE(item_id, lot_number)): finished LOTs (제조일 + 근무조) can repeat
-    # across products. Identify a LOT by id, or by item + lot_number.
+    # Unique per item (UNIQUE(item_id, lot_number)): produced 반제품 LOTs (제조일 + 순번) can
+    # repeat across products. (완제품 LOT 의 품목 약어는 완제품 채번을 다룰 때 — PM A1)
+    # Identify a LOT by id, or by item + lot_number.
     lot_number = models.TextField()
     item = models.ForeignKey(Item, models.PROTECT, related_name="lots")
     lot_kind = models.TextField(choices=LotKind.choices)
     status = models.TextField(choices=LotStatus.choices)
     manufactured_date = models.DateField(null=True, blank=True)
     expiration_date = models.DateField(null=True, blank=True)
+    # KNOWN <=> expiration_date (DB triggers, 0007). Left blank, save() sets KNOWN when there is a
+    # date and UNKNOWN otherwise — NONE (소비기한 없음 확인) is only ever set explicitly.
+    expiration_status = models.TextField(choices=ExpirationStatus.choices, blank=True, default="")
     created_at = KSTDateTimeField(db_default=LocalNow(), editable=False)
     # Refreshed by trigger trg_lots_updated_at on every UPDATE.
     updated_at = KSTDateTimeField(db_default=LocalNow(), editable=False)
@@ -171,6 +185,13 @@ class Lot(models.Model):
 
     def __str__(self):
         return self.lot_number
+
+    def save(self, *args, **kwargs):
+        if not self.expiration_status:
+            self.expiration_status = (
+                ExpirationStatus.KNOWN if self.expiration_date else ExpirationStatus.UNKNOWN
+            )
+        super().save(*args, **kwargs)
 
 
 class LotNumberRule(models.Model):
@@ -447,6 +468,7 @@ class BomLineAlternative(models.Model):
 
 class ProcessType(models.TextChoices):
     MANUFACTURE = "MANUFACTURE", "제조"
+    # 예전 기록 조회용. 새 포장배치는 MVP 범위 밖 (10/15, 0006 트리거로 막음)
     PACKAGING = "PACKAGING", "포장"
 
 
@@ -455,13 +477,6 @@ class BatchStatus(models.TextChoices):
     IN_PROGRESS = "IN_PROGRESS", "진행"
     COMPLETED = "COMPLETED", "완료"
     CANCELLED = "CANCELLED", "취소"
-
-
-class Shift(models.TextChoices):
-    """근무조: A조·B조 (둘 다 주간). DB CHECK 는 'C' 도 허용하지만 예비로 두고 쓰지 않는다."""
-
-    A = "A", "A조"
-    B = "B", "B조"
 
 
 class ProductionBatch(models.Model):
@@ -475,7 +490,8 @@ class ProductionBatch(models.Model):
     planned_date = models.DateField(null=True, blank=True)
     planned_quantity_e6 = models.BigIntegerField(null=True, blank=True)
     manufactured_date = models.DateField(null=True, blank=True)
-    shift = models.TextField(choices=Shift.choices, null=True, blank=True)
+    # 근무조: 10/14 PM 미팅으로 폐지. 문서 뷰(v_doc_batch) 계약 때문에 열만 남김 (항상 NULL)
+    shift = models.TextField(null=True, blank=True)
     started_at = KSTDateTimeField(null=True, blank=True)
     completed_at = KSTDateTimeField(null=True, blank=True)
     staff = models.ForeignKey(Staff, models.PROTECT, related_name="production_batches")

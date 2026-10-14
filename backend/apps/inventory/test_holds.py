@@ -60,8 +60,8 @@ class HoldTests(ProductionTestCase):
         raw_lot = self.receive(self.raw, "20", "r1")
         batch = self.batch(self.semi)
         self.use(batch, raw_lot, "5", "u1")
-        out_a = self.output(batch, "100", "o1").lot
-        out_b = self.output(batch, "100", "o2").lot
+        out = self.output(batch, "100", "o1").lot
+        self.assertEqual(self.output(batch, "100", "o2").lot, out)  # 1 배치 = 1 LOT (10/15)
         hold = hold_batch(
             batch_id=batch.pk,
             source_type="CCP",
@@ -70,9 +70,9 @@ class HoldTests(ProductionTestCase):
             source_document_id=5,
         )
         children = list(hold.propagated_holds.order_by("lot_id"))
-        self.assertEqual([c.lot_id for c in children], [out_a.pk, out_b.pk])
+        self.assertEqual([c.lot_id for c in children], [out.pk])
         self.assertTrue(all(c.source_type_id == "PROPAGATED" for c in children))
-        self.assertEqual((usable(out_a), usable(raw_lot)), ((0, 1), (1, 0)))  # inputs untouched
+        self.assertEqual((usable(out), usable(raw_lot)), ((0, 1), (1, 0)))  # inputs untouched
         for action in (
             lambda: add_usage(
                 batch_id=batch.pk,
@@ -95,7 +95,7 @@ class HoldTests(ProductionTestCase):
             hold.pk,
         )
 
-        # LOT A is handled first (disposed), then the batch hold is released.
+        # The LOT is handled first (disposed), then the batch hold is released.
         release_hold(
             hold_id=children[0].pk, disposition="DISPOSE", reason="폐기", staff_id=self.staff.pk
         )
@@ -103,8 +103,8 @@ class HoldTests(ProductionTestCase):
             hold_id=hold.pk, disposition="RELEASE", reason="개선조치 완료", staff_id=self.staff.pk
         )
         children = list(Hold.objects.filter(parent_hold=hold).order_by("lot_id"))
-        self.assertEqual([c.disposition_id for c in children], ["DISPOSE", "RELEASE"])
-        self.assertEqual(usable(out_b), (1, 0))
+        self.assertEqual([c.disposition_id for c in children], ["DISPOSE"])  # kept as handled
+        self.assertEqual(usable(out), (1, 0))
 
     def test_hold_rows_are_kept(self):
         lot = self.receive(self.raw, "10", "r1")

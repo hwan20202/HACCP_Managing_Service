@@ -39,8 +39,8 @@
 
 | 화면 | 메뉴 위치 | API | 순서 |
 |---|---|---|---|
-| 원료 수불대장 — 수불 내역 | 원료 수불대장 | `ledger/`, `ledger/export.csv` | 1 |
-| 원료 수불대장 — 현재고 | 원료 수불대장 탭 | `stock/items/`, `stock/lots/` | 1 |
+| 원료 수불대장 — 수불 내역 | 원료 수불대장 | `ledger/`, `ledger/export.csv` | 1 ✅ 10/15 (`inventory-api.js` 수불일지) |
+| 원료 수불대장 — 현재고 | 원료 수불대장 탭 | `stock/items/`, `stock/lots/` | 1 ✅ 10/15 (`inventory-api.js` 재고장, LOT별) |
 | 입고 등록 (기본정보) | 원료 수불대장 버튼 | `receipts/` POST, `items/`, `suppliers/`, `staff/` | 1 |
 | 입고 목록·상세·취소 | 원료 수불대장 | `receipts/`, `receipts/<id>/cancel/` | 2 |
 | LOT 상세 + 이력, 판정 반영 | 행 클릭 | `lots/<id>/`, `lots/<id>/judgment/` | 2 |
@@ -71,3 +71,9 @@
 ## 확인 필요
 
 - PM 스토리보드가 이 시제품과 같은 화면인지, 별도 자료(이미지·PDF·피그마 등)인지. 별도라면 비교해서 기준을 정함
+
+## 10/15 구현 상태
+
+- `prototype/js/modules/inventory-api.js` (`InventoryApiPage`): 재고장(LOT별 현재고)·수불일지 두 탭. 원료·부자재·완제품 메뉴가 이 화면을 씀 (`app.js` 의 3줄, `index.html` 에 스크립트 1줄 추가 — 문서 담당자와 공유 필요). 완제품 메뉴는 반제품(벌크)·완제품을 함께 보여 줌.
+- 소비기한은 날짜가 없으면 "소비기한 없음"(NONE)과 "미확인"(UNKNOWN) 배지로 구분.
+- 조회 전용. 입고 등록·조정·정정 화면은 다음 단계. 기존 `inventory.js` 는 그대로 둠 (다른 화면에서 쓰지 않음).

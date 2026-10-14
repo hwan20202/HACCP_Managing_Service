@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from django.db import connection
 
 from .fields import parse_kst_text, to_kst_text
+from .stock import item_type_clause
 
 
 @dataclass
@@ -38,6 +39,7 @@ class LedgerLot:
     lot_number: str
     status: str
     expiration_date: datetime.date | None
+    expiration_status: str = "UNKNOWN"  # KNOWN 있음 / NONE 없음 / UNKNOWN 미확인 (0007)
     opening_e6: int = 0
     in_e6: int = 0
     out_e6: int = 0
@@ -82,11 +84,15 @@ JOIN items i                ON i.id = l.item_id
 """
 
 
-def _filters(item_type, item_id, lot_id):
+def _filters(item_type, item_id, lot_id, lot_number=None):
     clauses, params = [], []
-    if item_type:
-        clauses.append("i.item_type = %s")
-        params.append(item_type)
+    type_clause, type_params = item_type_clause(item_type)
+    if type_clause:
+        clauses.append(type_clause)
+        params.extend(type_params)
+    if lot_number:
+        clauses.append("l.lot_number LIKE %s")
+        params.append(f"%{lot_number.strip()}%")
     if item_id:
         clauses.append("i.id = %s")
         params.append(item_id)
@@ -96,20 +102,22 @@ def _filters(item_type, item_id, lot_id):
     return clauses, params
 
 
-def stock_ledger(date_from, date_to, *, item_type=None, item_id=None, lot_id=None):
+def stock_ledger(date_from, date_to, *, item_type=None, item_id=None, lot_id=None, lot_number=None):
     """Return list[LedgerItem] ordered by item code, LOT number, then time.
 
     A LOT appears when it has a non-zero opening balance or any movement in the period.
+    Dates are 수불 dates (stock_movements.occurred_at). item_type: one code or several
+    ('SEMI,FINISHED'); lot_number: part of the LOT number.
     """
     if date_to < date_from:
         raise ValueError("date_to must not be before date_from.")
     start = date_from.isoformat()
     end = (date_to + datetime.timedelta(days=1)).isoformat()
-    clauses, params = _filters(item_type, item_id, lot_id)
+    clauses, params = _filters(item_type, item_id, lot_id, lot_number)
     extra = "".join(f" AND {clause}" for clause in clauses)
 
     item_cols = "i.id, i.item_code, i.name, i.item_type, i.base_unit"
-    lot_cols = "l.id, l.lot_number, l.status, l.expiration_date"
+    lot_cols = "l.id, l.lot_number, l.status, l.expiration_date, l.expiration_status"
     with connection.cursor() as cursor:
         cursor.execute(
             f"SELECT {item_cols}, {lot_cols}, SUM(m.quantity_e6 * t.direction) {_BASE}"
@@ -131,7 +139,9 @@ def stock_ledger(date_from, date_to, *, item_type=None, item_id=None, lot_id=Non
     items, lots = {}, {}
 
     def lot_for(row):
-        item_id_, code, name, type_, unit, lot_id_, number, status, expiration = row[:9]
+        item_id_, code, name, type_, unit, lot_id_, number, status, expiration, exp_status = row[
+            :10
+        ]
         if item_id_ not in items:
             items[item_id_] = LedgerItem(item_id_, code, name, type_, unit)
         if lot_id_ not in lots:
@@ -140,17 +150,18 @@ def stock_ledger(date_from, date_to, *, item_type=None, item_id=None, lot_id=Non
                 number,
                 status,
                 datetime.date.fromisoformat(expiration) if expiration else None,
+                exp_status,
             )
             lots[lot_id_] = lot
             items[item_id_].lots.append(lot)
         return lots[lot_id_]
 
     for row in openings:
-        lot_for(row).opening_e6 = row[9]
+        lot_for(row).opening_e6 = row[10]
     balances = {}
     for row in movements:
         lot = lot_for(row)
-        movement_id, occurred_at, code, name, signed, reason, staff, corrects = row[9:]
+        movement_id, occurred_at, code, name, signed, reason, staff, corrects = row[10:]
         balance = balances.get(lot.lot_id, lot.opening_e6) + signed
         balances[lot.lot_id] = balance
         if signed > 0:

@@ -189,6 +189,7 @@ CREATE INDEX ix_lots_fefo        ON lots (item_id, expiration_date);
      원료·포장재  {short_code}{date:yyMMdd}{seq:-N}   AHN261005    LOT 약어 + 입고일
      반제품       {short_code}{date:yyMMdd}{seq:-N}   BNY261007    LOT 약어 + 제조일
      완제품       {date:yyMMdd}{shift}{seq:-N}        261011A      제조일 + 근무조 (A조 / B조)
+   10/13 반제품(0004)·10/14 완제품(0005) → {date:yyMMdd}{seq:A} 제조일 + 생산 순번 (근무조 폐지)
    같은 날 같은 품목이 또 생기면 끝에 -2, -3 (가정). LOT 약어는 items.short_code */
 CREATE TABLE lot_number_rules (
     id              INTEGER PRIMARY KEY,

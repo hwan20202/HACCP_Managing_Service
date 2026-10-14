@@ -170,6 +170,7 @@ class ReceiptWithJudgmentApiTests(ApiTestCase):
             "received_date": self.today,
             "quantity": "10",
             "idempotency_key": "j1",
+            "expiration_status": "NONE",
             "judgment": "fail",
         }
         response = self.post("/receipts/", data)
@@ -348,6 +349,7 @@ class ProductionApiTests(ApiTestCase):
                 "received_date": self.today,
                 "quantity": quantity,
                 "idempotency_key": key,
+                "expiration_status": "NONE",
                 "judgment": "PASS",
             },
         )
@@ -393,6 +395,10 @@ class ProductionApiTests(ApiTestCase):
         )
         self.assertEqual(output["outputs"][0]["lot_quantity"], "2000")
         self.assertEqual(
+            (output["output_lot"]["lot_number"], output["output_lot"]["stock"]),
+            (output["outputs"][0]["lot_number"], "2000"),
+        )
+        self.assertEqual(
             output["bom_check"],
             {
                 "basis": "output",
@@ -404,6 +410,7 @@ class ProductionApiTests(ApiTestCase):
                         "unit": "kg",
                         "standard": "8",
                         "actual": "8",
+                        "stock_managed": True,
                     }
                 ],
             },
@@ -425,16 +432,22 @@ class ProductionApiTests(ApiTestCase):
         )
         self.assertEqual(bad.status_code, 400)
         self.assertEqual(self.get("/batches/999999/").status_code, 404)
-        batch = self.post(
-            "/batches/",
-            {"item_id": self.finished.pk, "process_type": "PACKAGING", "staff_id": self.staff.pk},
-        ).json()
-        no_shift = self.post(
+        # 포장배치·완제품 제조는 MVP 범위 밖 (10/15)
+        for body in (
+            {"item_id": self.semi.pk, "process_type": "PACKAGING"},
+            {"item_id": self.finished.pk},
+        ):
+            refused = self.post("/batches/", {**body, "staff_id": self.staff.pk})
+            self.assertEqual(refused.status_code, 400, body)
+        batch = self.post("/batches/", {"item_id": self.semi.pk, "staff_id": self.staff.pk}).json()
+        self.assertEqual(batch["process_type"], "MANUFACTURE")
+        # 계획 상태에서 제조일(생산 시작일) 없이 산출하면 거부 (10/14)
+        no_date = self.post(
             f"/batches/{batch['id']}/outputs/",
             {"quantity": "1", "staff_id": self.staff.pk, "idempotency_key": "o1"},
         )
-        self.assertEqual(no_shift.status_code, 400)
-        self.assertIn("근무조", no_shift.json()["error"]["message"])
+        self.assertEqual(no_date.status_code, 400)
+        self.assertIn("생산 시작일", no_date.json()["error"]["message"])
         missing = self.post(f"/batches/{batch['id']}/cancel/", {"staff_id": self.staff.pk})
         self.assertEqual(missing.status_code, 400)
         cancelled = self.post(
