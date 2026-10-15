@@ -449,6 +449,7 @@ def stock_lots(request):
         manufactured_from=_date(request.GET.get("manufactured_from"), "manufactured_from"),
         manufactured_to=_date(request.GET.get("manufactured_to"), "manufactured_to"),
         expiration_status=expiration_status,
+        usable_only=_flag(request.GET.get("usable_only", "0")),
     )
     return ok({"results": [out.lot_stock(row) for row in rows]})
 

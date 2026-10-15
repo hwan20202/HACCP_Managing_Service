@@ -428,8 +428,8 @@ const ProductionApiPage = {
     this.fefo = null;
     if (itemId) {
       try {
-        const stock = await this.get('/stock/lots/', { item_id: itemId, status: 'AVAILABLE' });
-        this.lotChoices = stock.results.filter((l) => l.is_usable);
+        const stock = await this.get('/stock/lots/', { item_id: itemId, usable_only: '1' });
+        this.lotChoices = stock.results.filter((l) => l.can_use);
         await this.loadFefo();
       } catch (error) { this.toast('error', 'LOT 조회 실패', error.message); }
     }

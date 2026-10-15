@@ -65,6 +65,7 @@ from .movements import (
     current_stock_e6,
 )
 from .shelf_life import expiration_for
+from .stock import FEFO_ORDER_SQL
 
 OPEN_STATUSES = {BatchStatus.PLANNED, BatchStatus.IN_PROGRESS}
 # 제조배치를 만들 수 있는 품목 유형. 현재 기준정보 분류(v6.1: 자사 제조품 = 3코드 반제품,
@@ -504,7 +505,7 @@ def fefo_candidates(*, item_id, quantity, on_date=None):
     on_date = on_date or kst_now().date()
     with connection.cursor() as cursor:
         cursor.execute(
-            """
+            f"""
             SELECT l.id, inv.quantity_e6
             FROM lots l
             JOIN v_lot_availability a     ON a.lot_id = l.id
@@ -512,9 +513,7 @@ def fefo_candidates(*, item_id, quantity, on_date=None):
             LEFT JOIN incoming_receipts r ON r.lot_id = l.id
             WHERE l.item_id = %s AND a.is_usable = 1 AND inv.quantity_e6 > 0
               AND (l.expiration_date IS NULL OR l.expiration_date >= %s)
-            ORDER BY l.expiration_date IS NULL, l.expiration_date,
-                     COALESCE(r.received_date, l.manufactured_date) IS NULL,
-                     COALESCE(r.received_date, l.manufactured_date), l.id
+            ORDER BY {FEFO_ORDER_SQL}
             """,
             [item_id, on_date.isoformat()],
         )

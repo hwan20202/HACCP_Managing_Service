@@ -32,7 +32,31 @@ erDiagram
 |---|---|---|
 | 품목 간 LOT 번호 중복 | `lots UNIQUE(item_id, lot_number)` | 이미 지원. 전역 UNIQUE로 변경하지 않는다. 내부 참조는 `lot_id` 유지 |
 | 같은 배치의 산출 여러 번 등록 | `add_output`이 기존 배치 LOT에 수불·산출 행 추가 | 지원. 등록 건별 이력과 합산 재고 분리 |
-| 서로 다른 배치가 같은 LOT 사용 | 0006 트리거 금지, `add_output`도 기존 번호 거부 | 회의 방향을 적용할 품목유형부터 확정. 적용 시 트리거와 서비스를 함께 변경 |
+| 서로 다른 배치가 같은 LOT 사문서 앱 함수는 main이 아니라 feature/document-integration에만 있습니다. 훅 연결을 어떻게 진행할까요?
+document-integration 병합 (권장)
+명령 실행함
+main 병합은 문제없습니다. main은 지금 병합해도 충돌이 없고 바뀌는 내용도 없습니다. 다만 문서 앱 함수는 main이 아니라 feature/document-integration에만 있습니다.
+
+main 상태 (dea2259)
+
+main에 새로 들어온 것은 feature/inventory(64dcce7) PR #15 하나뿐입니다. 이 커밋은 현재 브랜치에 이미 들어 있습니다(f31b556에서 병합됨).
+그래서 현재 브랜치에 main을 병합하면 병합 결과가 현재 브랜치(e0f3a23)와 완전히 같습니다. 충돌도 없고, 병합 커밋만 하나 생깁니다.
+앞서 말한 “main 병합”은 현재 브랜치 안으로 main을 가져오는 것이었습니다. main 쪽에 병합하는 것은 아니고, 그건 하지 않습니다.
+문서 앱 함수 위치
+
+require_for_lot(입고)와 require_for_batch(생산 시작)는 origin/feature/document-integration(0fa9c50)에만 있고, 이 브랜치는 아직 main에 병합되지 않았습니다.
+이 브랜치에는 이미 main이 포함되어 있어서, 이것만 병합하면 main도 같이 들어옵니다.
+입고 취소에 대응하는 문서 쪽 함수는 아직 없습니다. 취소 훅은 연결할 대상이 없어 지금처럼 빈 함수로 두고 문서에 표시하겠습니다.
+병합하고 나면 고쳐야 할 곳이 있습니다. 문서 쪽 개발 도구(devtools/inventory_dev.py)가 원료를 입고할 때 소비기한 유무를 넘기지 않습니다. 0007부터 원료 입고는 이 값이 필수라서 그대로 두면 실패합니다. 그리고 이 도구는 생산 배치를 SQL로 직접 넣는데, 이제 생산 서비스가 있으니 그것을 쓰도록 바꿔야 합니다.
+정한 대로 document-integration을 병합하겠습니다. 아래 명령을 실행해 주세요.
+
+powershell
+cd D:\project\biodot\HACCP_DEV
+git status
+git merge --no-ff origin/feature/document-integration
+git status
+충돌이 없으면 병합 커밋이 바로 만들어집니다. 충돌이 나면 커밋하지 말고 그 상태에서 마지막 git status 출력을 보내 주세요. 충돌을 해결한 뒤 입고·생산 시작 훅을 연결하고, inventory_dev.py를 고치고, 전체 테스트와 문서 연동 검증을 돌려서 결과를 알려드리겠습니다.
+용 | 0006 트리거 금지, `add_output`도 기존 번호 거부 | 회의 방향을 적용할 품목유형부터 확정. 적용 시 트리거와 서비스를 함께 변경 |
 | LOT별 현재고 | `inventory`는 `lot_id` PK, 수불 INSERT 트리거로 갱신 | 기존 테이블 활용. 새 재고장 테이블 불필요 |
 | 개별 수불 기록 | `stock_movements` append-only, 산출별 이동 FK 유지 | 기존 테이블 활용. 정정은 역이동으로 기록 |
 | 0 재고 제외 | `lot_stock(include_empty=False)` | 이미 기본 지원 |

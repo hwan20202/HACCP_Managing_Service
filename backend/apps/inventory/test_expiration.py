@@ -263,3 +263,63 @@ class ApiTests(ExpirationTestCase):
             {"from": self.today.isoformat(), "to": self.today.isoformat()},
         ).content.decode("utf-8-sig")
         self.assertIn(ExpirationStatus.NONE.label, csv_text)
+
+
+class UsablePriorityTests(ExpirationTestCase):
+    def test_expired_quality_passed_lot_is_not_usable_stock(self):
+        from .stock import item_stock
+
+        expired = self.receive("expired", expiration_date=self.today - datetime.timedelta(days=1))
+        valid = self.receive("today", expiration_date=self.today)
+        rows = {r.lot_id: r for r in lot_stock(item_id=self.raw.pk)}
+        self.assertTrue(rows[expired.pk].is_usable)  # Existing quality-only contract.
+        self.assertTrue(rows[expired.pk].is_expired)
+        self.assertFalse(rows[expired.pk].can_use)
+        self.assertIsNone(rows[expired.pk].use_priority)
+        self.assertFalse(rows[valid.pk].is_expired)
+        self.assertTrue(rows[valid.pk].can_use)  # Expiration day is inclusive.
+        self.assertEqual([r.lot_id for r in lot_stock(usable_only=True)], [valid.pk])
+        [summary] = item_stock(item_id=self.raw.pk)
+        self.assertEqual((summary.usable_e6, summary.unusable_e6), (to_e6(10), to_e6(10)))
+
+    def test_ranks_match_fefo_and_are_not_renumbered_by_search(self):
+        from .holds import hold_lot
+        from .movements import dispose
+
+        none_new = self.receive("none-new", expiration_status="NONE")
+        none_old = self.receive(
+            "none-old", expiration_status="NONE", day=self.today - datetime.timedelta(days=5)
+        )
+        late = self.receive("late", expiration_date=self.today + datetime.timedelta(days=90))
+        early = self.receive("early", expiration_date=self.today + datetime.timedelta(days=1))
+        self.receive("fail", expiration_date=self.today, judgment="FAIL")
+        held = self.receive("held", expiration_date=self.today)
+        hold_lot(lot_id=held.pk, source_type="MANUAL", reason="test", staff_id=self.staff.pk)
+        empty = self.receive("empty", expiration_status="NONE")
+        dispose(lot_id=empty.pk, staff_id=self.staff.pk, reason="test", idempotency_key="empty")
+        expected = [early.pk, late.pk, none_old.pk, none_new.pk]
+        rows = lot_stock(item_id=self.raw.pk, usable_only=True, include_empty=True)
+        self.assertEqual([r.lot_id for r in rows], expected)
+        self.assertEqual([r.use_priority for r in rows], [1, 2, 3, 4])
+        self.assertEqual(
+            [lot.pk for lot, _, _ in fefo_candidates(item_id=self.raw.pk, quantity="100")], expected
+        )
+        [found] = lot_stock(item_id=self.raw.pk, lot_number=late.lot_number)
+        self.assertEqual(found.use_priority, 2)
+        filtered = lot_stock(item_id=self.raw.pk, expiration_status="NONE", usable_only=True)
+        self.assertEqual([r.use_priority for r in filtered], [3, 4])
+
+    def test_api_exposes_usability_and_keeps_expired_history(self):
+        expired = self.receive("expired", expiration_date=self.today - datetime.timedelta(days=1))
+        valid = self.receive("valid", expiration_status="NONE")
+        args = {"item_id": self.raw.pk, "usable_only": "1"}
+        response = self.client.get(f"{BASE}/stock/lots/", args)
+        self.assertEqual(response.status_code, 200)
+        [row] = response.json()["results"]
+        self.assertEqual(row["lot_id"], valid.pk)
+        self.assertEqual((row["can_use"], row["is_expired"], row["use_priority"]), (True, False, 1))
+        ledger = self.client.get(
+            f"{BASE}/ledger/",
+            {"from": str(self.today), "to": str(self.today), "lot_id": expired.pk},
+        ).json()
+        self.assertEqual(len(ledger["results"][0]["lots"][0]["lines"]), 1)
