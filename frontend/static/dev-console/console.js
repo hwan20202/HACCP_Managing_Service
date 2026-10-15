@@ -75,7 +75,25 @@
     unskip: { label: '되돌리기 (F28·A25)', method: 'POST', flow: 'DOC-USK', uses: ['id', 'body'], path: (s) => `documents/${s.id}/unskip`, doc: (s) => s.id },
     recentValues: { label: '최근 값 (F29·A26)', method: 'GET', flow: 'DOC-RCV', uses: ['query'], path: (s) => `documents/recent-values${s.query ? `?${s.query}` : ''}` },
     periodicBundle: { label: 'REQ 주 묶음 (F06·A04)', method: 'GET', flow: 'REQ-PWB', uses: ['query'], path: (s) => `periodic-bundles${s.query ? `?${s.query}` : ''}` },
+    // ---- P9 주기형 작성 요구 — doc-requirements/p9-s2-spec.md(+ 6.1 단계 ID). ④ = 기간의 주기 문서(개발 API periodic_from·to)
+    // 만들 줄이 없으면(모두 대상 아님) 05가 없는 도식
+    periodicRun: { label: 'REQ 주기 문서 만들기 (F07·A05)', method: 'POST', uses: ['body'], path: () => 'periodic-runs',
+      flow: (record, trace) => (trace && !trace.steps.some((x) => x.step_id === 'REQ-PRN-05') && record.ok ? 'REQ-PRN-NONE' : 'REQ-PRN'),
+      scope: (s) => periodicScope(s, 'date_from', 'date_to') },
+    periodicOpen: { label: 'REQ 주기 문서 하나 (F08·A06)', method: 'POST', flow: 'REQ-POD', uses: ['body'], path: () => 'periodic-documents',
+      scope: (s) => periodicScope(s, 'date', 'date') },
+    periodicRules: { label: 'REQ 주기 규칙 목록 (F09·A07)', method: 'GET', flow: 'REQ-PRL', uses: [], path: () => 'periodic-rules' },
+    // ---- P10 문서함·결재함 — document-workflow/p10-s2-spec.md(+ 5.1 단계 ID)
+    todo: { label: 'REQ 작성 필요 목록 (F10·A08)', method: 'GET', flow: 'REQ-TDO', uses: ['query'], path: (s) => `todo${s.query ? `?${s.query}` : ''}` },
+    cancelSubmission: { label: 'WF 상신 취소 (WF-F05)', method: 'POST', flow: 'WF-CAN', uses: ['id', 'docId'], path: (s) => `approval-requests/${s.id}/cancel`, doc: (s) => s.docId },
   };
+  function periodicScope(spec, fromKey, toKey) {
+    try {
+      const b = JSON.parse(spec.body || '{}');
+      const ok = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
+      return ok(b[fromKey]) && ok(b[toKey]) && b[fromKey] <= b[toKey] ? `periodic_from=${b[fromKey]}&periodic_to=${b[toKey]}` : null;
+    } catch (e) { return null; }
+  }
   // 견본 파일(콘솔 전용): 서명만 맞으면 서버 검사(DOC-VR-20)를 통과한다. bad = 이름은 .pdf, 내용은 글자
   const SAMPLE = {
     pdf: () => new Blob(['%PDF-1.4\n% console sample\n%%EOF\n'], { type: 'application/pdf' }),
@@ -1348,6 +1366,157 @@
       } }),
   );
 
+  // ---------------------------------------------------------------- 프리셋 REQ-PS-14~16 · DOC-PS-30·31 (C4 S5 — p9-s1-screens 8장)
+  // 날짜는 실행하는 날 기준(Asia/Seoul). 같은 날 다시 실행하면 이미 있는 문서는 existing — 기대 문구도 그 경우를 포함한다(D-146 Q2).
+  const p9 = (preset) => ({ unit: 'P9', ...preset });
+  const seoulToday = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
+  const isoDow = (day) => { const n = new Date(`${day}T00:00:00Z`).getUTCDay(); return n === 0 ? 7 : n; };
+  // 오늘이 주말이면 지난 금요일(REQ-PS-14 — 평일 날짜)
+  const lastWeekday = () => { const t = seoulToday(); const n = isoDow(t); return n > 5 ? dayAfter(t, 5 - n) : t; };
+  const nextSaturday = () => { const t = seoulToday(); return dayAfter(t, 13 - isoDow(t)); };  // 다음 주 토요일
+  async function quietPostAs(path, body, staff) {
+    const r = await fetch(`/api/v1/${path}`, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-Staff-Id': String(staff) }, body: JSON.stringify(body) });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) throw new Error(`사전 조건을 만들지 못했습니다: ${(data && (data.message || data.code)) || r.status}`);
+    return data;
+  }
+
+  PRESETS.push(
+    p9({ id: 'REQ-PS-14', label: '주기 문서 오늘 두 번', expect: '1회 200 · REQ-PRN 도식 일치(01~06, 05는 줄마다) · D10·D12 그날 문서와 D11 그 주 문서 3줄 — 없던 것은 created, 있던 것은 existing / 2회 200 · 3줄 모두 existing, ④ 문서 수 그대로(document·doc_section 변화 없음)',
+      prepare: async () => {
+        const day = lastWeekday();
+        const body = J({ date_from: day, date_to: day });
+        return { func: 'periodicRun', staff: '3', body,
+          script: async (exec) => {
+            await exec({ func: 'periodicRun', body, staff: '3' });
+            await exec({ func: 'periodicRun', body, staff: '3' });
+          } };
+      } }),
+    p9({ id: 'REQ-PS-15', label: '기간 보충과 주말', expect: '200 · REQ-PRN 도식 일치 · 14일: 토·일 D10·D12 줄은 skipped_rule(reason weekday), 규칙 시작일(periodic_rules.json start_date) 전 날은 skipped_rule(before_start), D11은 주마다 1줄(work_date 월요일) · ④ created 줄만큼 document +, 이미 있던 문서는 그대로',
+      prepare: async () => {
+        const end = seoulToday();
+        return { func: 'periodicRun', staff: '3', body: J({ date_from: dayAfter(end, -13), date_to: end }) };
+      } }),
+    p9({ id: 'REQ-PS-16', label: '입력 거절(미래 · 32일 · 시작>끝)', expect: '3번 모두 400 VALIDATION_ERROR(details: date_to future / date_to max / date_from order) · REQ-PRN-02 실패, 03 이후 없음 · ④ 변화 없음',
+      prepare: async () => {
+        const t = seoulToday();
+        const cases = [{ date_from: t, date_to: dayAfter(t, 1) }, { date_from: dayAfter(t, -31), date_to: t }, { date_from: t, date_to: dayAfter(t, -1) }];
+        return { func: 'periodicRun', staff: '3', body: J(cases[0]),
+          script: async (exec) => { for (const c of cases) await exec({ func: 'periodicRun', body: J(c), staff: '3' }); } };
+      } }),
+    p9({ id: 'DOC-PS-30', label: '새 문서 → 이미 있는 날', expect: '200 · REQ-POD 도식 일치(01~04) · result existing, 준비에서 만든(또는 있던) 그날 D10과 같은 document_id · ④ 변화 없음',
+      prepare: async () => {
+        const day = lastWeekday();
+        const made = await quietPostAs('periodic-runs', { date_from: day, date_to: day, type_codes: ['D10'] }, 3);
+        const line = made.lines[0];
+        prepared.push({ lot_number: '-', document_id: line.document_id, status: `D10 ${day} ${line.status} — ${line.result}` });
+        return { func: 'periodicOpen', staff: '3', body: J({ type_code: 'D10', date: day }) };
+      } }),
+    p9({ id: 'DOC-PS-31', label: '새 문서 → 미래·주말(다음 주 토요일 D12) → 삭제', expect: '1번째 200(created) → 2번째 삭제 204 · 1번째 REQ-POD 도식 일치, record_key D12|day:<토요일>, ④ document +1 · 2번째 DOC-DEL 도식 일치, ④ deleted_at·by 채워지고 record_key 비움(주기 문서는 작성중·상신 전이면 삭제 — D-149, ISS-028) → 다시 실행해도 다시 created',
+      prepare: async () => {
+        const body = J({ type_code: 'D12', date: nextSaturday() });
+        return { func: 'periodicOpen', staff: '3', body,
+          script: async (exec) => {
+            const first = await exec({ func: 'periodicOpen', body, staff: '3' });
+            const id = first.record.ok ? String(first.record.data.document_id) : '0';
+            await exec({ func: 'delete', id, staff: '3' });
+          } };
+      } }),
+  );
+
+  // ---------------------------------------------------------------- 프리셋 DOC-PS-32~34 · WF-PS-34~36 (C5 S5 — p10-s1-screens 7장)
+  // 작성 필요는 실행하는 날 기준(Asia/Seoul). 상신 취소는 불러올 때 새 D03을 만든다(P6 픽스처 — 결재선 staff 3·1, 상신자 staff 3).
+  const p10 = (preset) => ({ unit: 'P10', ...preset });
+  const todoRows = (t) => t.groups.flatMap((g) => [...g.rows, ...g.past.rows]);
+  async function quietTodo() {
+    const t = await quietGetAs(`todo?date=${seoulToday()}`, 3);
+    if (!t) throw new Error('작성 필요 목록을 읽지 못했습니다(현재 사용자 staff 3 필요).');
+    return t;
+  }
+  async function quietDelete(path, staff) {
+    const r = await fetch(`/api/v1/${path}`, { method: 'DELETE', headers: { Accept: 'application/json', 'X-Staff-Id': String(staff) } });
+    if (!r.ok) throw new Error(`사전 조건을 만들지 못했습니다: 삭제 ${r.status}`);
+  }
+
+  PRESETS.push(
+    p10({ id: 'DOC-PS-32', label: '작성 필요 기본', expect: '200 · REQ-TDO 도식 일치(01~06, 04 안쪽 DOC-RQD) · groups 순서 오늘·주간·월간·연간·수시(월간·연간·수시 has_forms false) · 준비에서 만든 그날 D10·D12는 작성 필요 상태면 오늘 칸, D11은 주간 칸 · 시작일(10-12) 이후 빠진 평일은 지난 미완료의 "문서 없음" · ④ 변화 없음',
+      prepare: async () => {
+        const day = lastWeekday();
+        const made = await quietPostAs('periodic-runs', { date_from: day, date_to: day }, 3);
+        made.lines.forEach((line) => prepared.push({ lot_number: '-', document_id: line.document_id, status: `${line.type_code} ${line.work_date} ${line.status} — ${line.result}` }));
+        return { func: 'todo', staff: '3', query: `date=${seoulToday()}` };
+      } }),
+    p10({ id: 'DOC-PS-33', label: '문서 없음 → 만들기', expect: '1번째 200(REQ-POD created) → 2번째 200(REQ-TDO) · 준비에서 고른 "문서 없음" 줄(없으면 작성중 주기 문서를 지워 만듦 — D-149)이 다시 조회하면 작성중 문서 줄 · ④(그 날짜) document +1',
+      prepare: async () => {
+        let t = await quietTodo();
+        let line = todoRows(t).find((r) => r.kind === 'missing');
+        if (!line) {
+          const draft = todoRows(t).find((r) => r.kind === 'document' && r.requirement === 'periodic' && r.status === 'draft');
+          if (!draft) throw new Error('문서 없음 줄도, 지울 수 있는 작성중 주기 문서도 없습니다.');
+          await quietDelete(`documents/${draft.document_id}`, 3);
+          prepared.push({ lot_number: '-', document_id: draft.document_id, status: `${draft.type_code} ${draft.work_date} 작성중 → 삭제(문서 없음 만들기)` });
+          t = await quietTodo();
+          line = todoRows(t).find((r) => r.kind === 'missing' && r.type_code === draft.type_code && r.work_date === draft.work_date);
+        }
+        const body = J({ type_code: line.type_code, date: line.work_date });
+        const query = `date=${seoulToday()}`;
+        return { func: 'periodicOpen', staff: '3', body,
+          script: async (exec) => {
+            await exec({ func: 'periodicOpen', body, staff: '3' });
+            await exec({ func: 'todo', query, staff: '3' });
+          } };
+      } }),
+    p10({ id: 'DOC-PS-34', label: '작성 안 함은 빠짐', expect: '1번째 200(DOC-SKP) → 2번째 200(REQ-TDO) · 준비한 작성중 D10이 작성 안 함 → 그 날 D10 줄 없음(문서 없음도 아님) · ④ document skipped',
+      prepare: async () => {
+        const t = await quietTodo();
+        let row = todoRows(t).find((r) => r.kind === 'document' && r.type_code === 'D10' && r.status === 'draft');
+        if (!row) {
+          const missing = todoRows(t).find((r) => r.kind === 'missing' && r.type_code === 'D10');
+          if (!missing) throw new Error('작성중 D10도, D10 문서 없음 줄도 없습니다.');
+          const made = await quietPostAs('periodic-documents', { type_code: 'D10', date: missing.work_date }, 3);
+          row = { document_id: made.document_id, version: made.version, work_date: made.work_date };
+        }
+        prepared.push({ lot_number: '-', document_id: row.document_id, status: `D10 ${row.work_date} 작성중` });
+        const skip = { func: 'batchSkip', staff: '3', docId: String(row.document_id), body: J({ items: [{ document_id: row.document_id, expected_version: row.version }], reason: '휴무' }) };
+        const query = `date=${seoulToday()}`;
+        return { ...skip,
+          script: async (exec) => {
+            await exec(skip);
+            await exec({ func: 'todo', query, staff: '3' });
+          } };
+      } }),
+    p10({ id: 'WF-PS-34', label: '상신 취소(받은 승인 1)', expect: '200 · WF-CAN 도식 일치(01~05, 안쪽 APR-CAN-00~03 · DOC-ULK-00~02) · approval_request in_progress→cancelled·closed_at, 승인 칸(staff 3) 그대로·대기 칸(staff 1) skipped, document submitted→completed·version+1 · 수불 신호 없음(DOC-SIG 없음)',
+      prepare: async () => {
+        const { d } = await fixtureDoc({ state: 'submitted_partial' });
+        const req = await latestRequest(d.document_id);
+        return { func: 'cancelSubmission', staff: '3', id: String(req.request_id), docId: String(d.document_id) };
+      } }),
+    p10({ id: 'WF-PS-35', label: '상신 취소 거절(다른 사용자 · 결재 완료)', expect: '1번째 403 NOT_REQUESTER → 2번째 409 REQUEST_CLOSED · 둘 다 APR-CAN-01 0행 → 01a 실패 사유 · 롤백으로 ④ 변화 없음',
+      prepare: async () => {
+        const open = (await fixtureDoc({ state: 'submitted' })).d;
+        const done = (await fixtureDoc({ state: 'approved' })).d;
+        const a = await latestRequest(open.document_id);
+        const b = await latestRequest(done.document_id);
+        const first = { func: 'cancelSubmission', staff: '2', id: String(a.request_id), docId: String(open.document_id) };
+        return { ...first,
+          script: async (exec) => {
+            await exec(first);
+            await exec({ func: 'cancelSubmission', staff: '3', id: String(b.request_id), docId: String(done.document_id) });
+          } };
+      } }),
+    p10({ id: 'WF-PS-36', label: '취소 뒤 재상신', expect: '1번째 200(WF-CAN) → 2번째 201(WF-SUB) · 새 회차 attempt+1 · 이전 회차 cancelled 그대로 · document completed→submitted',
+      prepare: async () => {
+        const { d } = await fixtureDoc({ state: 'submitted' });
+        const req = await latestRequest(d.document_id);
+        const cancel = { func: 'cancelSubmission', staff: '3', id: String(req.request_id), docId: String(d.document_id) };
+        return { ...cancel,
+          script: async (exec) => {
+            await exec(cancel);
+            await exec({ func: 'submit', staff: '3', id: String(d.document_id), body: J({ expected_version: d.version + 1, slots: FIX_SLOTS }) });
+          } };
+      } }),
+  );
+
   function preparedText(m) {
     if (m.document_id === null) return `새 LOT ${esc(m.lot_number)} · 문서 없음(작성 요구 안 부름)`;
     if (m.lot_number === '-') return `문서 #${esc(m.document_id)}(${esc(m.status)})`;
@@ -1419,7 +1588,7 @@
     $('#dcStaff').addEventListener('change', (e) => api.setStaff(e.target.value));
     $('#dcFunc').innerHTML = Object.entries(FUNCS).map(([k, f]) => `<option value="${k}">${esc(f.label)}</option>`).join('');
     const group = (unit, label) => `<optgroup label="${label}">${PRESETS.filter((p) => (p.unit || p.id.split('-')[0]) === unit).map((p) => `<option value="${p.id}">${p.id} ${esc(p.label)}</option>`).join('')}</optgroup>`;
-    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)') + group('FILE', '파일 업로드 (스프린트 3)') + group('P8', '점검표·작성 안 함 (P8)');
+    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)') + group('FILE', '파일 업로드 (스프린트 3)') + group('P8', '점검표·작성 안 함 (P8)') + group('P9', '주기형 작성 요구 (P9)') + group('P10', '문서함·결재함 (P10)');
     $('#dcFunc').addEventListener('change', () => { state.preset = null; toggleInputs(); });
     ['#dcId', '#dcQuery', '#dcBody', '#dcDocId'].forEach((sel) => $(sel).addEventListener('input', () => { if (state.preset && state.preset.script) state.preset = null; }));
     $('#dcLoadPreset').addEventListener('click', loadPreset);

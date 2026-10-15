@@ -1,13 +1,20 @@
 """작성 요구 조회 API (/api/v1/, s2-spec 2.2 REQ-A01·A02). 입출력만 담당한다."""
 
 from django.utils.dateparse import parse_date
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from apps.core.http import ApiError, error_response, json_response
+from apps.core.http import (
+    ApiError,
+    error_response,
+    json_response,
+    parse_json_body,
+    reject_unknown_keys,
+)
 from apps.core.trace import step
 from apps.staff.services import actor_from_header
 
-from . import errors, services
+from . import errors, periodic, services, todo
 
 
 def _api(view):
@@ -83,3 +90,57 @@ def periodic_bundles(request):
             )
         actor = actor_from_header(request.headers.get("X-Staff-Id"))
     return json_response(services.periodic_bundle(actor, request.GET.get("type_code") or "", day))
+
+
+# ---------------------------------------------------------------- P9 주기형 (p9-s2-spec 4.1)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@_api
+def periodic_runs(request):
+    """REQ-A05: 기간의 주기 문서 만들기 {date_from, date_to, type_codes?} (X-Staff-Id 필수).
+
+    실패 줄이 있어도 200(줄 result = failed). 입력·사용자·규칙 오류는 아무것도 만들지 않는다."""
+    with step("REQ-PRN-01", "API", "본문 형식·현재 사용자"):
+        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+        body = parse_json_body(request)
+        reject_unknown_keys(body, ("date_from", "date_to", "type_codes"))
+    return json_response(
+        periodic.run_periodic(
+            actor, body.get("date_from"), body.get("date_to"), body.get("type_codes")
+        )
+    )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@_api
+def periodic_documents(request):
+    """REQ-A06: 그날 주기 문서 찾거나 만들기 {type_code, date} (X-Staff-Id 필수, 미래·주말 허용)."""
+    with step("REQ-POD-01", "API", "본문 형식·현재 사용자"):
+        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+        body = parse_json_body(request)
+        reject_unknown_keys(body, ("type_code", "date"))
+    return json_response(
+        periodic.open_periodic_document(actor, body.get("type_code"), body.get("date"))
+    )
+
+
+@require_http_methods(["GET"])
+@_api
+def periodic_rules(request):
+    """REQ-A07: 주기 규칙 목록(F09)."""
+    return json_response(periodic.periodic_rules())
+
+
+# -------------------------------------------------------- P10 작성 필요 목록 (p10-s2-spec 2.1)
+
+
+@require_http_methods(["GET"])
+@_api
+def todo_list(request):
+    """REQ-A08: 작성 필요 목록 ?date=YYYY-MM-DD&mine=1 (X-Staff-Id 필수, date 없으면 오늘)."""
+    with step("REQ-TDO-01", "API", "현재 사용자"):
+        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+    return json_response(todo.todo_list(actor, request.GET.get("date"), request.GET.get("mine")))

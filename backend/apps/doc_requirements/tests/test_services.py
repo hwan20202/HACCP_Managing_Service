@@ -434,6 +434,10 @@ class BoundaryTests(TestCase):
         "apps.staff.services",
         "apps.core.",
         "django",
+        # P9 periodic.py(규칙 파일 읽기·날짜 계산): 표준 라이브러리는 계층과 무관(S4 G1)
+        "datetime",
+        "json",
+        "pathlib",
     )
 
     def _imports(self, path):
@@ -444,11 +448,20 @@ class BoundaryTests(TestCase):
             elif isinstance(node, ast.Import):
                 yield from (alias.name for alias in node.names)
 
+    def _allowed(self, module):
+        # 정확히 그 모듈이거나 하위 모듈("json"이 "jsonschema"를 통과시키지 않게, D-144 B)
+        own = "apps.doc_requirements"  # 하위 폴더(management/)에서 자기 패키지를 부를 때
+        return any(
+            module == a or module.startswith(a if a.endswith(".") else a + ".")
+            for a in (*self.allowed, own)
+        )
+
     def test_tc030(self):
-        sources = [p for p in self.root.glob("*.py")]
-        bad = [
-            (p.name, m) for p in sources for m in self._imports(p) if not m.startswith(self.allowed)
+        # 하위 폴더(management/commands)까지 본다. 테스트 폴더는 제외(D-144 B)
+        sources = [
+            p for p in self.root.rglob("*.py") if "tests" not in p.relative_to(self.root).parts
         ]
+        bad = [(p.name, m) for p in sources for m in self._imports(p) if not self._allowed(m)]
         self.assertEqual(bad, [])
         apps_dir = self.root.parent
         for other in ("documents", "approvals", "document_workflow", "staff"):

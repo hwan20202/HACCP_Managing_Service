@@ -288,5 +288,7 @@ class InvariantHelperTests(SimpleTestCase):
     def test_tc030_allowed_pairs(self):
         from apps.document_workflow.tests.base import ALLOWED_PAIRS
 
-        self.assertEqual(len(ALLOWED_PAIRS), 12)  # P4 재개·P6 정정 F0·F1·P8 skipped
+        # P4 재개·P6 정정 F0·F1·P8 skipped·P10 상신 취소 4
+        self.assertEqual(len(ALLOWED_PAIRS), 16)
         self.assertNotIn(("submitted", "rejected"), ALLOWED_PAIRS)
+        self.assertNotIn(("submitted", "cancelled"), ALLOWED_PAIRS)

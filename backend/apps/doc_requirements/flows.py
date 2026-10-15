@@ -32,6 +32,14 @@ FLOWS = {
     "REQ-BDL": [f"REQ-BDL-0{n}" for n in range(1, 8)],
     # P8 주 묶음 조회(document/p8-s2-spec.md 4.2 REQ-F06)
     "REQ-PWB": [f"REQ-PWB-0{n}" for n in range(1, 7)],
+    # P9 주기형 작성 요구(doc-requirements/p9-s2-spec.md 6장)
+    # 05는 만들 줄마다 반복(하나로 줄여 비교), 만들 줄이 없으면 PRN-NONE
+    "REQ-PRN": [f"REQ-PRN-0{n}" for n in range(1, 7)],
+    "REQ-PRN-NONE": ["REQ-PRN-01", "REQ-PRN-02", "REQ-PRN-03", "REQ-PRN-04", "REQ-PRN-06"],
+    "REQ-POD": [f"REQ-POD-0{n}" for n in range(1, 5)],
+    "REQ-PRL": ["REQ-PRL-01", "REQ-PRL-02"],
+    # P10 작성 필요 목록(document-workflow/p10-s2-spec.md 5장) — 04 안에 DOC N7(DOC-RQD)
+    "REQ-TDO": [f"REQ-TDO-0{n}" for n in range(1, 7)],
 }
 
 

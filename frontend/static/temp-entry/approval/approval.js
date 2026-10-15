@@ -16,6 +16,7 @@
     in_progress: { label: '결재 진행', badge: 'badge-info' },
     approved: { label: '결재 완료', badge: 'badge-success' },
     rejected: { label: '반려', badge: 'badge-danger' },
+    cancelled: { label: '취소됨', badge: 'badge-neutral' },  // P10 상신 취소(ERD v7 M12)
   };
   const SLOT = {
     pending: { label: '대기', badge: 'badge-neutral' },
@@ -40,7 +41,8 @@
   // P6 회차 꼬리표(계산 값 — 저장하지 않음, P6-S2-Q2)
   const effectiveChip = (req) => (req.effective ? ' <span class="badge te-chip-effective">유효 승인본</span>' : '');
   const supersededChip = (req) => (req.superseded_by ? ` <span class="badge te-chip-superseded">대체됨(${req.superseded_by}회차)</span>` : '');
-  const correctionChip = (isCorrection) => (isCorrection ? ' <span class="badge te-chip-fix">정정 상신</span>' : '');
+  // ISS-027 ②(P10): 정정 회차 꼬리표 "정정 상신" → "정정", 버튼·창 제목·결과 문구는 "재상신"
+  const correctionChip = (isCorrection) => (isCorrection ? ' <span class="badge te-chip-fix">정정</span>' : '');
   const reqChips = (req) => `${correctionChip(req.is_correction)}${effectiveChip(req)}${supersededChip(req)}`;
   // 정정 시작 기록 → 그 시점 직전 승인 회차 아래 ⤷ 줄(여러 번 정정하면 여러 줄)
   function correctionLines(items, corrections) {
@@ -64,7 +66,7 @@
         <tbody>${req.slots.map((s) => `
           <tr class="${String(s.approver_id) === api.staffId ? 'te-slot-mine' : ''}" data-slot="${s.slot_no}">
             <td>${s.slot_no}</td><td>${esc(s.label || '-')}</td><td>staff ${s.approver_id}</td>
-            <td>${badge(SLOT, s.state)}</td><td>${T.fmtDateTime(s.decided_at)}</td>
+            <td>${badge(SLOT, s.state)}${req.status === 'cancelled' && s.state !== 'rejected' ? ' <span class="badge te-badge-void" title="상신 취소로 무효">무효</span>' : ''}</td><td>${T.fmtDateTime(s.decided_at)}</td>
             <td>${s.comment ? esc(s.comment) : '<span class="te-hint">-</span>'}</td>
           </tr>`).join('')}</tbody>
       </table></div>`;
@@ -232,7 +234,7 @@
   }
   function successText(action, result, row, extra) {
     if (action === 'approve') return result.request_status === 'approved' ? '승인 → 문서 승인됨' : `승인 (남은 대기 ${result.pending_count}칸)`;
-    if (action === 'submit') return `${result.request.attempt}회차 상신${row && row.correcting ? ' (정정 상신)' : ''}`;
+    if (action === 'submit') return `${result.request.attempt}회차 ${result.request.attempt > 1 ? '재상신' : '상신'}${row && row.correcting ? ' (정정)' : ''}`;
     if (action === 'skip') return `작성 안 함 (v${result.version})`;
     return result.changed ? `점검자 ${staffText(extra.inspectorId)}로 지정 (v${result.version})` : `변화 없음 (이미 ${staffText(extra.inspectorId)})`;
   }
@@ -324,7 +326,7 @@
             <thead><tr><th>문서</th><th>LOT · 품목</th><th>판정(현재)</th><th>점검자</th><th>회차</th><th>내 칸</th><th>진행</th><th></th></tr></thead>
             <tbody>${targets.map((r) => `
               <tr data-target="${r.document_id}"><td>#${r.document_id}</td><td>${esc(r.lot || '-')}</td><td>${verdictHtml(r.verdict)}</td><td>${staffText(r.inspector_id)}</td>
-                <td>${esc(r.attempt ?? '-')}${r.correcting ? ' <span class="badge te-chip-fix">정정 상신</span>' : ''}</td>
+                <td>${esc(r.attempt ?? '-')}${r.correcting ? ' <span class="badge te-chip-fix">정정</span>' : ''}</td>
                 <td>${r.my_slot.slot_no}번${r.my_slot.label ? ` · ${esc(r.my_slot.label)}` : ''}</td>
                 <td>${r.progress ? `${r.progress.approved}/${r.progress.total}` : '-'}</td>
                 <td>${r.progress && r.progress.pending === 1 ? '<span class="te-last">→ 마지막 승인</span>' : ''}</td></tr>`).join('')
@@ -382,7 +384,7 @@
           <div class="te-table-wrap"><table class="data-table" id="bxTargets">
             <thead><tr><th>문서</th><th>LOT · 품목</th><th>버전</th><th></th></tr></thead>
             <tbody>${targets.map((r) => `<tr data-target="${r.document_id}"><td>#${r.document_id}</td><td>${esc(r.lot || '-')}</td><td>v${r.version}</td>
-              <td>${r.correcting ? '<span class="badge te-chip-fix">정정 상신</span>' : ''}</td></tr>`).join('')
+              <td>${r.correcting ? '<span class="badge te-chip-fix">정정</span>' : ''}</td></tr>`).join('')
               || '<tr><td colspan="4" class="te-hint">작성완료 문서가 없습니다.</td></tr>'}</tbody>
           </table></div>
           ${excludedHtml(excluded)}
@@ -446,10 +448,11 @@
       // P4: 상신은 작성완료(completed)에서만. 반려 뒤 수정·작성완료·작성 재개를 거치면 최신 회차는 rejected로 남는다.
       // P6: 정정 중·정정 작성완료의 최신 회차 = 유효 승인 회차 또는 반려된 정정 회차
       const fixing = !!d.correction;
+      // P10: 상신 취소 뒤에는 최신 회차가 cancelled(문서 작성완료 → 작성 재개·정정 중도 가능)
       const allowed = {
-        draft: [null, 'rejected'], completed: fixing ? ['approved', 'rejected'] : [null, 'rejected'],
+        draft: [null, 'rejected', 'cancelled'], completed: fixing ? ['approved', 'rejected', 'cancelled'] : [null, 'rejected', 'cancelled'],
         submitted: ['in_progress'], approved: ['approved'], rejected: ['rejected'],
-        correcting: ['approved', 'rejected'],
+        correcting: ['approved', 'rejected', 'cancelled'],
       }[d.status] || [];
       const effective = items.find((x) => x.effective) || null;
       const lines = correctionLines(items, d.corrections);
@@ -482,6 +485,11 @@
         }
         if (latest.status === 'in_progress') {
           body += `<div class="te-hint te-progress">진행 ${approvedCount(latest)}/${latest.slots.length} 승인</div>${myLine(latest)}`;
+          // P10 WF-SC-01: 이 회차 상신자에게만 [상신 취소](칸을 이미 받았어도 — P10-Q4 a)
+          if (api.staffId && String(latest.requested_by) === api.staffId) action = '<button class="btn btn-sm te-btn-outline-danger" id="apCancelSubmit">상신 취소</button>';
+        } else if (latest.status === 'cancelled') {
+          body += `<div class="te-status-note" id="apCancelledNote">상신을 취소했습니다 (${T.fmtDateTime(latest.closed_at)}). 받은 승인은 무효입니다. ${canSubmit ? '작성완료된 내용으로 재상신할 수 있습니다.' : '작성완료한 뒤 재상신하세요.'}</div>`;
+          if (canSubmit) action = `<button class="btn btn-primary btn-sm" id="apSubmit" ${disabled}>재상신</button>`;
         } else if (latest.status === 'approved') {
           body += `<div class="te-status-note te-ok-note">결재가 끝났습니다 (${T.fmtDateTime(latest.closed_at)})</div>${linesOf(latest)}`;
           if (fixing && canSubmit) action = `<button class="btn btn-primary btn-sm" id="apSubmit" ${disabled}>결재 상신</button>`;
@@ -507,9 +515,49 @@
           ${body}${history}
         </div>`;
       el.querySelector('#apSubmit')?.addEventListener('click', () => this.openSubmit(d, latest, reload));
+      el.querySelector('#apCancelSubmit')?.addEventListener('click', () => this.openCancel(d, latest, items, reload));
       el.querySelectorAll('[data-open-request]').forEach((b) => b.addEventListener('click', () =>
         this.showRequest(Number(b.dataset.openRequest), { from: 'doc', documentId: d.document_id })));
       if (latest && !mismatch) bindMyLine(el, latest, reload);
+    },
+
+    // ================================================= WF-SC-09 상신 취소 모달 (P10 — 사유 없음, S1a-Q9 a)
+    async openCancel(d, req, items, reload) {
+      const got = req.slots.filter((s) => s.state === 'approved');
+      const effective = req.is_correction ? (items || []).find((x) => x.effective) : null;
+      const lines = [
+        '결재 요청을 취소하고 문서를 작성완료로 되돌립니다.',
+        got.length ? `받은 승인 ${got.length}건(${got.map((s) => `staff ${esc(s.approver_id)}`).join(', ')})은 무효가 됩니다.` : '',
+        '회차는 "취소됨"으로 남고, 다시 상신하면 새 회차가 됩니다.',
+        req.is_correction ? `정정 재상신이면 정정 진행 상태${effective ? `(유효 승인본 ${effective.attempt}회차)` : ''}는 그대로입니다.` : '',
+      ].filter(Boolean);
+      const m = formModal({ title: `상신 취소 · 문서 #${d.document_id} ${req.attempt}회차` });
+      m.wrap.querySelector('.te-modal').id = 'teCancelModal';
+      m.body.innerHTML = `<div id="cxError"></div><ul class="te-cancel-lines" id="cxLines">${lines.map((x) => `<li>${x}</li>`).join('')}</ul>`;
+      m.footer.innerHTML = '<button class="btn btn-secondary" id="cxClose">닫기</button><button class="btn btn-danger" id="cxGo">상신 취소</button>';
+      m.footer.querySelector('#cxClose').addEventListener('click', () => m.close());
+      const go = m.footer.querySelector('#cxGo');
+      go.addEventListener('click', async () => {
+        go.disabled = true;
+        const r = await api.post(`approval-requests/${req.request_id}/cancel`, {});
+        if (r.ok) {
+          m.close();
+          T.toast('상신을 취소했습니다. 문서는 작성완료 상태입니다.', 'success');
+          reload();
+          return;
+        }
+        const code = r.data && r.data.code;
+        const text = {
+          REQUEST_CLOSED: '결재가 이미 끝났습니다.',
+          NOT_REQUESTER: '상신한 사람만 취소할 수 있습니다.',
+          INVALID_TRANSITION: '문서 상태가 바뀌었습니다. 새로 고치세요.',
+          REQUEST_NOT_FOUND: '결재 요청을 찾을 수 없습니다.',
+        }[code] || T.errorText(r);
+        const reopen = code === 'REQUEST_CLOSED' || code === 'INVALID_TRANSITION';
+        m.body.querySelector('#cxError').innerHTML = `<div class="te-error-box">${esc(text)}${reopen ? ' <button class="btn btn-secondary btn-sm" id="cxReload">다시 열기</button>' : ''}</div>`;
+        m.body.querySelector('#cxReload')?.addEventListener('click', () => { m.close(); reload(); });
+        go.disabled = code === 'NOT_REQUESTER' || reopen;  // 다시 눌러도 같은 결과
+      });
     },
 
     // ================================================= WF-SC-02 상신 모달 (결재선 지정)
@@ -678,7 +726,7 @@
       const tab = (box, label) => `<button class="btn btn-sm ${f.box === box ? 'btn-primary' : 'btn-secondary'}" data-box="${box}">${label}</button>`;
       this.root.innerHTML = `
         <div class="fade-in" id="teInbox">
-          ${T.topBar('결재함', '결재 워크플로우(P3) 사용 화면 — 내 결재 대기·처리 완료')}
+          ${T.topBar('결재함', '내 결재 대기 · 처리 완료', null, { temp: false })}
           <div class="card">
             <div class="te-tabs">${tab('pending', `대기${f.pendingTotal !== null ? ` (${f.pendingTotal})` : ''}`)} ${tab('done', '처리 완료')}
               ${f.box === 'pending' ? '<span style="flex:1"></span><button class="btn btn-secondary btn-sm" id="iBatch" disabled>선택 승인 (0)</button>' : ''}</div>
@@ -915,7 +963,7 @@
     },
   };
 
-  T.register('temp-approval', Approval);
+  T.register('approval-box', Approval);  // 예전 temp-approval도 이 화면(TempEntry.PAGE_ALIAS)
   Approval.batch = Batch;
   window.TempEntryApproval = Approval;
 })();

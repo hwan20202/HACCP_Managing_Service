@@ -9,6 +9,7 @@
 //       API: s2-spec.md 4장, p4-s2-spec.md, p6-s2-spec.md
 // 스프린트 3: 파일 영역 DOC-SC-07·08(p4-s1-screens, API A11~A14 — document-files/s4-basis.md)
 //           P8 점검표 D10·D12·D11(p8-s1-screens): 점검표 섹션·[매일 항목 모두 O]·작성 안 함(SC-13)·되돌리기·주 묶음 줄·주 묶음 상세
+//           P9(C4 S5): DOC-SC-02 주기 양식 칸 · DOC-SC-14 주기 문서 날짜 선택(doc-requirements/p9-s1-screens.md 5·6장, REQ-A06·A07)
 // =============================================
 (function () {
   const T = window.TempEntry;
@@ -45,6 +46,21 @@
     d.setDate(d.getDate() + offset);
     const p = (n) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+
+  // P9 (DOC-SC-02·14): 오늘(Asia/Seoul), 규칙 설명, A06 오류 문구
+  const seoulDay = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
+  function periodicRuleText(rule) {
+    const same = (a) => a.length === rule.weekdays.length && a.every((n, i) => n === rule.weekdays[i]);
+    const span = same([1, 2, 3, 4, 5]) ? '월~금' : rule.weekdays.map((n) => WEEKDAY[n % 7]).join('·');
+    return rule.cadence === 'weekly' ? '매주 (그 주 월요일)' : `${span} 매일`;
+  }
+  function periodicOpenError(r) {
+    const code = r.data && r.data.code;
+    if (code === 'TEMPLATE_INACTIVE' || code === 'TEMPLATE_NOT_FOUND') return '이 양식의 사용 중인 버전이 없습니다. 관리자에게 알리세요.';
+    if (code === 'NOT_PERIODIC') return '주기 양식이 아닙니다. (규칙 파일이 바뀐 경우 — 화면을 새로 고치세요)';
+    if (code === 'VALIDATION_ERROR') return '날짜를 고르세요.';
+    return T.errorText(r);
   }
 
   // ---------------------------------------------------------------- 판정 계산 (서버 validation.evaluate와 같은 규칙)
@@ -180,8 +196,17 @@
   }
   const requirementChip = (d) => (d.requirement ? `<span class="badge te-chip-req">${REQUIREMENT[d.requirement]} 작성 요구</span>` : '');
 
+  // P10 문서함 탭(p10-s1-screens 3장): 마지막으로 연 탭을 이 브라우저에 기억(실패해도 기본 탭 — 화면 설정일 뿐)
+  const TAB_KEY = 'te-docbox-tab';
+  const readTab = () => { try { return localStorage.getItem(TAB_KEY); } catch (e) { return null; } };
+  const saveTab = (tab) => { try { localStorage.setItem(TAB_KEY, tab); } catch (e) { /* 기억 못 해도 됨 */ } };
+  const TODO_STATUS_NOTE = { missing: '<span class="badge te-badge-missing">문서 없음</span>' };
+  const GROUP_EMPTY = { adhoc: '해당 양식 없음 (비정기 기구 점검·품질 점검 문서가 들어올 자리)' };
+
   const Doc = {
-    title: '문서 작성',
+    title: '문서함',
+    tab: null,
+    todoState: { date: '', mine: false },
     root: null,
     templates: null,
     filters: { from: today(-6), to: today(0), template_id: '', status: '', target: '', mine: false, assigned: false, correcting: false, page: 1 },
@@ -210,8 +235,11 @@
     },
 
     // ================================================= DOC-SC-01 목록
-    async showList() {
+    async showList(tab) {
       this.detailBack = null;
+      this.tab = tab || this.tab || (readTab() === 'all' ? 'all' : 'todo');
+      saveTab(this.tab);
+      if (this.tab === 'todo') { this.showTodo(); return; }
       const f = this.filters;
       const templates = await this.loadTemplates();
       const statusOptions = ['', 'draft', 'completed', 'submitted', 'approved', 'rejected', 'correcting', 'skipped']
@@ -223,7 +251,7 @@
       const d03 = templates.find((t) => t.type_code === 'D03');
       this.root.innerHTML = `
         <div class="fade-in" id="teDocList">
-          ${T.topBar('문서 작성', '문서 도메인 사용 화면 — 작성·조회·수정·삭제, 작성완료(P4)')}
+          ${this.boxHead()}
           <div class="card">
             <div class="te-filters">
               <div class="form-group"><label class="form-label">작업일 시작</label><input type="date" class="form-control" id="fFrom" value="${f.from}"></div>
@@ -236,13 +264,12 @@
               <label class="te-check" title="정정 중 + 정정 꼬리표가 붙은 작성완료·결재중"><input type="checkbox" id="fCorrecting" ${f.correcting ? 'checked' : ''}> 정정 진행 중 전체</label>
               <button class="btn btn-secondary" id="fSearch">조회</button>
               ${d03 ? '<button class="btn btn-secondary" id="fD03Today" title="오늘 입고된 LOT의 육안검사 묶음 상세">육안검사 오늘</button>' : ''}
-              <span style="flex:1"></span>
-              <button class="btn btn-primary" id="btnNew">+ 새 문서</button>
             </div>
             <div class="te-table-wrap" id="teListBody">${this.skeleton()}</div>
           </div>
         </div>`;
       this.rerenderTopBar(() => this.showList());
+      this.bindBoxHead();
       const $ = (id) => this.root.querySelector(id);
       const search = () => {
         Object.assign(f, {
@@ -257,8 +284,150 @@
         $('#fD03Today').addEventListener('click', () => this.showBundle(today(0), { page: 'list' }));
       }
       $('#fTarget').addEventListener('keydown', (e) => { if (e.key === 'Enter') search(); });
-      $('#btnNew').addEventListener('click', () => this.showPicker());
       this.loadList();
+    },
+
+    // ================================================= DOC-SC-01 문서함 머리(P10): 탭 + [새 문서]
+    boxHead() {
+      const tab = (key, label) => `<button class="btn btn-sm ${this.tab === key ? 'btn-primary' : 'btn-secondary'}" data-tab="${key}">${label}</button>`;
+      return `
+        ${T.topBar('문서함', '작성 필요 · 전체 문서 — 문서 작성·조회·결재', null, { temp: false })}
+        <div class="te-tabs te-box-tabs" id="teBoxTabs">
+          ${tab('todo', '작성 필요 <span id="teTodoCount"></span>')} ${tab('all', '전체 문서')}
+          <span style="flex:1"></span>
+          <button class="btn btn-primary btn-sm" id="btnNew">+ 새 문서</button>
+        </div>`;
+    },
+    bindBoxHead() {
+      this.root.querySelectorAll('#teBoxTabs [data-tab]').forEach((b) => b.addEventListener('click', () => this.showList(b.dataset.tab)));
+      this.root.querySelector('#btnNew').addEventListener('click', () => this.showPicker());
+    },
+
+    // ================================================= DOC-SC-15 작성 필요 탭(P10, REQ-A08)
+    showTodo() {
+      const s = this.todoState;
+      if (!s.date) s.date = seoulDay();
+      this.root.innerHTML = `
+        <div class="fade-in" id="teTodoTab">
+          ${this.boxHead()}
+          <div class="card">
+            <div class="te-filters te-todo-bar">
+              <div class="form-group"><label class="form-label">기준일</label><input type="date" class="form-control" id="tdDate" value="${s.date}" max="${seoulDay()}"></div>
+              <span class="te-hint" id="tdDow">(${dow(s.date)})</span>
+              <label class="te-check" title="내가 점검자·담당자인 문서만(작성자는 보지 않음). 문서 없음 줄은 빠짐"><input type="checkbox" id="tdMine" ${s.mine ? 'checked' : ''}> 내 담당만</label>
+              <span style="flex:1"></span>
+              <span class="te-hint" id="tdSummary"></span>
+              <span id="tdOlderSlot"></span>
+            </div>
+            <div id="teTodoBody">${this.skeleton()}</div>
+          </div>
+        </div>`;
+      this.rerenderTopBar(() => this.showTodo());
+      this.bindBoxHead();
+      const $ = (sel) => this.root.querySelector(sel);
+      $('#tdDate').addEventListener('change', () => { if ($('#tdDate').value) { s.date = $('#tdDate').value; this.showTodo(); } });
+      $('#tdMine').addEventListener('change', () => { s.mine = $('#tdMine').checked; this.loadTodo(); });
+      this.loadTodo();
+    },
+
+    todoRow(r) {
+      const day = r.week_start ? `${mmdd(r.week_start)} 주` : `${mmdd(r.work_date)} (${dow(r.work_date)})`;
+      const tags = (r.tags || []).map((t) => ` <span class="badge te-chip-tag">${esc(t)}</span>`).join('');
+      let target = esc(r.target_summary || '-');
+      if (r.requirement === 'periodic') target = '<span class="te-req">⚙ 주기</span>';
+      if (r.bundle) target = `입고 ${mmdd(r.bundle.received_date)} <span class="te-hint">(D03 ${r.bundle.count}건)</span>`;
+      const who = r.inspector_id || r.assignee_id;
+      let button = `<button class="btn btn-secondary btn-sm" data-open="${r.document_id}">열기</button>`;
+      if (r.kind === 'missing') button = `<button class="btn btn-primary btn-sm" data-make="${esc(r.type_code)}" data-day="${r.work_date}" ${api.staffId ? '' : 'disabled'}>만들기</button>`;
+      else if (r.bundle) button = `<button class="btn btn-secondary btn-sm" data-bundle-day="${r.bundle.received_date}">열기</button>`;
+      return `
+        <tr data-todo-kind="${r.kind}" data-type="${esc(r.type_code)}" data-day="${r.work_date}">
+          <td>${day}</td>
+          <td>${esc(r.type_code)} ${esc(r.template_name || '')}${tags}</td>
+          <td>${target}</td>
+          <td>${r.kind === 'missing' ? TODO_STATUS_NOTE.missing : T.statusBadge(r.status)}</td>
+          <td>${who ? `staff ${esc(who)}` : '<span class="te-hint">–</span>'}</td>
+          <td>${button}</td>
+        </tr>`;
+    },
+
+    todoTable(rows) {
+      return `<table class="data-table te-todo-table"><tbody>${rows.map((r) => this.todoRow(r)).join('')}</tbody></table>`;
+    },
+
+    async loadTodo() {
+      const s = this.todoState;
+      const body = this.root.querySelector('#teTodoBody');
+      if (!api.staffId) { body.innerHTML = '<div class="te-empty">현재 사용자를 선택하세요. 작성 필요 목록은 현재 사용자로 조회합니다.</div>'; return; }
+      body.innerHTML = this.skeleton();
+      const q = new URLSearchParams({ date: s.date });
+      if (s.mine) q.set('mine', '1');
+      const r = await api.get(`todo?${q}`);
+      if (!this.root.querySelector('#teTodoBody')) return;  // 그사이 다른 화면
+      if (!r.ok) {
+        body.innerHTML = `<div class="te-empty">${esc(T.errorText(r))}</div>`;
+        return;
+      }
+      const data = r.data;
+      const counts = data.counts;
+      const total = Object.values(counts).reduce((a, b) => a + b, 0);
+      const countEl = this.root.querySelector('#teTodoCount');
+      if (countEl) countEl.textContent = String(total);
+      this.root.querySelector('#tdSummary').textContent = data.groups.map((g) => `${g.label} ${g.count}`).join(' · ');
+      const parts = [];
+      if ((data.warnings || []).includes('RULES_INVALID')) {
+        parts.push('<div class="te-status-note" id="tdRulesInvalid">주기 규칙 파일 오류로 "문서 없음"을 계산하지 못했습니다. 나머지 줄은 그대로 보입니다.</div>');
+      }
+      if (!total && !data.awaiting_submit.count && !data.older.count) {
+        parts.push('<div class="te-empty" id="tdEmpty">작성할 문서가 없습니다.</div>');
+      }
+      data.groups.forEach((g) => {
+        const empty = !g.count ? `<div class="te-hint te-todo-empty">${!g.has_forms ? (GROUP_EMPTY[g.key] || '해당 양식 없음') : '할 일 없음'}</div>` : '';
+        const past = g.past.count ? `
+          <details class="te-todo-past" data-past="${g.key}"><summary>지난 미완료 ${g.past.count}건 (${mmdd(g.past.from)} ~ ${mmdd(g.past.to)})</summary>
+            ${this.todoTable(g.past.rows)}</details>` : '';
+        parts.push(`
+          <div class="te-todo-group" data-group="${g.key}">
+            <div class="te-section-title">── ${esc(g.label)} (${g.count}) ──</div>
+            ${g.rows.length ? this.todoTable(g.rows) : ''}${empty}${past}
+          </div>`);
+      });
+      if (data.awaiting_submit.count) {
+        parts.push(`
+          <div class="te-todo-group" data-group="awaiting">
+            <div class="te-section-title">── 상신 대기 (${data.awaiting_submit.count}) ── <span class="te-hint">작성완료했지만 상신 안 함(상신 취소 포함) · 배지에는 안 셈</span></div>
+            ${this.todoTable(data.awaiting_submit.rows)}
+          </div>`);
+      }
+      // ISS-037(C5 S6 r2): 30일 넘은 미완료 링크는 위쪽 요약 줄 옆(맨 아래에서는 찾기 어려움)
+      const slot = this.root.querySelector('#tdOlderSlot');
+      slot.innerHTML = data.older.count ? `<a href="#" id="tdOlder" class="te-todo-older">30일 넘은 미완료 ${data.older.count}건 → 전체 문서</a>` : '';
+      body.innerHTML = parts.join('');
+      body.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => this.showDetail(Number(b.dataset.open))));
+      body.querySelectorAll('[data-bundle-day]').forEach((b) => b.addEventListener('click', () => this.showBundle(b.dataset.bundleDay, { page: 'list' })));
+      body.querySelectorAll('[data-make]').forEach((b) => b.addEventListener('click', () => this.makeMissing(b, b.dataset.make, b.dataset.day)));
+      slot.querySelector('#tdOlder')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        // 전체 문서 탭: 그 전 1년 · 상태는 전체(작성중·반려·정정 중을 한 번에 고르는 필터가 없음)
+        Object.assign(this.filters, { from: shiftDay(data.older.before, -365), to: shiftDay(data.older.before, -1), template_id: '', status: '', target: '', mine: false, assigned: false, correcting: false, page: 1 });
+        this.showList('all');
+      });
+    },
+
+    // [만들기](P10 S1-Q3): 문서 없음 줄 → P9 A06 → 새로 만들었으면 작성 폼, 이미 있으면 토스트 + 상세
+    async makeMissing(btn, typeCode, day) {
+      btn.disabled = true;
+      const r = await api.post('periodic-documents', { type_code: typeCode, date: day });
+      if (!r.ok) { btn.disabled = false; T.toast(periodicOpenError(r), 'error'); return; }
+      const id = r.data.document_id;
+      if (r.data.result === 'existing') {
+        T.toast(`${r.data.work_date.slice(5)} 문서가 이미 있습니다(#${id} ${T.STATUS[r.data.status]?.label || r.data.status}).`, 'info');
+        this.showDetail(id);
+        return;
+      }
+      const d = await api.get(`documents/${id}`);
+      if (!d.ok) { T.toast(T.errorText(d), 'error'); this.showDetail(id); return; }
+      this.openForm({ document: d.data });
     },
 
     skeleton() {
@@ -423,6 +592,7 @@
       const approval = (x) => {
         if (x.status === 'approved') return '완료';
         if (x.status === 'submitted' && x.progress) return `승인 ${x.progress.approved}/${x.progress.total}${x.my_slot ? ' · <b class="te-my-turn">▸ 내 차례</b>' : ''}`;
+        if (x.progress && x.progress.status === 'cancelled') return '<span class="te-hint te-cancelled">취소됨</span>';  // P10: 최신 회차 상신 취소
         if (x.status === 'rejected') return '<span class="te-hint">반려</span>';
         return '<span class="te-hint">–</span>';
       };
@@ -550,6 +720,7 @@
       const approval = (x) => {
         if (x.status === 'approved') return '완료';
         if (x.status === 'submitted' && x.progress) return `승인 ${x.progress.approved}/${x.progress.total}${x.my_slot ? ' · <b class="te-my-turn">▸ 내 차례</b>' : ''}`;
+        if (x.progress && x.progress.status === 'cancelled') return '<span class="te-hint te-cancelled">취소됨</span>';  // P10: 최신 회차 상신 취소
         if (x.status === 'rejected') return '<span class="te-hint">반려</span>';
         return '<span class="te-hint">–</span>';
       };
@@ -707,11 +878,14 @@
 
     // ================================================= DOC-SC-02 양식 선택
     async showPicker() {
-      // 작성 요구 양식은 작성 요구로만 생긴다(P4-S1-Q1)
-      const templates = (await this.loadTemplates()).filter((t) => !t.requirement_only);
+      // 작성 요구 양식은 작성 요구로만 생긴다(P4-S1-Q1). 단 주기 양식은 날짜를 골라 직접 만들 수 있다(P9 D-113 — 규칙 파일 양식, 꺼진 규칙도)
+      const [all, rulesRes] = await Promise.all([this.loadTemplates(), api.get('periodic-rules')]);
+      const templates = all.filter((t) => !t.requirement_only);
+      const rules = rulesRes.ok ? rulesRes.data.rules : [];
       this.root.innerHTML = `
         <div class="fade-in">
           ${T.topBar('새 문서 › 양식 선택', '활성 양식 중 유형별 최신 버전만 표시됩니다.')}
+          <h3 class="te-sub">일반 양식</h3>
           ${templates.length ? `<div class="te-cards">${templates.map((t) => `
             <div class="card">
               <div class="card-title">${esc(t.name)}</div>
@@ -720,6 +894,14 @@
               <div class="te-actions"><button class="btn btn-primary btn-sm" data-template="${t.template_id}">선택</button></div>
             </div>`).join('')}</div>`
           : '<div class="te-empty">사용 가능한 양식이 없습니다 (개발용 시드 데이터를 넣으세요).</div>'}
+          <h3 class="te-sub">주기 양식 (날짜마다 1건)</h3>
+          ${rules.length ? `<div class="te-table-wrap"><table class="data-table" id="tePeriodicPick">
+            <tbody>${rules.map((x) => `<tr data-periodic-row="${esc(x.type_code)}">
+              <td class="mono">${esc(x.type_code)}</td><td>${esc(x.name || '(사용 중인 양식 없음)')}</td>
+              <td class="te-hint">${esc(periodicRuleText(x))}${x.enabled ? '' : ' · 자동 생성 꺼짐'}</td>
+              <td><button class="btn btn-primary btn-sm" data-periodic="${esc(x.type_code)}" data-name="${esc(x.name || x.type_code)}" data-cadence="${esc(x.cadence)}">선택</button></td>
+            </tr>`).join('')}</tbody></table></div>`
+          : `<div class="te-empty" id="tePeriodicNone">${rulesRes.ok ? '주기 양식이 없습니다.' : esc(T.errorText(rulesRes))}</div>`}
           <p class="te-hint" id="teReqNote" style="margin-top:1rem">시험성적서·원산지·육안검사·CCP 일지는 입고·생산 시작 때 자동으로 만들어집니다.</p>
           <div class="te-actions"><button class="btn btn-secondary" id="btnCancel">취소</button></div>
         </div>`;
@@ -727,6 +909,61 @@
       this.root.querySelector('#btnCancel').addEventListener('click', () => this.showList());
       this.root.querySelectorAll('button[data-template]').forEach((b) =>
         b.addEventListener('click', () => this.openForm({ templateId: Number(b.dataset.template) })));
+      this.root.querySelectorAll('button[data-periodic]').forEach((b) =>
+        b.addEventListener('click', () => this.openPeriodicDate({ type_code: b.dataset.periodic, name: b.dataset.name, cadence: b.dataset.cadence })));
+    },
+
+    // ================================================= DOC-SC-14 주기 문서 날짜 선택 (P9, REQ-A06)
+    // 미래·주말도 됨(특근일). 그날(D11은 그 주) 문서가 있으면 그 문서를, 없으면 만들어 작성 폼으로
+    openPeriodicDate(rule) {
+      const wrap = document.createElement('div');
+      wrap.className = 'te-modal-wrap';
+      wrap.innerHTML = `
+        <div class="te-modal" role="dialog" aria-modal="true" id="tePeriodicDate">
+          <div class="modal-header"><div class="modal-title">새 문서 › ${esc(rule.type_code)} ${esc(rule.name)}</div></div>
+          <div class="te-modal-body">
+            <label class="form-label">날짜</label>
+            <div class="te-prd-day"><input type="date" class="form-control" id="pdDay" value="${seoulDay()}"> <span id="pdDow"></span></div>
+            <p class="te-hint">날짜마다 문서가 1건입니다. 그날 문서가 이미 있으면 그 문서를 엽니다.</p>
+            <p class="te-hint">작성하지 않는 날은 [작성 안 함]을 쓰세요. 날짜를 잘못 골랐으면 작성중·상신 전에 [삭제]할 수 있습니다.</p>
+            <div class="te-error-text" id="pdError"></div>
+          </div>
+          <div class="te-modal-footer"><button class="btn btn-secondary" id="pdCancel">취소</button><button class="btn btn-primary" id="pdOpen">열기</button></div>
+        </div>`;
+      document.body.appendChild(wrap);
+      const $ = (sel) => wrap.querySelector(sel);
+      const close = () => wrap.remove();
+      const showDow = () => {
+        const day = $('#pdDay').value;
+        if (!day) { $('#pdDow').textContent = ''; return; }
+        const monday = shiftDay(day, -((new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7));
+        $('#pdDow').textContent = rule.cadence === 'weekly' ? `(${dow(day)}) → ${monday.slice(5)}(월) 주 문서` : `(${dow(day)})`;
+      };
+      showDow();
+      $('#pdDay').addEventListener('input', () => { $('#pdError').textContent = ''; showDow(); });
+      wrap.addEventListener('click', (e) => { if (e.target === wrap) close(); });
+      $('#pdCancel').addEventListener('click', close);
+      $('#pdOpen').addEventListener('click', async () => {
+        const day = $('#pdDay').value;
+        if (!day) { $('#pdError').textContent = '날짜를 고르세요.'; return; }
+        const btn = $('#pdOpen');
+        btn.disabled = true;  // 실행 중 두 번 누름 막기
+        try {
+          const r = await api.post('periodic-documents', { type_code: rule.type_code, date: day });
+          if (!r.ok) { $('#pdError').textContent = periodicOpenError(r); return; }
+          close();
+          const id = r.data.document_id;
+          if (r.data.result === 'existing') {
+            T.toast(`${r.data.work_date.slice(5)} 문서가 이미 있습니다(#${id} ${T.STATUS[r.data.status]?.label || r.data.status}).`, 'info');
+            this.showDetail(id);
+            return;
+          }
+          const d = await api.get(`documents/${id}`);
+          if (!d.ok) { T.toast(T.errorText(d), 'error'); this.showDetail(id); return; }
+          this.openForm({ document: d.data });
+        } finally { btn.disabled = false; }
+      });
+      $('#pdDay').focus();
     },
 
     // ================================================= DOC-SC-03 작성/수정 폼
@@ -1299,7 +1536,8 @@
       const canReopen = d.status === 'completed';
       const fixing = d.correction || null; // 정정 진행 중(정정 중·작성완료·결재중)
       const canCorrect = d.status === 'approved' && !fixing;
-      const canDelete = d.status === 'draft' && !d.submitted_at && !d.record_key && !fixing; // 정정 중 숨김
+      // 작성 요구 문서는 삭제 불가(C-3) — 주기 문서는 예외(C4 S6, D-149 — ISS-028)
+      const canDelete = d.status === 'draft' && !d.submitted_at && (!d.record_key || d.requirement === 'periodic') && !fixing; // 정정 중 숨김
       // P8: 작성 안 함 = 작성중 + 주기 작성 요구 문서(skippable 양식 + record_key), 되돌리기 = 작성 안 함일 때(p8-s1 6장)
       const canSkip = d.status === 'draft' && d.skippable && !!d.record_key;
       const skipped = d.status === 'skipped';
@@ -1320,7 +1558,7 @@
       if (d.status === 'approved') notes.approved = '승인된 문서는 수정할 수 없습니다. 고쳐야 하면 [정정 시작]을 누르세요.';
       if (d.status === 'draft' && d.submitted_at) notes.draft = '상신 이력이 있어 삭제할 수 없습니다.';
       if (d.status === 'draft' && d.record_key) notes.draft = '작성 요구로 만들어진 문서입니다. 삭제할 수 없습니다.';
-      if (canSkip) notes.draft = '주기 작성 요구 문서입니다. 삭제할 수 없고, 휴무 등 작성하지 않는 날은 [작성 안 함]을 누르세요.';
+      if (canSkip) notes.draft = '주기 작성 요구 문서입니다. 휴무 등 작성하지 않는 날은 [작성 안 함]을 누르세요. 날짜를 잘못 골라 만들었으면 [삭제] — 규칙상 만드는 평일은 다음 주기 생성 때 다시 만들어집니다.';
       if (skipped) notes.skipped = `작성 안 함: <b>${esc(d.skip.reason)}</b> — staff ${esc(d.skip.by)}, ${T.fmtDateTime(d.skip.at)}. 다시 작성하려면 [되돌리기](입력했던 값은 그대로).`;
       const counts = checkCounts(schema, d);
       const info = d.sections.find((s) => s.section_def === 'info');
@@ -1352,7 +1590,7 @@
             </div>
             <div class="te-meta" style="margin-top:.25rem">
               <span>작성 ${T.fmtDateTime(d.created_at)}</span><span>최종 수정 ${T.fmtDateTime(d.updated_at)}</span>
-              ${d.completed_at ? `<span id="teCompleted">작성완료 ${T.fmtDateTime(d.completed_at)} (staff ${d.completed_by})</span>` : ''}
+              ${d.completed_at && d.status !== 'rejected' ? `<span id="teCompleted">작성완료 ${T.fmtDateTime(d.completed_at)} (staff ${d.completed_by})</span>` : ''}
               ${d.submitted_at ? `<span>상신 ${T.fmtDateTime(d.submitted_at)}</span>` : ''}<span class="te-hint">v${d.version}</span>
             </div>
             ${WEEK_TYPES.includes(d.template.type_code) ? '<div class="te-meta" id="teWeekStrip"></div>' : ''}
@@ -1740,6 +1978,12 @@
     async confirmComplete(d, schema) {
       let r;
       if (d.template.type_code === 'D03') {
+        // ISS-027 ①(P10): 부적합 행이 있는데 개선조치가 없으면 확인 창 없이 서버와 같은 문구로 먼저 막는다
+        const nonconforming = schema.sections.some((s) => d.sections.some((x) => x.section_def === s.key && isNonconforming(s, x.values)));
+        if (nonconforming && !(d.deviations || []).length) {
+          await this.showIncomplete(d, schema, [{ path: 'deviations', code: 'deviation_required', message: '부적합 항목이 있어 이탈·개선조치를 1건 이상 적으세요.' }]);
+          return;
+        }
         r = await this.completeD03(d, schema);
         if (!r) return; // 취소
       } else {
@@ -1750,24 +1994,7 @@
       if (r.ok) { T.toast(d.template.type_code === 'D03' ? '작성완료 · 판정 전달' : '작성완료했습니다.', 'success'); this.showDetail(d.document_id); return; }
       const data = r.data || {};
       if (data.code === 'COMPLETION_INCOMPLETE') {
-        const details = data.details || [];
-        const items = details.map((e) => `<li>${esc(this.problemText(e, schema, d.sections))}</li>`).join('');
-        // 이동할 곳: 폼 항목(값·행) → 작성 폼, 개선조치만 → 상세의 개선조치 영역, 파일만 → 상세의 증빙 파일 영역
-        const formProblems = details.filter((e) => e.path !== 'deviations' && e.path !== 'files');
-        const devProblem = details.some((e) => e.path === 'deviations');
-        const fileProblem = details.some((e) => e.path === 'files');
-        const buttons = [{ label: '닫기', value: false }];
-        if (formProblems.length && EDITABLE.includes(d.status)) buttons.push({ label: '수정하러 가기', value: 'form', cls: 'btn-primary' });
-        else if (devProblem) buttons.push({ label: '개선조치 입력하러 가기', value: 'deviation', cls: 'btn-primary' });
-        else if (fileProblem) buttons.push({ label: '파일 올리러 가기', value: 'files', cls: 'btn-primary' });
-        const go = await T.modal({
-          title: '작성완료할 수 없습니다',
-          body: `<p>아래 항목을 먼저 채워 주세요.</p><ul class="te-pending" id="teCompleteProblems">${items}</ul>`,
-          buttons,
-        });
-        if (go === 'form') this.openForm({ document: d, problems: details });
-        else if (go === 'deviation') this.goToDeviation(d, schema);
-        else if (go === 'files') this.root.querySelector('#teFileArea')?.scrollIntoView({ block: 'center' });
+        await this.showIncomplete(d, schema, data.details || []);
         return;
       }
       if (data.code === 'VERSION_CONFLICT') {
@@ -1777,6 +2004,27 @@
       }
       T.toast(T.errorText(r), 'error');
       this.showDetail(d.document_id);
+    },
+
+    // 작성완료할 수 없음(서버 COMPLETION_INCOMPLETE, 또는 ISS-027 ① 화면 먼저 검사): 채울 항목 + 이동 버튼
+    async showIncomplete(d, schema, details) {
+      const items = details.map((e) => `<li>${esc(this.problemText(e, schema, d.sections))}</li>`).join('');
+      // 이동할 곳: 폼 항목(값·행) → 작성 폼, 개선조치만 → 상세의 개선조치 영역, 파일만 → 상세의 증빙 파일 영역
+      const formProblems = details.filter((e) => e.path !== 'deviations' && e.path !== 'files');
+      const devProblem = details.some((e) => e.path === 'deviations');
+      const fileProblem = details.some((e) => e.path === 'files');
+      const buttons = [{ label: '닫기', value: false }];
+      if (formProblems.length && EDITABLE.includes(d.status)) buttons.push({ label: '수정하러 가기', value: 'form', cls: 'btn-primary' });
+      else if (devProblem) buttons.push({ label: '개선조치 입력하러 가기', value: 'deviation', cls: 'btn-primary' });
+      else if (fileProblem) buttons.push({ label: '파일 올리러 가기', value: 'files', cls: 'btn-primary' });
+      const go = await T.modal({
+        title: '작성완료할 수 없습니다',
+        body: `<p>아래 항목을 먼저 채워 주세요.</p><ul class="te-pending" id="teCompleteProblems">${items}</ul>`,
+        buttons,
+      });
+      if (go === 'form') this.openForm({ document: d, problems: details });
+      else if (go === 'deviation') this.goToDeviation(d, schema);
+      else if (go === 'files') this.root.querySelector('#teFileArea')?.scrollIntoView({ block: 'center' });
     },
 
     // DOC-SC-09 (D03, P6 + P6a 3.2): LOT 1건의 판정 + 판정 변경 사유(note, 저장하지 않음 — 수불에 전달만).
@@ -1995,7 +2243,7 @@
 
     async confirmDelete(d) {
       const ok = await T.confirm('문서 삭제',
-        `문서 #${d.document_id} (${esc(d.template.name)}, ${d.work_date})를 삭제합니다.<br>목록에서 사라지지만 기록은 삭제자·삭제 시각과 함께 보존됩니다.`,
+        `문서 #${d.document_id} (${esc(d.template.name)}, ${d.work_date})를 삭제합니다.<br>목록에서 사라지지만 기록은 삭제자·삭제 시각과 함께 보존됩니다.${d.requirement === 'periodic' ? '<br>주기 문서입니다. 규칙상 만드는 날이면 다음 주기 생성(명령·[주기 문서 만들기]) 때 다시 만들어집니다 — 작성하지 않는 날이면 [작성 안 함]을 쓰세요.' : ''}`,
         '삭제', 'btn-danger');
       if (!ok) return;
       const r = await api.del(`documents/${d.document_id}`);
@@ -2005,7 +2253,7 @@
     },
   };
 
-  T.register('temp-doc', Doc);
+  T.register('doc-box', Doc);  // 예전 temp-doc도 이 화면(TempEntry.PAGE_ALIAS)
   Doc.targetText = targetText;  // WF-SC-04 대상(ISS-018 — 예전 요청은 스냅샷으로 계산)
   window.TempEntryDocument = Doc;
 })();

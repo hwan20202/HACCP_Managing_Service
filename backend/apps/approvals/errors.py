@@ -27,6 +27,11 @@ class NotYourSlot(ApprovalError):
     status, code, message = 403, "NOT_YOUR_SLOT", "이 결재 칸의 결재자가 아닙니다."
 
 
+class NotRequester(ApprovalError):
+    # P10 A7 상신 취소(p10-s2-spec 3.2)
+    status, code, message = 403, "NOT_REQUESTER", "상신한 사람만 취소할 수 있습니다."
+
+
 class ApprovalNotFound(ApprovalError):
     status, code, message = 404, "APPROVAL_NOT_FOUND", "결재 칸을 찾을 수 없습니다."
 

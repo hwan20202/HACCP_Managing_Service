@@ -40,3 +40,18 @@ class SourceUnavailable(RequirementError):
 class SimulatedFailure(RequirementError):
     # 개발 API D04·D05 fail_after 전용(롤백 확인)
     status, code, message = 500, "SIMULATED_FAILURE", "롤백 확인을 위한 의도된 실패입니다."
+
+
+class RulesInvalid(RequirementError):
+    # P9 VR-P9-01~05: 규칙 파일이 없거나 형식이 틀림 — 아무것도 만들지 않음(S1a-Q4 a)
+    status, code, message = 500, "RULES_INVALID", "주기 규칙 파일이 올바르지 않습니다."
+
+
+class NotPeriodic(RequirementError):
+    # P9 VR-P9-11: 규칙 파일에 없는 양식으로 주기 문서를 직접 만들려 함
+    status, code, message = 400, "NOT_PERIODIC", "주기 작성 요구 양식이 아닙니다."
+
+
+class InvalidFilter(RequirementError):
+    # P10 REQ-F10·A08: GET 목록 조회라 DOC F04·APR 결재함과 같은 코드(p10-s2-spec 2.1 B5)
+    status, code, message = 400, "INVALID_FILTER", "조회 조건을 확인하세요."

@@ -13,7 +13,7 @@ from apps.staff.models import Staff
 # 반려 사유 CHECK에서 comment__trim 을 쓰기 위해 등록한다(TRIM(comment) = '').
 models.TextField.register_lookup(Trim)
 
-REQUEST_STATUSES = ("in_progress", "approved", "rejected")
+REQUEST_STATUSES = ("in_progress", "approved", "rejected", "cancelled")  # ERD v7 M12
 SLOT_STATES = ("pending", "approved", "rejected", "skipped")
 
 

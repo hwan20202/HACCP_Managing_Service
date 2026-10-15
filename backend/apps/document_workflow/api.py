@@ -122,3 +122,17 @@ def batch_submit(request):
 def batch_config(request):
     """WF-A05 일괄 설정 조회."""
     return json_response(services.batch_config())
+
+
+# ---------------------------------------------------------------- P10 상신 취소 (p10-s2-spec 3.1)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@_api
+def cancel_submission(request, request_id):
+    """WF-F05 상신 취소 — 본문 없음(보내면 빈 객체만 허용, 사유 받지 않음)."""
+    actor = _actor(request, "WF-CAN-01")
+    if request.body.strip():
+        reject_unknown_keys(parse_json_body(request), ())
+    return json_response(services.cancel_submission(actor, request_id))
