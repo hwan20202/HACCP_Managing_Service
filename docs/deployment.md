@@ -160,6 +160,31 @@ icacls C:\HACCPData /grant '*S-1-5-19:(OI)(CI)M' /T
 .\tools\services\haccp-app.exe uninstall
 ```
 
+### 3.1 점검표 주기 문서 자동 생성 (문서 영역)
+
+일반위생관리 점검표(D10)·공정별 이물관리 점검표(D12)는 평일 매일, 방충방서점검표(D11)는 매주 문서가 필요합니다. 규칙은 `backend/apps/doc_requirements/periodic_rules.json`(요일·시작일·켜기/끄기)에 있고, 아래 명령이 **오늘** 문서를 만듭니다(이미 있으면 그대로). 하루 한 번, 작업 시작 전에 Windows 작업 스케줄러로 실행합니다.
+
+1. 실행 파일 `tools\periodic.cmd`를 만듭니다(경로·staff id는 실제 값으로). `--actor`는 "만든 사람"으로 기록될 직원 id입니다.
+
+```bat
+@echo off
+cd /d C:\HACCP
+set HACCP_ENV_FILE=.env.production
+.venv\Scripts\python.exe backend\manage.py make_periodic_documents --actor 1 --settings=config.settings.production >> C:\HACCPData\logs\periodic.log 2>&1
+```
+
+2. 관리자 PowerShell에서 평일 오전 6시 작업으로 등록합니다(서비스와 같은 LocalService 계정).
+
+```powershell
+schtasks /Create /TN "HACCP 주기 문서" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 06:00 /RU "NT AUTHORITY\LOCAL SERVICE" /TR "C:\HACCP\tools\periodic.cmd"
+schtasks /Run /TN "HACCP 주기 문서"      # 한 번 실행해 로그 확인
+```
+
+- 종료 코드: 0 정상 · 1 일부 줄 실패(양식 비활성 등, 나머지는 만들어짐) · 2 입력·직원·규칙 파일 오류(아무것도 안 만듦). 로그의 마지막 줄이 `합계: 만듦 n · 이미 있음 n · 대상 아님 n · 실패 n`입니다.
+- PC가 꺼져 있어 빠진 날은 자동으로 채우지 않습니다. 필요하면 직접 보충합니다(최대 31일, 미래 날짜 불가): `make_periodic_documents --actor 1 --from 2026-10-01 --to 2026-10-14`.
+- 규칙 파일을 바꾸면 재시작 없이 다음 실행부터 반영됩니다. 운영 시작일이 정해지면 `start_date`를 고쳐 커밋합니다. 다른 경로의 규칙 파일은 `.env.production`의 `HACCP_PERIODIC_RULES`로 지정합니다.
+- 화면에서도 같은 일을 할 수 있게 됩니다(작성 요구 화면의 [주기 문서 만들기], 날짜를 골라 하나만 만드는 [새 문서] — 문서 영역 C4 S5 화면 구현 뒤).
+
 ## 4. 코드 업데이트
 
 1. 서비스를 중지하고 아래 방법으로 DB·업로드를 백업합니다.
@@ -182,7 +207,7 @@ DB와 첨부파일이 같은 시점을 나타내도록 **앱 서비스를 중지
 
 명령은 SQLite backup API로 일관된 DB 복사본을 만들고 업로드 파일을 ZIP으로 보관합니다. 결과는 `HACCP_DATA_DIR/backups/<UTC시각>/`의 `app.sqlite3`, `uploads.zip`, `manifest.json`입니다. 이 디렉터리를 다른 디스크나 사내 백업 저장소에도 복사해야 운영 PC 장애에 대비할 수 있습니다.
 
-현재 업로드 기능은 없으며 백업 명령의 `uploads.zip`은 예약 폴더를 보관합니다. 시제품의 메모리·브라우저 `localStorage` 데이터는 서버 백업 대상이 아닙니다.
+문서 첨부 파일(시험성적서·원산지 증빙, PDF·JPG·PNG 20MB 이하)은 `HACCP_DATA_DIR/uploads/files/YYYY/MM/`에 무작위 이름으로 저장되고 원래 이름은 DB에만 있으므로, DB와 `uploads.zip`은 항상 같은 백업 시점의 것을 함께 복구합니다. Caddy의 요청 본문 상한(`infra/caddy/Caddyfile`의 `max_size 30MB`)은 20MB 파일과 요청 머리말을 받을 수 있도록 그대로 둡니다. 시제품의 메모리·브라우저 `localStorage` 데이터는 서버 백업 대상이 아닙니다.
 
 `.env.production`, Caddy 인증서·상태, 시제품 데이터와 `data/reference` 원본은 이 명령에 포함되지 않습니다. 필요한 자료는 접근을 제한한 별도 백업으로 보관합니다.
 
@@ -197,6 +222,6 @@ DB와 첨부파일이 같은 시점을 나타내도록 **앱 서비스를 중지
 
 ## 6. 운영 범위
 
-현재 로그인·계정·Django 관리자·첨부파일 업로드 기능은 없습니다. 초기 업무 화면은 시제품 상태이며 서버 DB에 업무 데이터를 저장하지 않습니다. 지정한 시제품 데이터와 기준서는 접속한 사용자에게 제공됩니다. 업무 저장·파일 관리·데이터 이관은 후속 개발 범위입니다.
+현재 로그인·계정·Django 관리자 기능은 없습니다. 문서 첨부 파일은 `/api/v1/files/<id>`로 제공되며 계정 구분 없이 접근할 수 있으므로 사내망 밖에 노출하지 않습니다. 초기 업무 화면은 시제품 상태이며 서버 DB에 업무 데이터를 저장하지 않습니다. 지정한 시제품 데이터와 기준서는 접속한 사용자에게 제공됩니다. 업무 저장·파일 관리·데이터 이관은 후속 개발 범위입니다.
 
 SQLite는 운영 PC 로컬 디스크에 두고 앱 인스턴스 하나를 기준으로 운영합니다. 샌드박스와 운영이 같은 DB 파일을 공유하지 않습니다.

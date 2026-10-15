@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "rules": [
+    {"type_code": "D10", "cadence": "daily", "weekdays": [1, 2, 3, 4, 5], "start_date": "2026-10-12", "enabled": true},
+    {"type_code": "D12", "cadence": "daily", "weekdays": [1, 2, 3, 4, 5], "start_date": "2026-10-12", "enabled": true},
+    {"type_code": "D11", "cadence": "weekly", "weekdays": [1, 2, 3, 4, 5], "start_date": "2026-10-12", "enabled": true}
+  ]
+}
