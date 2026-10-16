@@ -525,7 +525,15 @@ def resolve_bom_line(batch, item_id, line_id=None):
     return matches[0]
 
 
-def add_usages(*, batch_id, entries, staff_id, idempotency_key):
+def add_usages(
+    *,
+    batch_id,
+    entries,
+    staff_id,
+    idempotency_key,
+    expected_quantity=None,
+    expected_bom_line_id=None,
+):
     """All-or-nothing request, including durable replay of the complete payload.
 
     SQLite IMMEDIATE serializes availability checks and writes across workers.
@@ -548,12 +556,31 @@ def add_usages(*, batch_id, entries, staff_id, idempotency_key):
     key = _key("BULK_USE", idempotency_key)
     digest = hashlib.sha256(key.encode()).hexdigest()
     payload = {"batch_id": batch_id, "staff_id": staff_id, "entries": normalized}
+    if expected_quantity is not None:
+        payload["expected_quantity_e6"] = _quantity_e6(expected_quantity)
+        payload["expected_bom_line_id"] = expected_bom_line_id
     with transaction.atomic():
         previous = AuditLog.objects.filter(table_name="usage_requests", record_id=digest).first()
         if previous:
             if previous.after_json != payload:
                 raise InventoryError("같은 요청 키로 다른 일괄 투입을 등록할 수 없습니다.")
             return
+        if expected_quantity is not None:
+            expected = _quantity_e6(expected_quantity)
+            total = 0
+            batch = _batch(batch_id)
+            for row in normalized:
+                lot = Lot.objects.select_related("item").filter(pk=row["lot_id"]).first()
+                if lot is None:
+                    raise NotFound("선택한 LOT을 찾을 수 없습니다.")
+                line = resolve_bom_line(batch, lot.item_id, row["bom_line_id"])
+                if line.pk != expected_bom_line_id:
+                    raise InventoryError("선택한 BOM 원료의 LOT만 함께 투입할 수 있습니다.")
+                total += _component_quantity(
+                    row["quantity_e6"], lot.item.base_unit, line.component_item.base_unit
+                )
+            if total != expected:
+                raise InventoryError("선택 LOT 합계가 이번 투입 총량과 다릅니다.")
         for index, row in enumerate(normalized):
             add_usage(
                 batch_id=batch_id,
@@ -570,6 +597,73 @@ def add_usages(*, batch_id, entries, staff_id, idempotency_key):
             after_json=payload,
             staff_id=staff_id,
         )
+
+
+def preview_plan(*, item_id, quantity, on_date=None):
+    """Use the same BOM selection and readiness rules without saving a plan."""
+    item = Item.objects.get(pk=item_id)
+    if item.item_type_id not in PRODUCIBLE_ITEM_TYPES:
+        raise InventoryError("제조할 반제품을 선택하세요.")
+    bom = _default_bom(item, on_date or kst_now().date())
+    batch = ProductionBatch(item=item, bom=bom, planned_quantity_e6=_quantity_e6(quantity))
+    return material_readiness(batch)
+
+
+def propose_line_allocation(*, batch_id, line_id, quantity, item_id=None):
+    """Preview one BOM row, primary first then registered alternatives; never writes."""
+    batch = _batch(batch_id, lock_open=True)
+    line = (
+        BomLine.objects.select_related("component_item")
+        .filter(pk=line_id, bom_id=batch.bom_id)
+        .first()
+    )
+    if line is None or not line.component_item.is_stock_managed:
+        raise InventoryError("투입할 BOM 원료를 선택하세요.")
+    component = line.component_item
+    allowed = [component, *[a.item for a in line.alternatives.select_related("item")]]
+    if item_id is not None:
+        allowed = [item for item in allowed if item.pk == item_id]
+        if not allowed:
+            raise InventoryError("BOM 원료 또는 등록 대체 원료만 선택할 수 있습니다.")
+    needed = _quantity_e6(quantity)
+    remaining, entries = needed, []
+    for item in allowed:
+        # Work in the BOM unit; each entry remains in its own item's base unit.
+        for lot in lot_stock(item_id=item.pk, usable_only=True):
+            if remaining <= 0:
+                break
+            stock = lot.quantity_e6
+            if item.base_unit == "g" and component.base_unit == "kg":
+                stock -= stock % 1000
+            capacity = _component_quantity(stock, item.base_unit, component.base_unit)
+            take = min(remaining, capacity)
+            if item.base_unit == "kg" and component.base_unit == "g":
+                take -= take % 1000
+            if take <= 0:
+                continue
+            amount = _component_quantity(take, component.base_unit, item.base_unit)
+            entries.append(
+                {
+                    "lot_id": lot.lot_id,
+                    "lot_number": lot.lot_number,
+                    "item_id": item.pk,
+                    "item_code": item.item_code,
+                    "name": item.name,
+                    "unit": item.base_unit,
+                    "quantity": str(from_e6(amount)),
+                    "stock": str(from_e6(lot.quantity_e6)),
+                    "expiration_date": str(lot.expiration_date) if lot.expiration_date else None,
+                    "received_date": str(lot.received_date) if lot.received_date else None,
+                }
+            )
+            remaining -= take
+    return {
+        "unit": component.base_unit,
+        "quantity": str(from_e6(needed)),
+        "covered": str(from_e6(needed - remaining)),
+        "shortfall": str(from_e6(remaining)),
+        "results": entries,
+    }
 
 
 def material_readiness(batch):

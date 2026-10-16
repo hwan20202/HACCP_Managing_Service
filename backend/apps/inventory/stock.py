@@ -104,6 +104,7 @@ def lot_stock(
     manufactured_to=None,
     expiration_status=None,
     usable_only=False,
+    q=None,
 ):
     """LOTs with their current quantity, ordered by item code then expiration (FEFO).
 
@@ -126,6 +127,11 @@ def lot_stock(
     if lot_number:
         clauses.append("l.lot_number LIKE %s")
         params.append(f"%{lot_number.strip()}%")
+    if q and q.strip():
+        clauses.append(
+            "(i.item_code LIKE %s OR i.name LIKE %s OR l.lot_number LIKE %s OR s.name LIKE %s)"
+        )
+        params.extend([f"%{q.strip()}%"] * 4)
     if manufactured_from:
         clauses.append("l.manufactured_date >= %s")
         params.append(manufactured_from.isoformat())

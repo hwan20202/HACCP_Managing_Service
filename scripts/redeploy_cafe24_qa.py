@@ -9,10 +9,12 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import tarfile
 import time
 import urllib.request
+from contextlib import closing
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -33,6 +35,23 @@ def run(*args, **kwargs):
 def private_copy(source, target):
     shutil.copy2(source, target)
     target.chmod(0o600)
+
+
+def business_fingerprint(data):
+    """Compare all stored business rows while writes are stopped, without logging content."""
+    digest = hashlib.sha256()
+    with closing(
+        sqlite3.connect(f"file:{(data / 'db/app.sqlite3').as_posix()}?mode=ro", uri=True)
+    ) as db:
+        tables = db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+            " AND name NOT LIKE 'sqlite_%' AND name != 'django_migrations' ORDER BY name"
+        ).fetchall()
+        for (name,) in tables:
+            quoted = '"' + name.replace('"', '""') + '"'
+            rows = sorted(repr(row) for row in db.execute(f"SELECT * FROM {quoted}"))
+            digest.update(json.dumps([name, rows], ensure_ascii=True).encode())
+    return digest.hexdigest()
 
 
 def update_env(path, replacements):
@@ -216,6 +235,7 @@ def main():
     try:
         stopped = True
         run("systemctl", "stop", "caddy", "biodot-qa")
+        before_data = business_fingerprint(old_data) if not args.fresh_data_once else None
         # Stop all application writes before copying DB + WAL + attachments + static.
         with tarfile.open(backup / "qa-data.tar.gz", "w:gz") as archive:
             archive.add(old_data, arcname=old_data.name)
@@ -229,14 +249,14 @@ def main():
                         while stream.read(1024 * 1024):
                             pass
         app(stage, staging_env, "scripts/project.py", "--env-file", staging_env, "--qa", "init")
-        app(
-            stage,
-            staging_env,
-            "backend/manage.py",
-            "install_document_templates",
-            "--settings=config.settings.qa",
-        )
         if args.fresh_data_once:
+            app(
+                stage,
+                staging_env,
+                "backend/manage.py",
+                "install_document_templates",
+                "--settings=config.settings.qa",
+            )
             app(
                 stage,
                 staging_env,
@@ -271,6 +291,13 @@ def main():
             "check_inventory",
             "--settings=config.settings.qa",
         )
+        if before_data is not None:
+            if business_fingerprint(old_data) != before_data:
+                raise RuntimeError(
+                    "Business data changed during code-only deployment; inspect backup"
+                )
+            record["business_data_preserved"] = True
+            record_path.write_text(json.dumps(record, indent=2))
         new_data.chmod(0o711)
         for directory, _, files in os.walk(new_data / "static"):
             Path(directory).chmod(0o755)

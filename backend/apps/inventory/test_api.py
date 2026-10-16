@@ -8,7 +8,17 @@ from django.core.management import call_command
 from django.test import Client, TestCase
 
 from .fields import kst_now
-from .models import Bom, BomLine, Item, Lot, Staff, Supplier
+from .models import (
+    Bom,
+    BomLine,
+    BomLineAlternative,
+    Item,
+    Lot,
+    ProductionBatch,
+    Staff,
+    StockMovement,
+    Supplier,
+)
 from .test_support import seed_document_forms
 
 BASE = "/api/v1/inventory"
@@ -183,6 +193,20 @@ class ReceiptWithJudgmentApiTests(ApiTestCase):
 
 
 class StockAndLedgerApiTests(ApiTestCase):
+    def test_search_code_name_lot_and_supplier_preserves_balances(self):
+        receipt = self.receive()
+        params = {"from": self.today, "to": self.today}
+        for query in (self.raw.item_code, self.raw.name, self.supplier.name):
+            with self.subTest(query=query):
+                stock = self.get("/stock/lots/", q=query).json()["results"]
+                self.assertEqual([r["lot_id"] for r in stock], [receipt["lot_id"]])
+                result = self.get("/ledger/", q=query, **params).json()["results"]
+                self.assertEqual(result[0]["closing"], "50")
+                csv = self.get("/ledger/export.csv", q=query, **params)
+                self.assertIn(self.raw.name, csv.content.decode("utf-8-sig"))
+        self.assertEqual(self.get("/ledger/", q="없는 검색어", **params).json()["results"], [])
+        self.assertEqual(self.get("/stock/lots/", q="없는 검색어").json()["results"], [])
+
     def setUp(self):
         self.receipt = self.receive()
         self.lot_id = self.receipt["lot_id"]
@@ -357,6 +381,102 @@ class ProductionApiTests(ApiTestCase):
         )
         self.assertEqual(response.status_code, 201, response.content.decode())
         return response.json()["lot_id"]
+
+    def test_plan_preview_does_not_save_and_matches_created_readiness(self):
+        self.receive_pass("preview-receipt", "2")
+        before = (ProductionBatch.objects.count(), StockMovement.objects.count())
+        preview = self.get("/batches/preview/", item_id=self.semi.pk, quantity="1000")
+        self.assertEqual(preview.status_code, 200, preview.content)
+        self.assertEqual(preview.json()["lines"][0]["shortfall"], "2")
+        self.assertFalse(preview.json()["ready"])
+        self.assertEqual(before, (ProductionBatch.objects.count(), StockMovement.objects.count()))
+        created = self.post(
+            "/batches/",
+            {
+                "item_id": self.semi.pk,
+                "staff_id": self.staff.pk,
+                "planned_quantity": "1000",
+            },
+        )
+        self.assertEqual(created.json()["readiness"], preview.json())
+        self.assertEqual(
+            self.get("/batches/preview/", item_id=self.semi.pk, quantity="0").status_code, 400
+        )
+
+    def test_auto_allocation_uses_alternative_and_checks_target_total_atomically(self):
+        primary_lot = self.receive_pass("primary", "1")
+        alt = Item.objects.create(
+            item_type_id="RAW",
+            item_code="1000098",
+            short_code="ALT",
+            name="가상 대체원료",
+            base_unit="g",
+        )
+        BomLineAlternative.objects.create(bom_line=self.line, item=alt)
+        received = self.post(
+            "/receipts/",
+            {
+                "item_id": alt.pk,
+                "supplier_id": self.supplier.pk,
+                "staff_id": self.staff.pk,
+                "received_date": self.today,
+                "quantity": "3000",
+                "expiration_status": "NONE",
+                "judgment": "PASS",
+                "idempotency_key": "alternate",
+            },
+        )
+        self.assertEqual(received.status_code, 201, received.content)
+        batch = self.post(
+            "/batches/",
+            {
+                "item_id": self.semi.pk,
+                "staff_id": self.staff.pk,
+                "planned_quantity": "1000",
+            },
+        ).json()
+        url = f"/batches/{batch['id']}"
+        self.assertEqual(self.post(url + "/start/", {"staff_id": self.staff.pk}).status_code, 200)
+        before = StockMovement.objects.count()
+        allocation = self.get(url + "/allocation/", bom_line_id=self.line.pk, quantity="4")
+        self.assertEqual(allocation.status_code, 200, allocation.content)
+        result = allocation.json()
+        self.assertEqual(result["shortfall"], "0")
+        self.assertEqual(
+            [(r["lot_id"], r["quantity"]) for r in result["results"]],
+            [(primary_lot, "1"), (received.json()["lot_id"], "3000")],
+        )
+        self.assertEqual(StockMovement.objects.count(), before)
+        payload = {
+            "staff_id": self.staff.pk,
+            "idempotency_key": "ui-target",
+            "expected_bom_line_id": self.line.pk,
+            "expected_quantity": "3",
+            "entries": [
+                {"lot_id": r["lot_id"], "bom_line_id": self.line.pk, "quantity": r["quantity"]}
+                for r in result["results"]
+            ],
+        }
+        mismatch = self.post(url + "/usages/", payload)
+        self.assertEqual(mismatch.status_code, 400, mismatch.content)
+        self.assertEqual(StockMovement.objects.count(), before)
+        payload["expected_quantity"] = "4"
+        saved = self.post(url + "/usages/", payload)
+        self.assertEqual(saved.status_code, 201, saved.content)
+        self.assertEqual(saved.json()["bom_check"]["lines"][0]["actual"], "4")
+        self.assertEqual(self.post(url + "/usages/", payload).status_code, 201)
+        self.assertEqual(StockMovement.objects.count(), before + 2)
+        payload["expected_quantity"] = "5"
+        self.assertEqual(self.post(url + "/usages/", payload).status_code, 400)
+        self.assertEqual(
+            self.get(
+                url + "/allocation/",
+                bom_line_id=self.line.pk,
+                quantity="1",
+                item_id=self.finished.pk,
+            ).status_code,
+            400,
+        )
 
     def test_batch_flow(self):
         lot_id = self.receive_pass("r1", "50")

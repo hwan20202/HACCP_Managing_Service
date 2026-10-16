@@ -84,7 +84,7 @@ JOIN items i                ON i.id = l.item_id
 """
 
 
-def _filters(item_type, item_id, lot_id, lot_number=None):
+def _filters(item_type, item_id, lot_id, lot_number=None, q=None):
     clauses, params = [], []
     type_clause, type_params = item_type_clause(item_type)
     if type_clause:
@@ -93,6 +93,13 @@ def _filters(item_type, item_id, lot_id, lot_number=None):
     if lot_number:
         clauses.append("l.lot_number LIKE %s")
         params.append(f"%{lot_number.strip()}%")
+    if q and q.strip():
+        clauses.append(
+            "(i.item_code LIKE %s OR i.name LIKE %s OR l.lot_number LIKE %s OR EXISTS"
+            " (SELECT 1 FROM incoming_receipts r JOIN suppliers s ON s.id = r.supplier_id"
+            " WHERE r.lot_id = l.id AND s.name LIKE %s))"
+        )
+        params.extend([f"%{q.strip()}%"] * 4)
     if item_id:
         clauses.append("i.id = %s")
         params.append(item_id)
@@ -102,7 +109,9 @@ def _filters(item_type, item_id, lot_id, lot_number=None):
     return clauses, params
 
 
-def stock_ledger(date_from, date_to, *, item_type=None, item_id=None, lot_id=None, lot_number=None):
+def stock_ledger(
+    date_from, date_to, *, item_type=None, item_id=None, lot_id=None, lot_number=None, q=None
+):
     """Return list[LedgerItem] ordered by item code, LOT number, then time.
 
     A LOT appears when it has a non-zero opening balance or any movement in the period.
@@ -113,7 +122,7 @@ def stock_ledger(date_from, date_to, *, item_type=None, item_id=None, lot_id=Non
         raise ValueError("date_to must not be before date_from.")
     start = date_from.isoformat()
     end = (date_to + datetime.timedelta(days=1)).isoformat()
-    clauses, params = _filters(item_type, item_id, lot_id, lot_number)
+    clauses, params = _filters(item_type, item_id, lot_id, lot_number, q)
     extra = "".join(f" AND {clause}" for clause in clauses)
 
     item_cols = "i.id, i.item_code, i.name, i.item_type, i.base_unit"

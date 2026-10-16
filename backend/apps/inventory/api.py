@@ -67,6 +67,8 @@ from .production import (
     create_batch,
     fefo_candidates,
     material_readiness,
+    preview_plan,
+    propose_line_allocation,
     start_batch,
 )
 from .quantity import from_e6, to_e6
@@ -452,6 +454,7 @@ def stock_lots(request):
         manufactured_to=_date(request.GET.get("manufactured_to"), "manufactured_to"),
         expiration_status=expiration_status,
         usable_only=_flag(request.GET.get("usable_only", "0")),
+        q=request.GET.get("q"),
     )
     return ok({"results": [out.lot_stock(row) for row in rows]})
 
@@ -485,7 +488,11 @@ def ledger_params(request):
 
 def ledger_search(request):
     """ledger_params + LOT 번호 검색 (ledger/, ledger/export.csv)."""
-    return {**ledger_params(request), "lot_number": request.GET.get("lot_number") or None}
+    return {
+        **ledger_params(request),
+        "lot_number": request.GET.get("lot_number") or None,
+        "q": request.GET.get("q") or None,
+    }
 
 
 @endpoint("GET")
@@ -677,6 +684,31 @@ def batch_detail(request, pk):
     return _batch_response(pk)
 
 
+@endpoint("GET")
+def batch_preview(request):
+    item_id = _int(request.GET.get("item_id"), "item_id", required=True)
+    _get(Item, item_id, "품목")
+    return ok(
+        preview_plan(
+            item_id=item_id,
+            quantity=request.GET.get("quantity"),
+            on_date=_date(request.GET.get("planned_date"), "planned_date"),
+        )
+    )
+
+
+@endpoint("GET")
+def batch_allocation(request, pk):
+    return ok(
+        propose_line_allocation(
+            batch_id=pk,
+            line_id=_int(request.GET.get("bom_line_id"), "bom_line_id", required=True),
+            quantity=request.GET.get("quantity"),
+            item_id=_int(request.GET.get("item_id"), "item_id"),
+        )
+    )
+
+
 @endpoint("POST")
 def batch_start(request, pk):
     data = request.data
@@ -706,6 +738,8 @@ def batch_usage(request, pk):
             entries=entries,
             staff_id=_int(data["staff_id"], "staff_id"),
             idempotency_key=str(data["idempotency_key"]),
+            expected_quantity=data.get("expected_quantity"),
+            expected_bom_line_id=_int(data.get("expected_bom_line_id"), "expected_bom_line_id"),
         )
         return _batch_response(pk, status=201)
     _required(data, "lot_id", "quantity", "staff_id", "idempotency_key")

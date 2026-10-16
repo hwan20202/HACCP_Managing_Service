@@ -1,6 +1,7 @@
 """Local tests of config preservation and rollback; no server calls."""
 
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,21 @@ import redeploy_cafe24_qa as deploy
 
 
 class RedeployTests(unittest.TestCase):
+    def test_business_fingerprint_detects_values_not_only_counts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory)
+            (data / "db").mkdir()
+            with sqlite3.connect(data / "db/app.sqlite3") as db:
+                db.execute("CREATE TABLE inventory (id INTEGER, quantity INTEGER)")
+                db.execute("INSERT INTO inventory VALUES (1, 10)")
+            db.close()
+            before = deploy.business_fingerprint(data)
+            self.assertEqual(before, deploy.business_fingerprint(data))
+            with sqlite3.connect(data / "db/app.sqlite3") as db:
+                db.execute("UPDATE inventory SET quantity=9")
+            db.close()
+            self.assertNotEqual(before, deploy.business_fingerprint(data))
+
     def test_env_update_preserves_auth_and_other_settings(self):
         with tempfile.TemporaryDirectory() as directory:
             env = Path(directory) / "qa.env"

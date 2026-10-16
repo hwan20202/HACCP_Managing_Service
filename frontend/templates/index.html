@@ -94,22 +94,12 @@
           </svg>
           <span>선행요건 관리</span>
         </a>
-        <a href="#" class="nav-item" data-page="production-log" id="nav-production-log">
-          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-            <polyline points="14 2 14 8 20 8"/>
-            <line x1="16" y1="13" x2="8" y2="13"/>
-            <line x1="16" y1="17" x2="8" y2="17"/>
-            <polyline points="10 9 9 9 8 9"/>
-          </svg>
-          <span>생산 일지</span>
-        </a>
         <a href="#" class="nav-item" data-page="production-batches" id="nav-production-batches">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M2 20h20"/>
             <path d="M4 20V10l5 3V10l5 3V6l6 4v10"/>
           </svg>
-          <span>제조배치</span>
+          <span>생산지시 · 실적</span>
         </a>
       </div>
 
@@ -270,6 +260,7 @@
   <script src="{% static 'prototype/js/modules/auto-engine.js' %}"></script>
   <script src="{% static 'prototype/js/modules/dashboard.js' %}"></script>
   <script src="{% static 'prototype/js/modules/inventory.js' %}"></script>
+  <script src="{% static 'prototype/js/xlsx-writer.js' %}"></script>
   <script src="{% static 'prototype/js/modules/inventory-api.js' %}"></script>
   <script src="{% static 'prototype/js/modules/ccp.js' %}"></script>
   <script src="{% static 'prototype/js/modules/prerequisite.js' %}"></script>
