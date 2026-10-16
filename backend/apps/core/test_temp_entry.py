@@ -55,6 +55,14 @@ class TempEntryTabTests(SimpleTestCase):
             html = self.client.get("/").content.decode()
         self.assertLess(html.index("temp-entry/core.js"), html.index("prototype/js/app.js"))
 
+    def test_qa_banner_is_explicit_and_not_shown_in_production(self):
+        with override_settings(HACCP_ENVIRONMENT="qa", DEBUG=False, HACCP_DOC_MENU="haccp"):
+            response = self.client.get("/")
+        self.assertContains(response, 'id="qaSiteBanner"')
+        self.assertContains(response, "window.HACCP_SITE = {qa: true}")
+        with override_settings(HACCP_ENVIRONMENT="production"):
+            self.assertNotContains(self.client.get("/"), 'id="qaSiteBanner"')
+
 
 class DocMenuSettingTests(SimpleTestCase):
     """P10-TC-030(서버 부분): HACCP_DOC_MENU 값 검사·화면 값. 메뉴 자리 HTML은 S5."""

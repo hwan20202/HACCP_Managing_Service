@@ -35,6 +35,8 @@ data_path = Path(os.environ.get("HACCP_DATA_DIR", "data")).expanduser()
 DATA_DIR = (data_path if data_path.is_absolute() else ROOT_DIR / data_path).resolve()
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "")
 DEBUG = False
+HACCP_ENVIRONMENT = "production"
+HACCP_QA_SEED_ENABLED = False
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1]")
 CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS")
 

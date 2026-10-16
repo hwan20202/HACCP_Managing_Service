@@ -215,6 +215,12 @@
 
   <!-- 메인 컨텐츠 -->
   <main class="main-content" id="mainContent">
+    {% if qa_site %}
+    <div id="qaSiteBanner" role="status" style="padding:12px 20px;background:#fff3cd;color:#664d03;border-bottom:1px solid #ffecb5;font-weight:600;">
+      QA 테스트 사이트 · 실제 운영 데이터가 아닙니다. 입고·생산·결재는 검증용 기록입니다.
+    </div>
+    <script>window.HACCP_SITE = {qa: true};</script>
+    {% endif %}
     <!-- 상단 헤더 -->
     <header class="top-header">
       <div class="header-left">

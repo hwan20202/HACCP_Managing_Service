@@ -1,6 +1,7 @@
-"""Reproducible, development-only reference BOM scenarios; stock always uses services."""
+"""Explicit development/hosted-QA fixtures; never part of normal deployment."""
 
 import datetime
+import hashlib
 import json
 import sqlite3
 from collections import defaultdict
@@ -17,6 +18,7 @@ from apps.inventory.errors import InventoryError
 from apps.inventory.fields import kst_now
 from apps.inventory.holds import hold_lot
 from apps.inventory.ledger import stock_ledger
+from apps.inventory.master_import import ensure_default_lot_rules
 from apps.inventory.models import (
     AuditLog,
     Bom,
@@ -43,31 +45,63 @@ from apps.inventory.receiving import ReceiptInput, register_receipt
 
 
 class Command(BaseCommand):
-    help = "개발 DB 백업 후 실제 자료 공통 BOM과 가상 입고 준비/생산 검증 (재실행 가능)"
+    help = "개발·전용 QA DB 백업 후 공통 BOM·가상 재고 적재 (배포와 별도 실행)"
 
     def add_arguments(self, parser):
         parser.add_argument("--stage", choices=["prepare", "run"], default="prepare")
         parser.add_argument("--date", help="QA 기준일 YYYY-MM-DD (기본 KST 오늘)")
 
     def handle(self, *args, **options):
-        if not settings.DEBUG:
-            raise CommandError("개발 설정에서만 실행할 수 있습니다.")
+        hosted_qa = getattr(settings, "HACCP_ENVIRONMENT", "production") == "qa"
+        if not settings.DEBUG and not (
+            hosted_qa and getattr(settings, "HACCP_QA_SEED_ENABLED", False)
+        ):
+            raise CommandError("개발 또는 적재가 명시적으로 허용된 전용 QA 설정에서만 실행합니다.")
         day = datetime.date.fromisoformat(options["date"]) if options["date"] else kst_now().date()
         if day > kst_now().date():
             raise CommandError("미래 날짜는 사용할 수 없습니다.")
-        db_path = Path(settings.DATABASES["default"]["NAME"])
-        if not db_path.is_file():
-            raise CommandError("마이그레이션된 파일 DB가 필요합니다.")
-        backup = db_path.with_name(f"app-before-qa-{kst_now():%Y%m%d-%H%M%S-%f}.sqlite3")
-        with sqlite3.connect(db_path) as source, sqlite3.connect(backup) as target:
-            source.backup(target)
+        backup = self.backup_db()
         fixture = json.loads(
             (Path(__file__).parents[2] / "seed/qa_reference.json").read_text(encoding="utf-8")
         )
+        fingerprint = hashlib.sha256(
+            json.dumps(fixture, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
         self.day, self.tag = day, f"QA-REF-{day}"
         self.expected, self.initial, self.lots = defaultdict(int), defaultdict(int), {}
         self.events, self.checks, self.remaps = [], [], []
         with transaction.atomic():
+            # BEGIN IMMEDIATE serializes concurrent first seeds. Keep the completion marker
+            # in the same DB transaction as stock, not only in an external JSON report.
+            previous = (
+                AuditLog.objects.filter(table_name="qa_dataset", record_id="reference-v1")
+                .order_by("id")
+                .last()
+            )
+            if previous:
+                state = previous.after_json
+                if state["fixture_hash"] != fingerprint:
+                    raise CommandError(
+                        "기존 QA 묶음과 소스가 다릅니다. 별도 QA 저장 공간을 사용하세요."
+                    )
+                if options["date"] and options["date"] != state["date"]:
+                    raise CommandError(
+                        "기존 QA 날짜는 고정입니다. 새 날짜로 중복 적재하지 않습니다."
+                    )
+                if options["stage"] == "prepare" or state["stage"] == "run":
+                    self.stdout.write(
+                        f"QA 묶음이 이미 있습니다: {state['date']} / {state['stage']}. "
+                        "사용자 거래·첨부파일을 보존하고 적재를 건너뜁니다."
+                    )
+                    return
+                day = datetime.date.fromisoformat(state["date"])
+                self.day, self.tag = day, f"QA-REF-{day}"
+            elif hosted_qa and StockMovement.objects.exists():
+                raise CommandError(
+                    "적재 기록 없는 기존 거래 DB에는 QA 데이터를 섞지 않습니다. "
+                    "새 QA 데이터 디렉터리를 준비하세요."
+                )
+            ensure_default_lot_rules()
             self.staff, _ = Staff.objects.get_or_create(
                 staff_code="QA_REF", defaults={"name": "QA 기준자료 검증자"}
             )
@@ -84,6 +118,21 @@ class Command(BaseCommand):
             if options["stage"] == "run":
                 self.run_scenarios(fixture)
             self.validate()
+            AuditLog.objects.create(
+                table_name="qa_dataset",
+                record_id="reference-v1",
+                action="INSERT",
+                staff=self.staff,
+                reason="QA 가정 데이터 적재 완료 (운영 데이터 아님)",
+                after_json={
+                    "date": str(day),
+                    "stage": options["stage"],
+                    "fixture_hash": fingerprint,
+                    "lot_ids": sorted(self.lots),
+                    "sources": fixture["sources"],
+                    "sample_code_remaps": self.remaps,
+                },
+            )
         report = {
             "date": str(day),
             "stage": options["stage"],
@@ -123,6 +172,15 @@ class Command(BaseCommand):
             f"Backup: {backup}\nReport: {target}\n"
             f"LOT {len(self.lots)}개, 검사 {len(self.checks)}개 통과"
         )
+
+    def backup_db(self):
+        db_path = Path(settings.DATABASES["default"]["NAME"])
+        if not db_path.is_file():
+            raise CommandError("마이그레이션된 파일 DB가 필요합니다.")
+        backup = db_path.with_name(f"app-before-qa-{kst_now():%Y%m%d-%H%M%S-%f}.sqlite3")
+        with sqlite3.connect(db_path) as source, sqlite3.connect(backup) as target:
+            source.backup(target)
+        return backup
 
     def masters(self, fixture):
         result = {}
@@ -202,6 +260,23 @@ class Command(BaseCommand):
             )
             if not made and not (bom.notes or "").startswith("QA_REFERENCE:"):
                 raise CommandError(f"기존 BOM을 덮어쓸 수 없습니다: {item.item_code}")
+            if not made:
+                actual = {
+                    row.component_item.item_code: (
+                        row.quantity_e6,
+                        sorted(row.alternatives.values_list("item__item_code", flat=True)),
+                    )
+                    for row in bom.lines.select_related("component_item")
+                }
+                expected = {
+                    line["item_code"]: (
+                        to_e6(line["quantity"]),
+                        [line["alternative"]] if line.get("alternative") else [],
+                    )
+                    for line in entry["lines"]
+                }
+                if actual != expected or bom.base_quantity_e6 != to_e6(entry["base_quantity"]):
+                    raise CommandError(f"기존 QA BOM 내용이 변경되었습니다: {item.item_code}")
             if made:
                 for n, line in enumerate(entry["lines"], 1):
                     row = BomLine.objects.create(

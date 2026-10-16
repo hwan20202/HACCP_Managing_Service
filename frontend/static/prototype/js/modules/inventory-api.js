@@ -98,6 +98,7 @@ const InventoryApiPage = {
           <p class="page-desc">${cfg.desc}</p>
         </div>
         <div class="page-actions">
+          ${window.HACCP_SITE?.qa ? '<button id="qaReceiptOpen" class="btn btn-primary" onclick="InventoryApiPage.openQaReceipt()">QA 입고 등록</button>' : ''}
           <button class="btn btn-secondary" onclick="InventoryApiPage.load()">새로고침</button>
           <a class="btn btn-secondary" id="invApiCsv" href="#" onclick="return InventoryApiPage.downloadCsv()">수불 CSV 내려받기</a>
         </div>
@@ -234,6 +235,58 @@ const InventoryApiPage = {
   downloadCsv() {
     window.location.href = `${this.API}/ledger/export.csv?${this.query(this.ledgerParams())}`;
     return false;
+  },
+
+  // Hosted QA uses the business API with DEBUG=false; no /api/dev/ dependency.
+  async openQaReceipt() {
+    try {
+      const [items, suppliers, staff] = await Promise.all([
+        this.getJson('/items/'), this.getJson('/suppliers/'), this.getJson('/staff/'),
+      ]);
+      const options = (rows, label) => rows.map((r) => `<option value="${r.id}">${this.esc(label(r))}</option>`).join('');
+      this.qaReceiptKey = crypto.randomUUID();
+      App.showModal('QA 입고 등록', `<form id="qaReceiptForm">
+        <p>검증용 입고입니다. 저장하면 수불·재고와 입고 문서 3종이 연결됩니다.</p>
+        ${this.field('품목', `<select name="item_id" class="form-control">${options(items.results.filter((i) => i.is_stock_managed && ['RAW','PACKAGING','SEMI'].includes(i.item_type)), (i) => `${i.item_code} ${i.name} (${i.base_unit})`)}</select>`)}
+        ${this.field('공급처', `<select name="supplier_id" class="form-control">${options(suppliers.results, (i) => i.name)}</select>`)}
+        ${this.field('담당자', `<select name="staff_id" class="form-control">${options(staff.results, (i) => i.name)}</select>`)}
+        ${this.field('입고일', `<input name="received_date" type="date" class="form-control" value="${this.today()}" required>`)}
+        ${this.field('입고량 (선택 품목 기준단위)', '<input name="quantity" type="number" min="0" step="any" class="form-control" required>')}
+        ${this.field('소비기한 유무', '<select name="expiration_status" class="form-control" required><option value="">선택하세요</option><option value="KNOWN">있음</option><option value="NONE">없음으로 확인</option></select>')}
+        ${this.field('소비기한 (있음 선택 시 필수)', '<input name="expiration_date" type="date" class="form-control">')}
+        ${this.field('입고 검사 판정', '<select name="judgment" class="form-control"><option value="">미판정 — 문서함에서 육안검사 작성</option><option value="PASS">적합</option><option value="FAIL">부적합</option></select>')}
+        <p id="qaReceiptError" role="alert" style="color:var(--color-danger);"></p>
+        <button type="submit" id="qaReceiptSave" class="btn btn-primary">QA 입고 저장</button>
+      </form>`);
+      document.getElementById('qaReceiptForm').addEventListener('submit', (e) => { e.preventDefault(); this.saveQaReceipt(); });
+    } catch (error) { App.showToast('error', '입고 준비 실패', error.message); }
+  },
+
+  async saveQaReceipt() {
+    const form = document.getElementById('qaReceiptForm');
+    const button = document.getElementById('qaReceiptSave');
+    if (!form || button.disabled) return;
+    const body = Object.fromEntries(new FormData(form));
+    if (!body.expiration_status) return;
+    button.disabled = true;
+    body.idempotency_key = this.qaReceiptKey;
+    ['item_id', 'supplier_id', 'staff_id'].forEach((key) => { body[key] = Number(body[key]); });
+    const token = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/)?.[1] || '';
+    try {
+      const response = await fetch(`${this.API}/receipts/`, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': decodeURIComponent(token) },
+        body: JSON.stringify(body),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error?.message || `요청 실패 (${response.status})`);
+      App.closeModal();
+      App.showToast('success', 'QA 입고 완료', '수불·재고·문서가 연결되었습니다. 문서함에서 입고 문서를 확인하세요.');
+      this.load();
+    } catch (error) {
+      const target = document.getElementById('qaReceiptError');
+      if (target) target.textContent = error.message;
+    } finally { button.disabled = false; }
   },
 
   // ---------- 표시 ----------
