@@ -2,7 +2,7 @@
 // 재고장 · 수불일지 — /api/v1/inventory/ 연결 화면
 // (docs/inventory-frontend.md: 시제품 틀·디자인은 그대로, 재고 데이터만 API 로)
 //
-// - 한 화면: LOT별 현재고(stock/lots)와 기간별 개별 수불(ledger), CSV 내려받기
+// - 한 화면: 품목별 입출고 내역(왼쪽)과 LOT별 현재고(오른쪽), 엑셀 2개 시트
 // - 0 재고는 재고 표에서만 기본 제외. 해당 LOT의 과거 수불은 기간 조회에 남는다
 // - 소비기한은 날짜가 없을 때 '없음'(NONE)과 '미확인'(UNKNOWN)을 구분해 표시 (0007)
 // - 수량은 API 의 문자열을 그대로 표시 (계산하지 않음)
@@ -15,7 +15,7 @@ const InventoryApiPage = {
   TYPES: {
     raw: {
       title: '원료 수불대장',
-      desc: '입출고 내역과 품목별 현재 재고를 확인합니다.',
+      desc: '품목별 입출고 내역과 LOT별 현재 잔량을 함께 확인합니다.',
       itemTypes: ['RAW'],
       dateCol: 'received',
     },
@@ -44,7 +44,7 @@ const InventoryApiPage = {
     if (!this.states[this.type]) {
       const today = this.today();
       this.states[this.type] = {
-        selectedLot: null, tab: 'ledger', q: '', direction: '', lowOnly: false, expiryDays: '', displayUnit: '',
+        selectedLot: null, tab: 'overview', q: '', direction: '', lowOnly: false, expiryDays: '', displayUnit: '',
         itemId: '',
         lotNumber: '',
         expirationStatus: '',
@@ -91,6 +91,18 @@ const InventoryApiPage = {
     const cfg = this.TYPES[type];
     setTimeout(() => this.load(), 0);
     return `
+    <style>
+      #invApiPage .inv-overview { display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:0.85rem;align-items:start; }
+      #invApiPage .inv-panel { min-width:0;padding:0;overflow:hidden; }
+      #invApiPage .inv-panel-head { padding:0.85rem 1rem;border-bottom:1px solid var(--border-subtle); }
+      #invApiPage .inv-panel-head h2 { font-size:0.95rem;margin:0 0 0.35rem; }
+      #invApiPage .inv-panel-head p { font-size:0.76rem;color:var(--text-muted);margin:0; }
+      #invApiPage .inv-overview .table-wrapper { overflow:auto;max-height:65vh; }
+      #invApiPage .inv-item-group td { background:var(--bg-elevated,#eef2f6);font-weight:700; }
+      #invApiPage .inv-selected { background:var(--bg-elevated,#eef3ff);outline:2px solid var(--brand-primary);outline-offset:-2px; }
+      #invApiPage .inv-overview td, #invApiPage .inv-overview th { padding:0.6rem; }
+      @media(max-width:1100px) { #invApiPage .inv-overview {grid-template-columns:minmax(0,1fr);} }
+    </style>
     <div class="fade-in" id="invApiPage">
       <div class="page-header">
         <div class="page-title-group">
@@ -104,11 +116,11 @@ const InventoryApiPage = {
         </div>
       </div>
       <div class="tabs" style="margin-bottom:0.75rem;">
-        ${[['ledger','수불 내역'],['stock','현재고']].map(([v,l]) => `<button class="tab-btn ${this.state().tab === v ? 'active' : ''}" onclick="InventoryApiPage.set('tab','${v}')">${l}</button>`).join('')}
+        ${[['overview','재고·수불 현황'],['stock','품목별 합계']].map(([v,l]) => `<button class="tab-btn ${this.state().tab === v ? 'active' : ''}" onclick="InventoryApiPage.set('tab','${v}')">${l}</button>`).join('')}
       </div>
       <div class="card" style="padding:0.75rem;margin-bottom:0.75rem;">
         <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:flex-end;">${this.renderFilters()}</div>
-        <p style="margin:0.6rem 0 0;font-size:0.78rem;color:var(--text-muted);">현재고는 지금의 잔량입니다. 품목을 선택하면 LOT와 수불 이력을 확인할 수 있습니다.</p>
+        <p style="margin:0.6rem 0 0;font-size:0.78rem;color:var(--text-muted);">검색은 양쪽 표에 적용됩니다. 조회 기간·입출고 구분은 수불 내역에만 적용되며, 현재고는 지금의 잔량입니다.</p>
       </div>
       <div id="invApiContent"><div class="empty-state"><p>불러오는 중…</p></div></div>
     </div>`;
@@ -129,7 +141,7 @@ const InventoryApiPage = {
       <div style="display:flex;gap:0.3rem;flex-wrap:wrap">${[['','전체'],['IN','입고'],['OUT','출고']].map(([v,l])=>`<button class="btn ${s.direction===v?'btn-primary':'btn-secondary'} btn-sm" onclick="InventoryApiPage.set('direction','${v}')">${l}</button>`).join('')}</div>
       <div style="display:flex;gap:0.3rem;flex-wrap:wrap">${[['today','오늘'],['month','이번 달'],['3month','3개월'],['6month','6개월'],['year','1년']].map(([v,l])=>`<button class="btn btn-secondary btn-sm" onclick="InventoryApiPage.setPeriod('${v}')">${l}</button>`).join('')}</div>
       ${this.field('조회 기간', `<span style="display:flex;gap:0.3rem"><input id="invFrom" type="date" class="form-control" value="${s.from}" onchange="InventoryApiPage.set('from',this.value)"> ~ <input id="invTo" type="date" class="form-control" value="${s.to}" onchange="InventoryApiPage.set('to',this.value)"></span>`)}
-      <details><summary style="cursor:pointer">상세 조건</summary><label>LOT 번호 <input class="form-control" value="${this.esc(s.lotNumber)}" onchange="InventoryApiPage.set('lotNumber',this.value)"></label></details>`;
+      <details><summary style="cursor:pointer">상세 조건</summary><label>LOT 번호 <input class="form-control" value="${this.esc(s.lotNumber)}" onchange="InventoryApiPage.set('lotNumber',this.value)"></label><label><input id="invIncludeEmpty" type="checkbox" ${s.includeEmpty?'checked':''} onchange="InventoryApiPage.set('includeEmpty',this.checked)"> 소진 LOT도 현재고에 표시</label></details>`;
   },
 
   search(value) {
@@ -168,7 +180,7 @@ const InventoryApiPage = {
   selectLot(id, number = '') {
     const s = this.state();
     s.selectedLot = id ? { id: Number(id), number } : null;
-    s.tab = 'ledger';
+    s.tab = 'overview';
     this.rerender();
   },
 
@@ -186,12 +198,12 @@ const InventoryApiPage = {
     this.cache = null;
     try {
       const s = this.state();
-      if (s.tab === 'ledger') {
-        const data = await this.fetchLedger();
+      if (s.tab === 'overview') {
+        const [data, stock] = await Promise.all([this.fetchLedger(), this.fetchStock()]);
         if (!current()) return;
-        this.cache = {tab:'ledger', data};
-        const selection = s.selectedLot || s.itemId ? `<button class="btn btn-secondary btn-sm" onclick="InventoryApiPage.clearSelection()">품목·LOT 선택 해제</button>` : '';
-        document.getElementById('invApiContent').innerHTML = selection + this.renderLedger(data);
+        this.cache = {tab:'overview', data, stock};
+        this.stockRows = stock.results;
+        document.getElementById('invApiContent').innerHTML = this.renderOverview(data, stock);
       } else {
         const [stock, totals] = await Promise.all([this.fetchStock(), this.getJson('/stock/items/', {item_type:this.TYPES[this.type].itemTypes.join(',')})]);
         if (!current()) return;
@@ -226,7 +238,7 @@ const InventoryApiPage = {
   viewItemLedger(id) {
     App.closeModal();
     const s=this.state();
-    s.itemId=String(id); s.tab='ledger'; s.selectedLot=null; s.q='';
+    s.itemId=String(id); s.tab='overview'; s.selectedLot=null; s.q='';
     this.rerender();
   },
 
@@ -236,7 +248,7 @@ const InventoryApiPage = {
       item_type: this.TYPES[this.type].itemTypes.join(','),
       item_id: s.itemId,
       q: s.q.trim(),
-      expiring_within_days: s.expiryDays,
+      expiring_within_days: s.tab === 'stock' ? s.expiryDays : '',
       lot_number: s.lotNumber.trim(),
       expiration_status: s.expirationStatus,
       include_empty: s.includeEmpty,
@@ -339,19 +351,77 @@ const InventoryApiPage = {
       .sort((a,b)=>b.line.occurred_at.localeCompare(a.line.occurred_at) || b.line.movement_id-a.line.movement_id);
   },
 
+  overviewEntries(data) {
+    const entries = this.ledgerLines(data).map(r => ({...r, opening:false}));
+    if (!this.state().direction) {
+      for (const item of data.results) for (const lot of item.lots) {
+        if (Number(lot.opening) !== 0) entries.push({item,lot,opening:true,line:{
+          occurred_at:data.from, movement_id:0, movement_name:'이월',
+          quantity:'0', balance:lot.opening, staff_name:'', reason:'조회 시작일 이전 잔량',
+        }});
+      }
+    }
+    return entries.sort((a,b)=>a.item.item.item_code.localeCompare(b.item.item.item_code) ||
+      Number(b.opening)-Number(a.opening) || a.line.occurred_at.localeCompare(b.line.occurred_at) ||
+      a.line.movement_id-b.line.movement_id || a.lot.lot_id-b.lot.lot_id);
+  },
+
+  renderOverview(data, stock) {
+    const s=this.state();
+    const entries=this.overviewEntries(data);
+    let previous=null;
+    const movements=entries.map(({item,lot,line,opening})=>{
+      const group=previous!==item.item.id;
+      previous=item.item.id;
+      const negative=String(line.quantity).startsWith('-');
+      return `${group?`<tr class="inv-item-group"><td colspan="5">${this.esc(item.item.item_code)} ${this.esc(item.item.name)} <span style="font-weight:400">(${this.esc(item.unit)})</span></td></tr>`:''}
+        <tr data-ledger-lot="${lot.lot_id}" ${opening?'data-opening="true"':`data-movement="${line.movement_id}"`}>
+          <td class="no-wrap" title="${this.esc(line.movement_name)} · ${this.esc(line.reason||'')}">${opening?'이월':this.esc(line.occurred_at.replace('T',' ').slice(0,16))}</td>
+          <td class="no-wrap">${this.esc(lot.lot_number)}</td>
+          <td style="text-align:right">${opening||negative?'':this.esc(line.quantity)}</td>
+          <td style="text-align:right">${negative?this.esc(String(line.quantity).slice(1)):''}</td>
+          <td style="text-align:right">${this.esc(line.balance)}</td>
+        </tr>`;
+    }).join('');
+    const selected=s.selectedLot;
+    const selection=selected||s.itemId?`<div style="margin-top:0.6rem">${selected?`<span class="badge badge-info">LOT ${this.esc(selected.number)}</span>`:'선택 품목'} <button id="invClearLot" class="btn btn-secondary btn-sm" onclick="InventoryApiPage.clearSelection()">선택 해제</button></div>`:'';
+    const stocks=stock.results.map(r=>`<tr data-stock-lot="${r.lot_id}" tabindex="0" role="button" aria-pressed="${selected?.id===r.lot_id}" class="${selected?.id===r.lot_id?'inv-selected':''}" style="cursor:pointer" aria-label="${this.esc(r.item.item_code)} ${this.esc(r.lot_number)} 수불 조회" onclick="InventoryApiPage.selectStockLot(${r.lot_id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();InventoryApiPage.selectStockLot(${r.lot_id})}">
+      <td>${this.esc(r.item.item_code)}<br><span style="font-size:0.75rem;color:var(--text-muted)">${this.esc(r.item.name)}</span></td>
+      <td class="no-wrap">${this.esc(r.lot_number)}</td><td style="text-align:right;font-weight:700" data-current-quantity="${this.esc(r.quantity)}">${this.esc(r.quantity)} <span style="font-weight:400">${this.esc(r.unit)}</span></td>
+      <td>${this.lotStatus(r)}</td></tr>`).join('');
+    return `<div class="inv-overview">
+      <section class="card inv-panel" aria-labelledby="invMovementHeading"><div class="inv-panel-head">
+        <h2 id="invMovementHeading">품목별 입출고 내역</h2><p>${this.esc(data.from)} ~ ${this.esc(data.to)} · 수불 ${entries.filter(r=>!r.opening).length}건 · 잔량은 해당 수불 직후의 LOT 기준</p>${selection}
+        </div><div class="table-wrapper"><table class="data-table" id="invLedgerTable"><thead><tr><th>수불일자</th><th>LOT</th><th>입고</th><th>출고</th><th>LOT 잔량</th></tr></thead><tbody>${movements||'<tr><td colspan="5" style="padding:2rem;text-align:center">선택한 조건의 입출고 내역이 없습니다.</td></tr>'}</tbody></table></div></section>
+      <section class="card inv-panel" aria-labelledby="invCurrentHeading"><div class="inv-panel-head">
+        <h2 id="invCurrentHeading">LOT별 현재 재고</h2><p>현재 잔량 · ${stock.results.length}개 LOT · 행을 누르면 왼쪽에서 해당 LOT의 수불을 확인합니다.</p>
+        </div><div class="table-wrapper"><table class="data-table" id="invCurrentStockTable"><thead><tr><th>품목코드 · 품목명</th><th>LOT</th><th>현재고</th><th>상태</th></tr></thead><tbody>${stocks||'<tr><td colspan="4" style="padding:2rem;text-align:center">선택한 조건의 현재 재고가 없습니다.</td></tr>'}</tbody></table></div></section>
+    </div>`;
+  },
+
   exportExcel() {
     const c=this.cache;
     if (!c) return App.showToast('info','조회 중','검색 결과가 표시된 후 내려받으세요.');
     let headers, rows;
-    if(c.tab==='ledger') {
+    if(c.tab==='overview') {
       headers=['수불일자','품목코드','품목명','LOT','구분','입고','출고','수불 후 LOT 잔량','단위','담당자','사유'];
-      rows=this.ledgerLines(c.data).map(({item,lot,line})=>[line.occurred_at,item.item.item_code,item.item.name,lot.lot_number,line.movement_name,String(line.quantity).startsWith('-')?'':line.quantity,String(line.quantity).startsWith('-')?String(line.quantity).slice(1):'',line.balance,item.unit,line.staff_name,line.reason||'']);
+      rows=this.overviewEntries(c.data).map(({item,lot,line,opening})=>[opening?'이월':line.occurred_at,item.item.item_code,item.item.name,lot.lot_number,line.movement_name,opening||String(line.quantity).startsWith('-')?'':line.quantity,String(line.quantity).startsWith('-')?String(line.quantity).slice(1):'',line.balance,item.unit,line.staff_name,line.reason||'']);
     } else {
       headers=['품목코드','품목명','총재고','사용 가능','사용 불가','최소재고','단위','LOT 수'];
       rows=c.data.results.map(r=>[r.item.item_code,r.item.name,r.total,r.usable,this.addQuantities(r.quarantine,r.unusable),r.minimum_stock,r.unit,r.lot_count]);
     }
-    const numeric=c.tab==='ledger'?[5,6,7]:[2,3,4,5,7];
-    XlsxWriter.download(`수불재고_${this.today()}.xlsx`,[{name:c.tab==='ledger'?'수불 내역':'현재고',title:this.TYPES[this.type].title,subtitle:`${c.tab==='ledger'?`${this.state().from} ~ ${this.state().to} · ${this.state().direction==='IN'?'입고':this.state().direction==='OUT'?'출고':'전체'}`:'현재고 · 기준 단위'} / 검색: ${this.state().q || '전체'}`,columns:headers.map((header,i)=>({header,width:20,type:numeric.includes(i)?'number':'text'})),rows}]);
+    const overview=c.tab==='overview';
+    const numeric=overview?[5,6,7]:[2,3,4,5,7];
+    const sheets=[{name:overview?'입출고 내역':'품목별 합계',title:this.TYPES[this.type].title,subtitle:`${overview?`${this.state().from} ~ ${this.state().to} · ${this.state().direction==='IN'?'입고':this.state().direction==='OUT'?'출고':'전체'}${this.state().selectedLot?' · LOT '+this.state().selectedLot.number:''}`:'현재고 · 기준 단위'} / 검색: ${this.state().q || '전체'}`,columns:headers.map((header,i)=>({header,width:20,type:numeric.includes(i)?'number':'text'})),rows}];
+    if(overview) sheets.push({name:'LOT별 현재고',title:'LOT별 현재 재고',subtitle:`조회 시점 현재 잔량 · 검색: ${this.state().q||'전체'}`,columns:['품목코드','품목명','LOT','현재고','단위','상태','소비기한'].map((header,i)=>({header,width:20,type:i===3?'number':'text'})),rows:c.stock.results.map(r=>[r.item.item_code,r.item.name,r.lot_number,r.quantity,r.unit,r.can_use?'사용가능':this.lotStatusLabel(r),r.expiration_date||(r.expiration_status==='NONE'?'없음':'미확인')])});
+    XlsxWriter.download(`수불재고_${this.today()}.xlsx`,sheets);
+  },
+
+  lotStatusLabel(row) {
+    if(row.is_expired) return '소비기한 경과';
+    if(row.active_hold_count>0) return '보류';
+    if(Number(row.quantity)===0) return '소진';
+    return this.LOT_STATUS[row.status]?.[0] || row.status;
   },
 
   addQuantities(a, b) {

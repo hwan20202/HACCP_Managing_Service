@@ -10,6 +10,7 @@ function page(file, name, document = {}) {
 const root = 'frontend/static/prototype/js/modules/';
 const date = {value: '2027-01-01', disabled: false, required: true};
 const inventory = page(root + 'inventory-api.js', 'InventoryApiPage', {querySelector: () => date});
+assert.equal(inventory.state().tab, 'overview');
 inventory.changeExpiration('NONE');
 assert.equal(date.value, '');
 assert.equal(date.disabled, true);

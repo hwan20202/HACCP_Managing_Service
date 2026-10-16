@@ -12,6 +12,7 @@ import shutil
 import sqlite3
 import subprocess
 import tarfile
+import tempfile
 import time
 import urllib.request
 from contextlib import closing
@@ -82,6 +83,30 @@ def app(code, env_file, *args, seed=False):
         environment["HACCP_QA_SEED_ENABLED"] = "true"
     python = code / ".venv/bin/python" if (code / ".venv/bin/python").exists() else PYTHON
     run("runuser", "-u", "biodot-qa", "--", python, *args, cwd=code, env=environment)
+
+
+def isolated_regressions(code, uid, gid):
+    """Run deployment regression scenarios in memory, with a separate temporary data path."""
+    with tempfile.TemporaryDirectory(prefix="biodot-qa-regression-") as directory:
+        temp = Path(directory)
+        os.chown(temp, uid, gid)
+        env_file = temp / "isolated.env"
+        env_file.write_text(f"HACCP_DATA_DIR={temp / 'data'}\nDJANGO_HTTPS_ENABLED=false\n")
+        env_file.chmod(0o600)
+        os.chown(env_file, uid, gid)
+        app(
+            code,
+            env_file,
+            "backend/manage.py",
+            "test",
+            "apps.inventory.test_api",
+            "apps.inventory.test_qa_safety",
+            "apps.inventory.test_expiration",
+            "apps.inventory.test_overview",
+            "--settings=config.settings.test",
+            "--verbosity=1",
+            "--noinput",
+        )
 
 
 def restore(record):
@@ -187,6 +212,8 @@ def main():
             stage / "requirements" / name
         ).read_bytes():
             raise SystemExit("Dependency change needs a separately prepared virtualenv")
+    owner = pwd.getpwnam("biodot-qa")
+    isolated_regressions(stage, owner.pw_uid, owner.pw_gid)
     (stage / "QA-DEPLOYED-REVISION.txt").write_text(
         "feature/inventory-production\n" + args.commit + "\n"
     )
@@ -200,6 +227,7 @@ def main():
         "old_data": str(old_data),
         "new_data": str(new_data),
         "fresh_data": args.fresh_data_once,
+        "isolated_regressions": "passed",
         "previous_revision": (CURRENT / "QA-DEPLOYED-REVISION.txt").read_text()
         if (CURRENT / "QA-DEPLOYED-REVISION.txt").exists()
         else "unknown",

@@ -11,6 +11,27 @@ import redeploy_cafe24_qa as deploy
 
 
 class RedeployTests(unittest.TestCase):
+    def test_regressions_use_memory_settings_and_a_separate_data_directory(self):
+        seen = []
+
+        def inspect(code, env_file, *args):
+            self.assertEqual(code, Path("/staged-code"))
+            self.assertIn("--settings=config.settings.test", args)
+            self.assertIn("apps.inventory.test_overview", args)
+            contents = env_file.read_text()
+            self.assertIn(str(env_file.parent / "data"), contents)
+            self.assertNotIn("qa.env", contents)
+            self.assertNotIn("qa-data", contents)
+            seen.append(env_file)
+
+        with (
+            patch.object(deploy, "app", side_effect=inspect),
+            patch.object(deploy.os, "chown", create=True),
+        ):
+            deploy.isolated_regressions(Path("/staged-code"), 0, 0)
+        self.assertEqual(len(seen), 1)
+        self.assertFalse(seen[0].exists())
+
     def test_business_fingerprint_detects_values_not_only_counts(self):
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory)
