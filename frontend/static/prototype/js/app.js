@@ -78,6 +78,7 @@ const App = {
       'raw-materials': '원료 수불대장',
       'sub-materials': '부자재 수불대장',
       'finished-goods': '완제품 수불대장',
+      'inventory-overview': '재고·수불 현황',
       'ccp-monitoring': 'CCP 모니터링',
       prerequisite: '선행요건 관리',
       'production-log': '생산 일지',
@@ -103,6 +104,7 @@ const App = {
       case 'raw-materials':  html = InventoryApiPage.render('raw'); break;
       case 'sub-materials':  html = InventoryApiPage.render('sub'); break;
       case 'finished-goods': html = InventoryApiPage.render('finished'); break;
+      case 'inventory-overview': html = InventoryApiPage.renderOverviewPage(); break;
       case 'ccp-monitoring': html = CCPPage.render(); break;
       case 'prerequisite':   html = PrerequisitePage.render(); break;
       case 'production-log': html = ProductionApiPage.render(); break;
@@ -221,6 +223,7 @@ const App = {
   showModal(title, bodyHtml, buttons = []) {
     const overlay = document.getElementById('modalOverlay');
     const container = document.getElementById('modalContainer');
+    container.classList.remove('inventory-detail-modal');
 
     const btnsHtml = buttons.map(b =>
       `<button class="btn ${b.class}" onclick="${b.action}">${b.text}</button>`

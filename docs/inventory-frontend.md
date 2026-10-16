@@ -1,5 +1,7 @@
 # 생산·수불(inventory) 화면 개발 방향
 
+> 최신 화면: 원료·부자재·완제품 수불대장은 MVP 방식의 **수불 내역 / 현재고** 탭이며, 통합 조회는 **별도 재고·수불 현황 메뉴**다. 아래의 이전 통합 기본 화면 설명보다 [최신 화면·QA 안내](qa-mvp-ledger-20261016.md)를 우선한다.
+
 > 2026-10-16 최신 반영: 멘토 예시대로 기본 수불 화면은 **품목별 입출고(왼쪽) + LOT별 현재고(오른쪽)**를 함께 표시한다. 품목별 합계는 보조 탭이다. 생산·입고 개선, 반응형 배치, 엑셀 2시트 및 실제 검사 결과는 [통합 화면 검증](qa-overview-scenarios-20261016.md)을 따른다.
 
 기존 시제품(`frontend/static/prototype`)을 검토한 결과와 화면 개발 기준입니다. 개발 현황은 [inventory-roadmap.md](inventory-roadmap.md) 9번, API 는 [inventory-decisions.md](inventory-decisions.md) "API 요약".
