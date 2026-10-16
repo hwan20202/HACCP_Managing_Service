@@ -15,7 +15,7 @@ from apps.doc_requirements import services as req
 from apps.documents.models import Document, DocumentTemplate
 
 from .fields import kst_now
-from .models import AuditLog, IncomingReceipt, Item, Lot, LotStatus, Staff, Supplier
+from .models import AuditLog, Bom, BomLine, IncomingReceipt, Item, Lot, LotStatus, Staff, Supplier
 from .production import add_output, complete_batch, create_batch, start_batch
 from .receiving import ReceiptInput, ReceivingError, cancel_receipt, register_receipt
 from .test_support import seed_document_forms
@@ -154,8 +154,22 @@ class CancelHookTests(DocumentBridgeTestCase):
 
 class BatchHookTests(DocumentBridgeTestCase):
     def batch(self):
+        water = Item.objects.create(
+            item_type_id="RAW",
+            item_code="WATER",
+            name="공정용수",
+            base_unit="kg",
+            is_stock_managed=False,
+        )
+        bom = Bom.objects.create(
+            item=self.semi, version=1, base_quantity_e6=1000000, effective_from=self.today
+        )
+        BomLine.objects.create(bom=bom, line_no=1, component_item=water, quantity_e6=1000000)
         return create_batch(
-            item_id=self.semi.pk, staff_id=self.staff.pk, manufactured_date=self.today
+            item_id=self.semi.pk,
+            staff_id=self.staff.pk,
+            manufactured_date=self.today,
+            planned_quantity="10",
         )
 
     def ccp(self, batch):
@@ -167,8 +181,10 @@ class BatchHookTests(DocumentBridgeTestCase):
         start_batch(batch_id=batch.pk, staff_id=self.staff.pk)
         self.assertEqual(self.ccp(batch), ["1P", "2B", "3P"])
 
-    def test_completing_without_start_still_creates_them(self):
+    def test_start_then_complete_does_not_duplicate_ccp(self):
         batch = self.batch()
+        start_batch(batch_id=batch.pk, staff_id=self.staff.pk)
+        start_batch(batch_id=batch.pk, staff_id=self.staff.pk)
         add_output(batch_id=batch.pk, quantity="10", staff_id=self.staff.pk, idempotency_key="o1")
         complete_batch(batch_id=batch.pk, staff_id=self.staff.pk)
         self.assertEqual(self.ccp(batch), ["1P", "2B", "3P"])

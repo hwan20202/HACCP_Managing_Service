@@ -16,8 +16,18 @@ from django.test import TestCase
 from .expiration import resolve_status
 from .fields import kst_now
 from .ledger import stock_ledger
-from .models import ExpirationStatus, IncomingReceipt, Item, Lot, Staff, StockMovement, Supplier
-from .production import add_output, add_usage, create_batch, fefo_candidates
+from .models import (
+    Bom,
+    BomLine,
+    ExpirationStatus,
+    IncomingReceipt,
+    Item,
+    Lot,
+    Staff,
+    StockMovement,
+    Supplier,
+)
+from .production import add_output, add_usage, create_batch, fefo_candidates, start_batch
 from .quantity import to_e6
 from .receiving import ReceiptInput, ReceivingError, register_receipt
 from .stock import lot_stock
@@ -151,11 +161,24 @@ class DatabaseRuleTests(ExpirationTestCase):
 
 
 class StockAndLedgerTests(ExpirationTestCase):
+    def started_batch(self, item, component):
+        bom = Bom.objects.create(
+            item=item, version=1, base_quantity_e6=to_e6(1), effective_from=self.today
+        )
+        BomLine.objects.create(bom=bom, line_no=1, component_item=component, quantity_e6=to_e6(1))
+        batch = create_batch(
+            item_id=item.pk,
+            staff_id=self.staff.pk,
+            manufactured_date=self.today,
+            planned_quantity="1",
+        )
+        start_batch(batch_id=batch.pk, staff_id=self.staff.pk)
+        return batch
+
     def test_500_plus_500_minus_300(self):
         # 한 배치의 산출 두 번(500 + 500)이 한 LOT 에 쌓이고, 다른 배치에 300 투입 -> 700, 이력 3건
-        make = create_batch(
-            item_id=self.semi.pk, staff_id=self.staff.pk, manufactured_date=self.today
-        )
+        self.receive("input-stock", expiration_status="NONE")
+        make = self.started_batch(self.semi, self.raw)
         lot = add_output(
             batch_id=make.pk, quantity="500", staff_id=self.staff.pk, idempotency_key="o1"
         ).lot
@@ -165,7 +188,7 @@ class StockAndLedgerTests(ExpirationTestCase):
         other = Item.objects.create(
             item_type_id="SEMI", item_code="3000502", name="다음 반제품", base_unit="개"
         )
-        use = create_batch(item_id=other.pk, staff_id=self.staff.pk, manufactured_date=self.today)
+        use = self.started_batch(other, self.semi)
         add_usage(
             batch_id=use.pk,
             lot_id=lot.pk,
@@ -208,9 +231,7 @@ class StockAndLedgerTests(ExpirationTestCase):
             ["KNOWN", "NONE", "UNKNOWN"],
         )
         self.assertEqual(len(lot_stock(expiration_status="NONE")), 1)
-        made = create_batch(
-            item_id=self.semi.pk, staff_id=self.staff.pk, manufactured_date=self.today
-        )
+        made = self.started_batch(self.semi, self.raw)
         add_output(batch_id=made.pk, quantity="1", staff_id=self.staff.pk, idempotency_key="o1")
         yesterday = self.today - datetime.timedelta(days=1)
         self.assertEqual(

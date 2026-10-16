@@ -29,7 +29,7 @@ const ProductionApiPage = {
 
   s: {
     staffId: '',
-    statusFilter: '',
+    statusFilter: 'ACTIVE',
     batchId: null,
     creating: false,
     use: { itemId: '', quantity: '', lotId: '', key: '' },
@@ -101,6 +101,11 @@ const ProductionApiPage = {
     }
     setTimeout(() => this.init(), 0);
     return `
+    <style>
+      #prodApiPage .prod-layout { display:grid;grid-template-columns:minmax(240px,320px) minmax(0,1fr);gap:0.75rem;align-items:start; }
+      #prodApiPage input, #prodApiPage select { min-height:40px; }
+      @media (max-width:1000px) { #prodApiPage .prod-layout { grid-template-columns:minmax(0,1fr); } }
+    </style>
     <div class="fade-in" id="prodApiPage">
       <div class="page-header">
         <div class="page-title-group">
@@ -113,12 +118,12 @@ const ProductionApiPage = {
           <button class="btn btn-primary" id="prodNewBtn" onclick="ProductionApiPage.openCreate()">+ 새 제조배치</button>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:minmax(260px,340px) 1fr;gap:0.75rem;align-items:start;">
+      <div class="prod-layout">
         <div class="card" style="padding:0;">
           <div style="padding:0.6rem 0.8rem;border-bottom:1px solid var(--border-subtle);display:flex;gap:0.5rem;align-items:center;">
             <strong style="flex:1;">배치 목록</strong>
             <select class="form-control" style="width:auto;" onchange="ProductionApiPage.setFilter(this.value)">
-              ${[['', '전체'], ['PLANNED', '계획'], ['IN_PROGRESS', '진행'], ['COMPLETED', '완료'], ['CANCELLED', '취소']]
+              ${[['ACTIVE', '취소 제외'], ['', '전체'], ['PLANNED', '계획'], ['IN_PROGRESS', '진행'], ['COMPLETED', '완료'], ['CANCELLED', '취소']]
                 .map(([v, l]) => `<option value="${v}" ${this.s.statusFilter === v ? 'selected' : ''}>${l}</option>`).join('')}
             </select>
           </div>
@@ -166,7 +171,7 @@ const ProductionApiPage = {
   async loadList() {
     const el = () => document.getElementById('prodList');
     try {
-      const data = await this.get('/batches/', { status: this.s.statusFilter, limit: 100 });
+      const data = await this.get('/batches/', { status: this.s.statusFilter === 'ACTIVE' ? '' : this.s.statusFilter, exclude_cancelled: this.s.statusFilter === 'ACTIVE' ? '1' : '0', limit: 100 });
       if (!el()) return;
       if (!data.results.length) { el().innerHTML = '<div class="empty-state"><p>배치가 없습니다.</p></div>'; return; }
       el().innerHTML = data.results.map((b) => `
@@ -199,7 +204,7 @@ const ProductionApiPage = {
         <div style="display:flex;flex-wrap:wrap;gap:0.75rem;align-items:flex-end;">
           ${this.field('반제품 품목', `<select class="form-control" name="item_id" style="min-width:240px;">${options}</select>`)}
           ${this.field('계획일', `<input type="date" class="form-control" name="planned_date" value="${this.today()}">`)}
-          ${this.field('계획 수량 (선택)', `<input type="number" class="form-control" name="planned_quantity" min="0" step="any" style="width:130px;">`)}
+          ${this.field('계획 수량 (시작 전 필수)', `<input type="number" class="form-control" name="planned_quantity" min="0" step="any" style="width:130px;">`)}
           ${this.field('메모 (선택)', `<input class="form-control" name="notes" maxlength="200" style="min-width:200px;">`)}
         </div>
         <p style="font-size:0.75rem;color:var(--text-muted);margin:0.6rem 0;">제조일(생산 시작일)은 생산을 시작할 때 정해집니다. 배치 번호·BOM 은 수불 규칙으로 자동입니다. 공정은 제조(MANUFACTURE)만 — 포장배치는 이번 범위 밖입니다.</p>
@@ -240,6 +245,7 @@ const ProductionApiPage = {
       this.s.use = { itemId: '', quantity: '', lotId: '', key: this.key() };
       this.s.output = { quantity: '', key: this.key() };
       this.lotChoices = null;
+      this.useOptionCache = null;
       this.fefo = null;
     }
     document.querySelectorAll('.prod-batch-row').forEach((row) => {
@@ -269,12 +275,23 @@ const ProductionApiPage = {
     const b = this.detail;
     el.innerHTML = `
       ${this.renderHead(b)}
+      ${this.renderReadiness(b)}
       ${this.renderCcp(b)}
       ${b.status === 'PLANNED' ? this.renderStart(b) : ''}
       ${this.renderUsages(b)}
       ${this.renderOutputs(b)}
       ${b.status === 'IN_PROGRESS' ? this.renderComplete(b) : ''}
       <div class="card" id="prodTrace" style="padding:0;"><div style="padding:0.75rem 1rem;"><strong>재고·수불 확인</strong> <span style="font-size:0.75rem;color:var(--text-muted);">불러오는 중…</span></div></div>`;
+  },
+
+  renderReadiness(b) {
+    const r = b.readiness;
+    if (!r) return '';
+    return `<div class="card" style="margin-bottom:0.75rem;"><strong>계획 원료 · 가용재고</strong>
+      <p>${this.esc(r.message)}</p>
+      <div class="table-wrapper"><table class="data-table"><thead><tr><th>원료</th><th>필요량</th><th>가용 합계 (대체 포함)</th><th>공유 재고 배분 후 부족</th></tr></thead><tbody>
+      ${r.lines.map(l => `<tr><td>${this.esc(l.item_code)} ${this.esc(l.name)}</td><td>${this.esc(l.required)} ${this.esc(l.unit)}</td><td>${l.stock_managed ? this.esc(l.available) : '재고 관리 제외'}</td><td>${this.esc(l.shortfall)}</td></tr>`).join('')}
+      </tbody></table></div><p>조회 시점 재고이며 예약되지 않습니다. 시작 시 재검사하고 실제 투입할 때 차감합니다. 공유 대체 원료는 중복 배분하지 않습니다.</p></div>`;
   },
 
   renderHead(b) {
@@ -395,87 +412,97 @@ const ProductionApiPage = {
 
   renderUseForm() {
     const u = this.s.use;
-    const items = this.inputItems.filter((i) => i.id !== this.detail.item.id);
-    const itemOptions = ['<option value="">원료 선택</option>', ...items.map((i) =>
-      `<option value="${i.id}" ${String(u.itemId) === String(i.id) ? 'selected' : ''}>${this.esc(i.item_code)} ${this.esc(i.name)} (${this.esc(i.base_unit)})</option>`)].join('');
-    const choices = this.lotChoices || [];
-    const fefoIds = (this.fefo && this.fefo.results || []).map((p) => p.lot_id);
-    const lotOptions = choices.length ? choices.map((l) => {
-      const pick = fefoIds.indexOf(l.lot_id);
-      const exp = l.expiration_date || (l.expiration_status === 'NONE' ? '소비기한 없음' : '미확인');
-      return `<option value="${l.lot_id}" ${String(u.lotId) === String(l.lot_id) ? 'selected' : ''}>${this.esc(l.lot_number)} · 재고 ${this.esc(l.quantity)}${this.esc(l.unit)} · ${this.esc(exp)}${pick >= 0 ? ` · FEFO ${pick + 1}순위` : ''}</option>`;
-    }).join('') : `<option value="">${u.itemId ? '사용 가능한 LOT 없음' : '원료를 먼저 고르세요'}</option>`;
-    const fefo = this.fefo ? `<div style="font-size:0.75rem;color:var(--text-muted);" id="prodFefo">FEFO 추천: ${this.fefo.results.map((p) => `${this.esc(p.lot_number)} ${this.esc(p.take)}`).join(', ') || '없음'}${this.fefo.shortfall && this.fefo.shortfall !== '0' ? ` · <span style="color:var(--color-danger);">부족 ${this.esc(this.fefo.shortfall)}</span>` : ''}</div>` : '';
-    return `
-      <div style="border-top:1px solid var(--border-subtle);margin-top:0.6rem;padding-top:0.6rem;" id="prodUseForm">
-        <div style="display:flex;flex-wrap:wrap;gap:0.6rem;align-items:flex-end;">
-          ${this.field('원료', `<select class="form-control" name="use_item" style="min-width:220px;" onchange="ProductionApiPage.setUseItem(this.value)">${itemOptions}</select>`)}
-          ${this.field('투입량', `<input type="number" class="form-control" name="use_quantity" min="0" step="any" style="width:120px;" value="${this.esc(u.quantity)}" onchange="ProductionApiPage.setUseQuantity(this.value)">`)}
-          ${this.field('LOT (사용 가능 · 소비기한 빠른 순)', `<select class="form-control" name="use_lot" style="min-width:300px;" onchange="ProductionApiPage.s.use.lotId=this.value">${lotOptions}</select>`)}
-          <button class="btn btn-primary" id="prodUseBtn" onclick="ProductionApiPage.addUsage()">투입 등록</button>
-        </div>
-        ${fefo}
-        <p style="font-size:0.72rem;color:var(--text-muted);margin:0.3rem 0 0;">사용 가능(검사 적합·보류 없음·투입일 기준 소비기한 안 지남) LOT 만 보입니다. 같은 입력을 두 번 눌러도 한 번만 등록됩니다.</p>
-      </div>`;
+    const lines = (this.detail.readiness?.lines || []).filter(l => l.stock_managed);
+    const options = lines.flatMap(l => l.allowed_items.map(i => ({...i, line: l.bom_line_id, primary: l.name})));
+    const selected = options.find(i => String(i.id) === String(u.itemId) && String(i.line) === String(u.lineId));
+    return `<div id="prodUseForm" style="margin-top:1rem;" oninput="ProductionApiPage.updateAllocationTotal()" onchange="ProductionApiPage.updateAllocationTotal()">
+      ${this.field('품목명·코드 검색', `<input class="form-control" type="search" oninput="ProductionApiPage.filterUseItems(this.value)" placeholder="품목명 또는 코드">`)}
+      ${this.field('BOM 원료 / 등록 대체 원료', `<select name="use_item" class="form-control" onchange="ProductionApiPage.setUseItem(this.value)"><option value="">선택하세요</option>${options.map(i => `<option value="${i.line}:${i.id}" ${selected === i ? 'selected' : ''}>${this.esc(i.item_code)} ${this.esc(i.name)} (${this.esc(i.base_unit)}) · ${this.esc(i.primary)} BOM</option>`).join('')}</select>`)}
+      ${this.field('이번 투입 총량 (선택 품목 단위)', `<input type="number" min="0" step="any" name="use_quantity" class="form-control" value="${this.esc(u.quantity)}" onchange="ProductionApiPage.s.use.quantity=this.value">`)}
+      <button class="btn btn-secondary" onclick="ProductionApiPage.proposeAllocation()">소비기한·입고일 순 배분 제안</button>
+      <div class="table-wrapper"><table class="data-table"><thead><tr><th>선택</th><th>LOT</th><th>소비기한 / 입고일</th><th>가용재고</th><th>투입량</th></tr></thead><tbody>
+      ${(this.lotChoices || []).map(l => `<tr><td><input type="checkbox" data-pick="${l.lot_id}" ${u.allocations?.[l.lot_id] ? 'checked' : ''}></td><td>${this.esc(l.lot_number)}</td><td>${this.esc(l.expiration_date || '날짜 없음')} / ${this.esc(l.received_date || l.manufactured_date || '-')}</td><td>${this.esc(l.quantity)} ${this.esc(l.unit)}</td><td><input class="form-control" style="min-width:100px" type="number" min="0" step="any" max="${this.esc(l.quantity)}" data-amount="${l.lot_id}" value="${this.esc(u.allocations?.[l.lot_id] || '')}"></td></tr>`).join('')}
+      </tbody></table></div>
+      <p>선택한 LOT 투입 합계: <strong id="prodAllocationTotal">${this.esc(this.fefo?.covered || '0')}</strong> (선택 품목 단위)</p>
+      <p>${this.fefo ? `추천 합계 ${this.esc(this.fefo.covered)} · 부족 ${this.esc(this.fefo.shortfall)}` : '품목과 총량을 선택해 배분을 제안받으세요.'} · 체크한 LOT과 수량을 확인한 뒤 저장하세요.</p>
+      <button class="btn btn-primary" id="prodUseBtn" onclick="ProductionApiPage.addUsage()">선택 LOT 일괄 투입</button>
+      <p>부적합·보류·만료·재고 0 LOT 제외. 전체 성공 또는 전체 취소로 저장됩니다.</p>
+    </div>`;
   },
 
-  pickBomLine(itemId) { this.setUseItem(String(itemId)); },
+  filterUseItems(query) {
+    const select = document.querySelector('#prodUseForm [name="use_item"]');
+    if (!this.useOptionCache) this.useOptionCache = [...select.options].map(o => ({value:o.value, text:o.textContent}));
+    const current = select.value;
+    select.innerHTML = this.useOptionCache.filter(o => !o.value || o.value === current || o.text.toLowerCase().includes(query.toLowerCase())).map(o => `<option value="${o.value}" ${o.value === current ? 'selected' : ''}>${this.esc(o.text)}</option>`).join('');
+  },
 
-  async setUseItem(itemId) {
-    this.s.use.itemId = itemId;
-    this.s.use.lotId = '';
-    this.lotChoices = null;
+  pickBomLine(itemId) {
+    const line = this.detail.readiness.lines.find(l => l.item_id === itemId);
+    if (line) this.setUseItem(`${line.bom_line_id}:${itemId}`);
+  },
+
+  async setUseItem(value) {
+    const [lineId, itemId] = value.split(':');
+    this.s.use = {lineId, itemId, quantity: '', allocations: {}, key: this.key()};
+    this.lotChoices = [];
     this.fefo = null;
+    this.useOptionCache = null;
     if (itemId) {
       try {
-        const stock = await this.get('/stock/lots/', { item_id: itemId, usable_only: '1' });
-        this.lotChoices = stock.results.filter((l) => l.can_use);
-        await this.loadFefo();
+        const stock = await this.get('/stock/lots/', {item_id: itemId, usable_only: '1'});
+        if (this.s.use.itemId !== itemId || this.s.use.lineId !== lineId) return;
+        this.lotChoices = stock.results.filter(l => l.can_use);
       } catch (error) { this.toast('error', 'LOT 조회 실패', error.message); }
     }
     this.renderDetail();
     this.loadTrace();
   },
 
-  async setUseQuantity(value) {
-    this.s.use.quantity = value;
-    await this.loadFefo();
-    this.renderDetail();
-    this.loadTrace();
-  },
-
-  async loadFefo() {
+  async proposeAllocation() {
     const u = this.s.use;
-    if (!u.itemId || !(Number(u.quantity) > 0)) { this.fefo = null; this.sortChoices(); return; }
-    try {
-      this.fefo = await this.get('/batches/fefo/', { item_id: u.itemId, quantity: u.quantity });
-    } catch (error) { this.fefo = null; }
-    this.sortChoices();
+    if (!u.itemId || !(Number(u.quantity) > 0)) return this.toast('error', '배분 제안', '원료와 총량을 입력하세요.');
+    await this.run('배분 제안', async () => {
+      const result = await this.get('/batches/fefo/', {item_id: u.itemId, quantity: u.quantity});
+      if (this.s.use !== u) return;
+      this.fefo = result;
+      u.allocations = Object.fromEntries(result.results.map(p => [p.lot_id, p.take]));
+      this.renderDetail();
+      this.loadTrace();
+    });
   },
 
-  sortChoices() {
-    if (!this.lotChoices) return;
-    const order = (this.fefo && this.fefo.results || []).map((p) => p.lot_id);
-    const rank = (l) => (order.includes(l.lot_id) ? order.indexOf(l.lot_id) : order.length + 1);
-    const day = (l) => l.expiration_date || '9999-12-31';
-    this.lotChoices.sort((a, b) => rank(a) - rank(b) || day(a).localeCompare(day(b)));
-    if (!this.s.use.lotId && this.lotChoices[0]) this.s.use.lotId = String(this.lotChoices[0].lot_id);
+  allocationTotal() {
+    let sum = 0n;
+    for (const el of document.querySelectorAll('#prodUseForm [data-pick]:checked')) {
+      const value = document.querySelector(`#prodUseForm [data-amount="${el.dataset.pick}"]`).value;
+      if (!/^[0-9]+(?:\.[0-9]{1,6})?$/.test(value)) return null;
+      const [whole, fraction = ''] = value.split('.');
+      sum += BigInt(whole) * 1000000n + BigInt(fraction.padEnd(6, '0'));
+    }
+    return `${sum / 1000000n}.${String(sum % 1000000n).padStart(6, '0')}`.replace(/\.?0+$/, '');
+  },
+
+  updateAllocationTotal() {
+    const el = document.getElementById('prodAllocationTotal');
+    if (el) el.textContent = this.allocationTotal() ?? '소수점 6자리 이내 수량을 입력하세요';
   },
 
   async addUsage() {
-    const form = document.getElementById('prodUseForm');
     const u = this.s.use;
-    u.quantity = form.querySelector('[name="use_quantity"]').value;
-    u.lotId = form.querySelector('[name="use_lot"]').value;
-    if (!u.lotId || !(Number(u.quantity) > 0)) return this.toast('error', '투입', '원료 LOT 과 0보다 큰 투입량을 입력하세요.');
-    await this.run('투입 등록', async () => {
-      await this.post(`/batches/${this.detail.id}/usages/`, {
-        lot_id: Number(u.lotId), quantity: u.quantity, staff_id: Number(this.s.staffId), idempotency_key: u.key,
-      });
-      this.toast('success', '투입 등록', `${u.quantity} 투입`);
-      this.s.use = { itemId: u.itemId, quantity: '', lotId: '', key: this.key() };
-      this.detail = await this.get(`/batches/${this.detail.id}/`);
-      await this.setUseItem(u.itemId);
+    const entries = [...document.querySelectorAll('#prodUseForm [data-pick]:checked')].map(el => ({
+      lot_id: Number(el.dataset.pick), bom_line_id: Number(u.lineId),
+      quantity: document.querySelector(`#prodUseForm [data-amount="${el.dataset.pick}"]`).value,
+    }));
+    if (!entries.length || entries.some(r => !(Number(r.quantity) > 0))) return this.toast('error', '투입', 'LOT을 선택하고 0보다 큰 수량을 입력하세요.');
+    const total = this.allocationTotal();
+    if (total === null) return this.toast('error', '투입', '소수점 6자리 이내 수량을 입력하세요.');
+    if (!window.confirm(`선택한 ${entries.length}개 LOT, 합계 ${total}을 일괄 투입합니다. 배분 수량을 확인하셨습니까?`)) return;
+    await this.run('일괄 투입', async () => {
+      await this.post(`/batches/${this.detail.id}/usages/`, {entries, staff_id: Number(this.s.staffId), idempotency_key: u.key});
+      this.toast('success', '투입 등록', `${entries.length}개 LOT 저장`);
+      await this.select(this.detail.id);
+      await this.setUseItem(`${u.lineId}:${u.itemId}`);
     });
   },
 
@@ -597,7 +624,7 @@ const ProductionApiPage = {
             <span><span class="badge badge-neutral">${this.esc(lot.role)}</span> ${this.esc(item.item.item_code)} ${this.esc(item.item.name)} · <span style="font-family:monospace;color:var(--brand-primary);">${this.esc(lot.lot_number)}</span></span>
             <span style="font-size:0.8rem;">이월 ${this.esc(ledgerLot.opening)} · 입고 ${this.esc(ledgerLot.in)} · 출고 ${this.esc(ledgerLot.out)} · 현재고 <b class="prod-trace-closing">${this.esc(ledgerLot.closing)}</b> ${this.esc(item.unit)}</span>
           </div>
-          <div class="table-wrapper"><table class="data-table"><thead><tr><th>일시</th><th>구분</th><th style="text-align:right;">수량(±)</th><th style="text-align:right;">잔량</th><th>사유</th><th>담당자</th></tr></thead><tbody>${lines}</tbody></table></div>`;
+          <div class="table-wrapper"><table class="data-table"><thead><tr><th>일시</th><th>구분</th><th style="text-align:right;">수량(±)</th><th style="text-align:right;">LOT 잔량</th><th>사유</th><th>담당자</th></tr></thead><tbody>${lines}</tbody></table></div>`;
       }).join('');
       el().innerHTML = `
         <div style="padding:0.75rem 1rem;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;">

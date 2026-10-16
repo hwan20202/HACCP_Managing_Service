@@ -60,11 +60,13 @@ from .movements import (
 from .production import (
     add_output,
     add_usage,
+    add_usages,
     batch_summary,
     cancel_batch,
     complete_batch,
     create_batch,
     fefo_candidates,
+    material_readiness,
     start_batch,
 )
 from .quantity import from_e6, to_e6
@@ -619,7 +621,9 @@ BATCH_RELATED = ("item", "staff")
 def _batch_response(batch_id, status=200):
     summary = batch_summary(batch_id)
     summary["batch"] = ProductionBatch.objects.select_related(*BATCH_RELATED).get(pk=batch_id)
-    return ok(out.batch_detail(summary), status=status)
+    data = out.batch_detail(summary)
+    data["readiness"] = material_readiness(summary["batch"])
+    return ok(data, status=status)
 
 
 @endpoint("GET", "POST")
@@ -641,6 +645,8 @@ def batch_collection(request):
         return _batch_response(batch.pk, status=201)
 
     rows = ProductionBatch.objects.select_related(*BATCH_RELATED).order_by("-pk")
+    if _flag(request.GET.get("exclude_cancelled", "0")):
+        rows = rows.exclude(status=BatchStatus.CANCELLED)
     if status := request.GET.get("status"):
         if status not in BatchStatus.values:
             raise BadRequest(f"status 는 {BatchStatus.values} 중 하나여야 합니다.")
@@ -687,6 +693,21 @@ def batch_start(request, pk):
 @endpoint("POST")
 def batch_usage(request, pk):
     data = request.data
+    if "entries" in data:
+        _required(data, "staff_id", "idempotency_key")
+        entries = data["entries"]
+        if not isinstance(entries, list) or any(not isinstance(row, dict) for row in entries):
+            raise BadRequest("투입 목록 형식이 올바르지 않습니다.")
+        for row in entries:
+            row["lot_id"] = _int(row.get("lot_id"), "lot_id", required=True)
+            row["bom_line_id"] = _int(row.get("bom_line_id"), "bom_line_id")
+        add_usages(
+            batch_id=pk,
+            entries=entries,
+            staff_id=_int(data["staff_id"], "staff_id"),
+            idempotency_key=str(data["idempotency_key"]),
+        )
+        return _batch_response(pk, status=201)
     _required(data, "lot_id", "quantity", "staff_id", "idempotency_key")
     add_usage(
         batch_id=pk,

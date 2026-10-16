@@ -5,7 +5,7 @@ MVP 범위 (10/15): 입고부터 제조 완료된 벌크(반제품) 산출까지
 없다(취소·완료로 닫기만). 한 제조배치의 산출은 제조 시작일로 채번한 LOT 하나: 산출을 추가하면
 같은 LOT 에 수량이 더해진다.
 
-Flow (사후 입력 중심 — a batch can be created and completed on the same screen):
+Flow (계획 등록 → 가용재고 검사 → 시작 → 투입·산출 → 완료):
 
     create_batch()     PLANNED      batch number B-{item_code}-{yyMMdd}{A..}
     start_batch()      IN_PROGRESS  started_at; manufactured_date = 생산 시작일 (LOT·소비기한 기준);
@@ -13,12 +13,11 @@ Flow (사후 입력 중심 — a batch can be created and completed on the same 
     add_usage()        PRODUCTION_USE movement + production_material_usages row
     add_output()       PRODUCTION_OUTPUT movement + production_outputs row. The first output
                                     creates the batch's PRODUCED LOT; later ones add to it
-    complete_batch()   COMPLETED    needs output (net > 0). From PLANNED (사후 입력) it also
-                                    tells the document app, as start_batch would have
+    complete_batch()   COMPLETED    needs output (net > 0) and all stock-managed components
     cancel_batch()     CANCELLED    only when every usage / output has been corrected to 0
 
 제조일(manufactured_date) = 생산 시작일 (10/14 PM 미팅 B1·B2·C2). LOT 번호와 소비기한은 이 날짜로
-정한다. 사후 입력(계획 상태에서 바로 산출)은 배치 등록 때 제조일을 넣어야 산출할 수 있다.
+정한다. 과거 제조일을 지정해도 생산 시작 검사를 거친 후에만 투입·산출할 수 있다.
 근무조(shift)는 10/14 폐지: 서비스·API 에서 받지 않는다 (DB 열은 문서 뷰 계약 때문에 NULL 로 남김).
 
 A batch on hold (holds.py) takes no new usage or output until the hold is released.
@@ -31,7 +30,10 @@ idempotent per idempotency_key: the same request again returns the first row.
 Messages in InventoryError are shown to users, so they are in Korean.
 """
 
+import hashlib
+
 from django.db import connection, transaction
+from django.db.models import Q
 
 from . import document_bridge
 from .errors import InventoryError, NotFound
@@ -64,8 +66,9 @@ from .movements import (
     _staff,
     current_stock_e6,
 )
+from .quantity import from_e6
 from .shelf_life import expiration_for
-from .stock import FEFO_ORDER_SQL
+from .stock import FEFO_ORDER_SQL, lot_stock
 
 OPEN_STATUSES = {BatchStatus.PLANNED, BatchStatus.IN_PROGRESS}
 # 제조배치를 만들 수 있는 품목 유형. 현재 기준정보 분류(v6.1: 자사 제조품 = 3코드 반제품,
@@ -243,6 +246,11 @@ def start_batch(*, batch_id, staff_id, started_at=None, manufactured_date=None):
             raise InventoryError(PACKAGING_OUT_OF_SCOPE)
         staff = _staff(staff_id)
         when = _occurred_at(started_at)
+        if open_batch_hold(batch):
+            raise InventoryError("보류 중인 배치는 시작할 수 없습니다.")
+        readiness = material_readiness(batch)
+        if not readiness["ready"]:
+            raise InventoryError(readiness["message"])
         before = {"status": batch.status}
         batch.status = BatchStatus.IN_PROGRESS
         batch.started_at = when
@@ -267,6 +275,18 @@ def complete_batch(*, batch_id, staff_id, completed_at=None):
         output_e6, _rows = _net(ProductionOutput, batch)
         if output_e6 <= 0:
             raise InventoryError("산출이 없는 배치는 완료할 수 없습니다. 산출을 먼저 등록하세요.")
+        if open_batch_hold(batch):
+            raise InventoryError("보류 중인 배치는 완료할 수 없습니다.")
+        summary = batch_summary(batch.pk)
+        if not summary["bom_check"] or not summary["bom_check"]["lines"]:
+            raise InventoryError("BOM 구성 없이 생산을 완료할 수 없습니다.")
+        missing = [
+            r["line"].component_item.name
+            for r in summary["bom_check"]["lines"]
+            if r["stock_managed"] and r["standard_e6"] > 0 and r["actual_e6"] <= 0
+        ]
+        if missing:
+            raise InventoryError("필수 원료 투입 누락: " + ", ".join(missing))
         when = _occurred_at(completed_at)
         if not batch.manufactured_date:  # an output exists, so add_output already required it
             raise InventoryError("제조일(생산 시작일)이 없는 배치는 완료할 수 없습니다.")
@@ -353,8 +373,12 @@ def add_usage(
                 quantity_e6,
             ):
                 raise InventoryError("같은 요청 키로 다른 내용의 투입이 이미 등록되어 있습니다.")
+            if bom_line_id is not None and usage.bom_line_id != bom_line_id:
+                raise InventoryError("같은 요청 키로 BOM 연결을 변경할 수 없습니다.")
             return usage
         batch = _batch(batch_id, lock_open=True)
+        if batch.status != BatchStatus.IN_PROGRESS:
+            raise InventoryError("생산을 시작한 뒤 투입할 수 있습니다.")
         lot = _lot(lot_id)
         staff = _staff(staff_id)
         when = _occurred_at(occurred_at)
@@ -369,19 +393,8 @@ def add_usage(
             raise InventoryError(
                 f"소비기한이 지난 LOT입니다: {lot.lot_number} (소비기한 {lot.expiration_date})"
             )
-        bom_line = None
-        if bom_line_id:
-            bom_line = BomLine.objects.filter(pk=bom_line_id).first()
-            if bom_line is None or bom_line.bom_id != batch.bom_id:
-                raise InventoryError("배치의 BOM 구성이 아닙니다.")
-            if (
-                bom_line.component_item_id != lot.item_id
-                and not BomLineAlternative.objects.filter(
-                    bom_line=bom_line, item_id=lot.item_id
-                ).exists()
-            ):
-                raise InventoryError("BOM 구성 품목과 투입 LOT의 품목이 다릅니다.")
-            _component_quantity(quantity_e6, lot.item.base_unit, bom_line.component_item.base_unit)
+        bom_line = resolve_bom_line(batch, lot.item_id, bom_line_id)
+        _component_quantity(quantity_e6, lot.item.base_unit, bom_line.component_item.base_unit)
         _check_outflow(lot, quantity_e6, when)
         movement = StockMovement.objects.create(
             lot=lot,
@@ -418,7 +431,7 @@ def add_output(
     first output (later ones may repeat the same values or leave them out).
     LOT number: the PRODUCED rule (제조일 + 생산 순번) unless one is given.
     The base date is the batch's manufacturing date = 생산 시작일. A batch that was not started
-    (사후 입력) must have it set at creation; the output time is not used as a fallback.
+    must first pass start_batch; the output time is not used as a fallback.
     Expiration: given, else manufacturing date + the item's shelf life (shelf_life.py), else none.
     The new LOT is AVAILABLE (no product inspection flow yet).
     """
@@ -432,6 +445,8 @@ def add_output(
                 raise InventoryError("같은 요청 키로 다른 내용의 산출이 이미 등록되어 있습니다.")
             return output
         batch = _batch(batch_id, lock_open=True)
+        if batch.status != BatchStatus.IN_PROGRESS:
+            raise InventoryError("생산을 시작한 뒤 산출할 수 있습니다.")
         staff = _staff(staff_id)
         when = _occurred_at(occurred_at)
         item = batch.item
@@ -493,6 +508,167 @@ def add_output(
 # ---------------------------------------------------------------------------
 
 
+def resolve_bom_line(batch, item_id, line_id=None):
+    lines = (
+        BomLine.objects.filter(bom_id=batch.bom_id)
+        .filter(Q(component_item_id=item_id) | Q(alternatives__item_id=item_id))
+        .select_related("component_item")
+        .distinct()
+    )
+    if line_id is not None:
+        lines = lines.filter(pk=line_id)
+    matches = list(lines)
+    if not matches:
+        raise InventoryError("해당 BOM의 원료 또는 등록된 대체 원료만 투입할 수 있습니다.")
+    if len(matches) != 1:
+        raise InventoryError("여러 BOM 행에 연결된 원료입니다. BOM 행을 선택하세요.")
+    return matches[0]
+
+
+def add_usages(*, batch_id, entries, staff_id, idempotency_key):
+    """All-or-nothing request, including durable replay of the complete payload.
+
+    SQLite IMMEDIATE serializes availability checks and writes across workers.
+    """
+    if not isinstance(entries, list) or not 1 <= len(entries) <= 100:
+        raise InventoryError("투입 목록은 1~100행이어야 합니다.")
+    normalized = []
+    for row in entries:
+        if not isinstance(row, dict) or not row.get("lot_id"):
+            raise InventoryError("각 투입 행에 LOT이 필요합니다.")
+        normalized.append(
+            {
+                "lot_id": int(row["lot_id"]),
+                "quantity_e6": _quantity_e6(row.get("quantity")),
+                "bom_line_id": int(row["bom_line_id"]) if row.get("bom_line_id") else None,
+            }
+        )
+    if len({r["lot_id"] for r in normalized}) != len(normalized):
+        raise InventoryError("같은 LOT은 한 번만 선택하세요.")
+    key = _key("BULK_USE", idempotency_key)
+    digest = hashlib.sha256(key.encode()).hexdigest()
+    payload = {"batch_id": batch_id, "staff_id": staff_id, "entries": normalized}
+    with transaction.atomic():
+        previous = AuditLog.objects.filter(table_name="usage_requests", record_id=digest).first()
+        if previous:
+            if previous.after_json != payload:
+                raise InventoryError("같은 요청 키로 다른 일괄 투입을 등록할 수 없습니다.")
+            return
+        for index, row in enumerate(normalized):
+            add_usage(
+                batch_id=batch_id,
+                lot_id=row["lot_id"],
+                quantity=from_e6(row["quantity_e6"]),
+                staff_id=staff_id,
+                bom_line_id=row["bom_line_id"],
+                idempotency_key=f"bulk-{digest}-{index}",
+            )
+        AuditLog.objects.create(
+            table_name="usage_requests",
+            record_id=digest,
+            action="INSERT",
+            after_json=payload,
+            staff_id=staff_id,
+        )
+
+
+def material_readiness(batch):
+    """Plan quantities and usable stock; a shared item is never counted twice.
+
+    Max-flow allocates shared substitutes across BOM lines in a common mass unit.
+    This is a snapshot, not a stock reservation.
+    """
+    if not batch.bom_id or not batch.planned_quantity_e6:
+        return {
+            "ready": False,
+            "message": "생산 시작에는 BOM과 계획 수량이 필요합니다.",
+            "lines": [],
+        }
+    requirements = standard_requirements(bom_id=batch.bom_id, quantity_e6=batch.planned_quantity_e6)
+    stocks = {}
+    for lot in lot_stock(usable_only=True):
+        stocks[lot.item_id] = stocks.get(lot.item_id, 0) + lot.quantity_e6
+    graph = {}
+
+    def edge(a, b, cap):
+        graph.setdefault(a, {})[b] = cap
+        graph.setdefault(b, {})[a] = 0
+
+    def factor(unit):
+        return 1000 if unit == "kg" else 1
+
+    rows = []
+    for line, need in requirements:
+        component = line.component_item
+        allowed = [component, *[a.item for a in line.alternatives.select_related("item")]]
+        available = 0
+        for item in allowed:
+            amount = stocks.get(item.pk, 0)
+            if item.base_unit != component.base_unit and {item.base_unit, component.base_unit} != {
+                "kg",
+                "g",
+            }:
+                raise InventoryError("대체 원료와 BOM 구성 품목의 단위를 환산할 수 없습니다.")
+            available += amount * factor(item.base_unit) // factor(component.base_unit)
+            if component.is_stock_managed:
+                node = ("item", item.pk)
+                if node not in graph:
+                    edge("source", node, amount * factor(item.base_unit))
+                edge(node, ("line", line.pk), need * factor(component.base_unit))
+        if component.is_stock_managed:
+            edge(("line", line.pk), "sink", need * factor(component.base_unit))
+        rows.append(
+            {
+                "bom_line_id": line.pk,
+                "item_id": component.pk,
+                "item_code": component.item_code,
+                "name": component.name,
+                "unit": component.base_unit,
+                "required": str(from_e6(need)),
+                "available": str(from_e6(available)),
+                "stock_managed": component.is_stock_managed,
+                "allowed_items": [
+                    {"id": i.pk, "item_code": i.item_code, "name": i.name, "base_unit": i.base_unit}
+                    for i in allowed
+                ],
+            }
+        )
+    while True:
+        parents, queue = {"source": None}, ["source"]
+        for node in queue:
+            for other, cap in graph.get(node, {}).items():
+                if cap > 0 and other not in parents:
+                    parents[other] = node
+                    queue.append(other)
+        if "sink" not in parents:
+            break
+        node, amount = "sink", None
+        while parents[node] is not None:
+            parent = parents[node]
+            amount = min(amount, graph[parent][node]) if amount is not None else graph[parent][node]
+            node = parent
+        node = "sink"
+        while parents[node] is not None:
+            parent = parents[node]
+            graph[parent][node] -= amount
+            graph[node][parent] += amount
+            node = parent
+    for row in rows:
+        residual = graph.get(("line", row["bom_line_id"]), {}).get("sink", 0)
+        # Round shortage up to the component's supported precision.
+        divisor = factor(row["unit"])
+        row["shortfall"] = str(from_e6((residual + divisor - 1) // divisor))
+    missing = [r for r in rows if float(r["shortfall"]) > 0]
+    return {
+        "ready": bool(rows) and not missing,
+        "lines": rows,
+        "message": "가용재고 부족: "
+        + ", ".join(f"{r['name']} {r['shortfall']}{r['unit']}" for r in missing)
+        if missing
+        else ("시작 가능 (재고 예약 아님)" if rows else "BOM 구성 원료가 없습니다."),
+    }
+
+
 def fefo_candidates(*, item_id, quantity, on_date=None):
     """Usable LOTs of the item to cover `quantity`, earliest expiration first (FEFO).
 
@@ -537,7 +713,10 @@ def standard_requirements(*, bom_id, quantity=None, quantity_e6=None):
     if bom is None:
         raise NotFound(f"BOM을 찾을 수 없습니다. (id={bom_id})")
     lines = BomLine.objects.filter(bom=bom).select_related("component_item").order_by("line_no")
-    return [(line, line.quantity_e6 * quantity_e6 // bom.base_quantity_e6) for line in lines]
+    return [
+        (line, (line.quantity_e6 * quantity_e6 + bom.base_quantity_e6 - 1) // bom.base_quantity_e6)
+        for line in lines
+    ]
 
 
 def batch_summary(batch_id):

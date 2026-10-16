@@ -122,6 +122,7 @@ const InventoryApiPage = {
     const itemOptions = ['<option value="">전체 품목</option>', ...items.map((i) =>
       `<option value="${i.id}" ${String(s.itemId) === String(i.id) ? 'selected' : ''}>${this.esc(i.item_code)} ${this.esc(i.name)}</option>`)].join('');
     const parts = [
+      this.field('품목명·코드 검색', `<input type="search" class="form-control" placeholder="이름 또는 코드" oninput="InventoryApiPage.searchOptions('invItem', this.value)">`),
       this.field('품목', `<select id="invItem" class="form-control" style="min-width:200px;" onchange="InventoryApiPage.set('itemId', this.value)">${itemOptions}</select>`),
       this.field('LOT 번호', `<input id="invLot" class="form-control" style="width:150px;font-family:monospace;" value="${this.esc(s.lotNumber)}" placeholder="일부만 입력" onkeydown="if(event.key==='Enter'){InventoryApiPage.set('lotNumber', this.value)}" onchange="InventoryApiPage.set('lotNumber', this.value)" />`),
     ];
@@ -175,13 +176,13 @@ const InventoryApiPage = {
       await this.loadItems(type, host);
       if (!current()) return;
       const s = this.state();
-      const [stock, ledger] = await Promise.all([this.fetchStock(), this.fetchLedger()]);
+      const [stock, ledger, totals] = await Promise.all([this.fetchStock(), this.fetchLedger(), this.getJson('/stock/items/', {item_type: this.TYPES[this.type].itemTypes.join(','), item_id: s.itemId})]);
       if (!current()) return;
       this.stockRows = stock.results;
       const selection = s.selectedLot ? `<span class="badge badge-info">LOT ${this.esc(s.selectedLot.number)}</span>
         <button class="btn btn-secondary btn-sm" id="invClearLot" onclick="InventoryApiPage.selectLot(null)">LOT 선택 해제</button>` : '<span>전체 LOT</span>';
       document.getElementById('invApiContent').innerHTML = `
-        <section aria-labelledby="invStockTitle"><h2 id="invStockTitle" style="font-size:1rem;">LOT별 현재 재고</h2>${this.renderStock(stock)}</section>
+        ${this.renderTotals(totals)}<section aria-labelledby="invStockTitle"><h2 id="invStockTitle" style="font-size:1rem;">LOT별 현재 재고</h2>${this.renderStock(stock)}</section>
         <section aria-labelledby="invLedgerTitle" style="margin-top:1.25rem;">
           <div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;margin-bottom:0.6rem;"><h2 id="invLedgerTitle" style="font-size:1rem;margin:0;">수불 이력</h2>${selection}</div>
           ${this.renderLedger(ledger)}
@@ -247,19 +248,49 @@ const InventoryApiPage = {
       this.qaReceiptKey = crypto.randomUUID();
       App.showModal('QA 입고 등록', `<form id="qaReceiptForm">
         <p>검증용 입고입니다. 저장하면 수불·재고와 입고 문서 3종이 연결됩니다.</p>
-        ${this.field('품목', `<select name="item_id" class="form-control">${options(items.results.filter((i) => i.is_stock_managed && ['RAW','PACKAGING','SEMI'].includes(i.item_type)), (i) => `${i.item_code} ${i.name} (${i.base_unit})`)}</select>`)}
+        ${this.field('품목명·코드 검색', `<input type="search" class="form-control" oninput="InventoryApiPage.searchOptions('qaReceiptItem', this.value)" placeholder="이름 또는 코드">`)}
+        ${this.field('품목', `<select id="qaReceiptItem" name="item_id" class="form-control">${options(items.results.filter((i) => i.is_stock_managed && ['RAW','PACKAGING','SEMI'].includes(i.item_type)), (i) => `${i.item_code} ${i.name} (${i.base_unit})`)}</select>`)}
         ${this.field('공급처', `<select name="supplier_id" class="form-control">${options(suppliers.results, (i) => i.name)}</select>`)}
         ${this.field('담당자', `<select name="staff_id" class="form-control">${options(staff.results, (i) => i.name)}</select>`)}
         ${this.field('입고일', `<input name="received_date" type="date" class="form-control" value="${this.today()}" required>`)}
         ${this.field('입고량 (선택 품목 기준단위)', '<input name="quantity" type="number" min="0" step="any" class="form-control" required>')}
-        ${this.field('소비기한 유무', '<select name="expiration_status" class="form-control" required><option value="">선택하세요</option><option value="KNOWN">있음</option><option value="NONE">없음으로 확인</option></select>')}
-        ${this.field('소비기한 (있음 선택 시 필수)', '<input name="expiration_date" type="date" class="form-control">')}
+        ${this.field('소비기한 유무', '<select name="expiration_status" class="form-control" required onchange="InventoryApiPage.changeExpiration(this.value)"><option value="">선택하세요</option><option value="KNOWN">있음</option><option value="NONE">없음으로 확인</option></select>')}
+        ${this.field('소비기한 (있음 선택 시 필수)', '<input name="expiration_date" type="date" class="form-control" disabled>')}
         ${this.field('입고 검사 판정', '<select name="judgment" class="form-control"><option value="">미판정 — 문서함에서 육안검사 작성</option><option value="PASS">적합</option><option value="FAIL">부적합</option></select>')}
         <p id="qaReceiptError" role="alert" style="color:var(--color-danger);"></p>
         <button type="submit" id="qaReceiptSave" class="btn btn-primary">QA 입고 저장</button>
       </form>`);
       document.getElementById('qaReceiptForm').addEventListener('submit', (e) => { e.preventDefault(); this.saveQaReceipt(); });
     } catch (error) { App.showToast('error', '입고 준비 실패', error.message); }
+  },
+
+  searchOptions(id, query) {
+    const select = document.getElementById(id);
+    if (!select._allOptions) select._allOptions = [...select.options].map(o => ({value: o.value, text: o.textContent}));
+    const current = select.value;
+    select.innerHTML = select._allOptions.filter(o => !o.value || o.value === current || o.text.toLowerCase().includes(query.toLowerCase())).map(o => `<option value="${o.value}" ${o.value === current ? 'selected' : ''}>${this.esc(o.text)}</option>`).join('');
+    if (id === 'invItem') {
+      select.value = [...select.options].some(o => o.value === current) ? current : '';
+    }
+  },
+
+  changeExpiration(status) {
+    const input = document.querySelector('#qaReceiptForm [name="expiration_date"]');
+    input.disabled = status !== 'KNOWN';
+    input.required = status === 'KNOWN';
+    if (status !== 'KNOWN') input.value = '';
+  },
+
+  renderTotals(data) {
+    return `<section><h2 style="font-size:1rem;">품목별 재고 합계 (LOT·상태 필터 적용 전)</h2><div class="table-wrapper"><table class="data-table"><thead><tr><th>품목</th><th>총재고</th><th>사용 가능</th><th>사용 불가 (검사대기 포함)</th><th>단위</th></tr></thead><tbody>
+      ${data.results.map(r => `<tr><td>${this.esc(r.item.item_code)} ${this.esc(r.item.name)}</td><td>${this.esc(r.total)}</td><td>${this.esc(r.usable)}</td><td>${this.esc(this.addQuantities(r.quarantine, r.unusable))}</td><td>${this.esc(r.unit)}</td></tr>`).join('')}
+      </tbody></table></div><p>부적합 판정은 사용 가능 여부만 변경합니다. 물리적 재고는 반품·폐기 등 실제 출고 시 차감합니다.</p></section>`;
+  },
+
+  addQuantities(a, b) {
+    const scaled = v => { const [n, f = ''] = String(v).split('.'); return BigInt(n) * 1000000n + BigInt(f.padEnd(6, '0')); };
+    const sum = scaled(a) + scaled(b);
+    return `${sum / 1000000n}.${String(sum % 1000000n).padStart(6, '0')}`.replace(/\.?0+$/, '');
   },
 
   async saveQaReceipt() {
@@ -365,7 +396,7 @@ const InventoryApiPage = {
     return `<div class="card" style="padding:0;">
       <div style="padding:0.6rem 1rem;color:var(--text-muted);font-size:0.78rem;">${this.esc(data.from)} ~ ${this.esc(data.to)} · 개별 수불 ${lines.length}건 · 잔량은 각 수불 발생 직후의 LOT 잔량</div>
       <div class="table-wrapper" style="max-height:420px;overflow:auto;"><table class="data-table" id="invLedgerTable">
-        <thead><tr><th>수불일자</th><th>품목코드</th><th>품목명</th><th>LOT 번호</th><th>구분</th><th>입고(+)</th><th>출고(-)</th><th>수불 후 잔량</th><th>단위</th><th>담당자</th><th>사유</th></tr></thead>
+        <thead><tr><th>수불일자</th><th>품목코드</th><th>품목명</th><th>LOT 번호</th><th>구분</th><th>입고(+)</th><th>출고(-)</th><th>수불 후 LOT 잔량</th><th>단위</th><th>담당자</th><th>사유</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="11" style="text-align:center;padding:2rem;">선택한 기간 안에 수불 이력이 없습니다. 현재 재고에는 이월 재고가 포함될 수 있습니다.</td></tr>'}</tbody>
       </table></div></div>`;
   },

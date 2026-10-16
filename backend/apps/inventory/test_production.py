@@ -83,9 +83,24 @@ class ProductionTestCase(TestCase):
     def batch(self, item, process="MANUFACTURE", **extra):
         # 제조일 = 생산 시작일 (10/14). Tests enter it at creation unless they test its absence.
         extra.setdefault("manufactured_date", self.today)
+        extra.setdefault("planned_quantity", "1")
+        if item == self.semi and not Bom.objects.filter(item=item).exists():
+            bom = Bom.objects.create(
+                item=item,
+                version=999,
+                base_quantity_e6=to_e6(1000),
+                effective_from=self.today - datetime.timedelta(days=365),
+            )
+            BomLine.objects.create(
+                bom=bom, line_no=1, component_item=self.raw, quantity_e6=to_e6(1)
+            )
         return create_batch(item_id=item.pk, process_type=process, staff_id=self.staff.pk, **extra)
 
     def use(self, batch, lot, quantity, key, **extra):
+        # Service-rule tests enter production explicitly before recording inputs.
+        batch.refresh_from_db()
+        if batch.status == BatchStatus.PLANNED:
+            start_batch(batch_id=batch.pk, staff_id=self.staff.pk)
         return add_usage(
             batch_id=batch.pk,
             lot_id=lot.pk,
@@ -96,6 +111,14 @@ class ProductionTestCase(TestCase):
         )
 
     def output(self, batch, quantity, key, **extra):
+        batch.refresh_from_db()
+        if batch.status == BatchStatus.PLANNED and batch.manufactured_date:
+            # Output-number tests need an eligible input supply before starting.
+            from .production import material_readiness
+
+            if not material_readiness(batch)["ready"]:
+                self.receive(self.raw, "1", f"output-supply-{batch.pk}")
+            start_batch(batch_id=batch.pk, staff_id=self.staff.pk)
         return add_output(
             batch_id=batch.pk,
             quantity=quantity,
@@ -165,11 +188,11 @@ class BatchFlowTests(ProductionTestCase):
         second = self.batch(self.semi)
         self.assertEqual(self.output(second, "1", "o3").lot.lot_number, f"{day}B")
         self.assertEqual(
-            AuditLog.objects.filter(table_name="production_batches").count(), 4
+            AuditLog.objects.filter(table_name="production_batches").count(), 5
         )  # 2 creates, 1 start, 1 complete
         self.assert_consistent()
 
-    def test_completed_after_the_fact_without_start(self):
+    def test_historical_manufactured_date_with_explicit_start(self):
         made = self.today - datetime.timedelta(days=1)
         raw_lot = self.receive(self.raw, "10", "r1", day=made)
         batch = self.batch(self.semi, manufactured_date=made)
@@ -178,7 +201,7 @@ class BatchFlowTests(ProductionTestCase):
         self.assertEqual(lot.lot_number, f"{made:%y%m%d}A")
         with patch("apps.inventory.document_bridge.batch_started") as hook:
             done = complete_batch(batch_id=batch.pk, staff_id=self.staff.pk)
-        hook.assert_called_once_with(batch_id=batch.pk, staff_id=self.staff.pk)
+        hook.assert_not_called()  # already created by explicit start
         self.assertEqual(done.manufactured_date, made)
         self.assertIsNotNone(done.started_at)
 
@@ -188,6 +211,7 @@ class BatchFlowTests(ProductionTestCase):
         with self.assertRaises(InventoryError):
             self.output(batch, "10", "o1")
         # 시작하면 시작일이 제조일. 며칠 뒤 산출해도 LOT·소비기한은 시작일 기준
+        self.receive(self.raw, "1", "start-supply")
         started = self.today - datetime.timedelta(days=3)
         start_batch(
             batch_id=batch.pk,
@@ -220,6 +244,7 @@ class BatchFlowTests(ProductionTestCase):
         batch = self.batch(self.semi)
         with self.assertRaises(InventoryError):
             complete_batch(batch_id=batch.pk, staff_id=self.staff.pk)
+        self.use(batch, raw_lot, "1", "required-input")
         self.output(batch, "1", "o1")
         complete_batch(batch_id=batch.pk, staff_id=self.staff.pk)
         with self.assertRaises(InventoryError):

@@ -138,6 +138,42 @@ class HostedQaSeedTests(TestCase):
         self.assertEqual(AuditLog.objects.filter(table_name="qa_dataset").count(), 1)
         self.assertEqual(marker.after_json["stage"], "prepare")
 
+    def test_deer_powder_rejects_red_ginseng_without_bom_line(self):
+        from .errors import InventoryError
+        from .models import Inventory, ProductionMaterialUsage
+        from .production import add_usage, create_batch, start_batch
+
+        self.seed()
+        staff = Staff.objects.get(staff_code="QA_REF")
+        batch = create_batch(
+            item_id=Item.objects.get(item_code="3000014").pk,
+            staff_id=staff.pk,
+            planned_quantity="1",
+        )
+        start_batch(batch_id=batch.pk, staff_id=staff.pk)
+        ginseng = Lot.objects.filter(item__item_code="1000015").first()
+        before = (
+            StockMovement.objects.count(),
+            ProductionMaterialUsage.objects.count(),
+            Inventory.objects.get(lot=ginseng).quantity_e6,
+        )
+        with self.assertRaisesRegex(InventoryError, "BOM"):
+            add_usage(
+                batch_id=batch.pk,
+                lot_id=ginseng.pk,
+                quantity="0.1",
+                staff_id=staff.pk,
+                idempotency_key="wrong-red-ginseng",
+            )
+        self.assertEqual(
+            before,
+            (
+                StockMovement.objects.count(),
+                ProductionMaterialUsage.objects.count(),
+                Inventory.objects.get(lot=ginseng).quantity_e6,
+            ),
+        )
+
     def test_prepare_to_run_then_prepare_does_not_replay_completed_activity(self):
         self.seed()
         self.seed("run")

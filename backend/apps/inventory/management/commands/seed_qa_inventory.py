@@ -394,6 +394,7 @@ class Command(BaseCommand):
                 item_id=self.items[code].pk,
                 staff_id=self.staff.pk,
                 bom_id=self.boms[code].pk,
+                planned_quantity={"3000014": "1", "3000011": "5", "3000017": "30"}[code],
                 manufactured_date=self.day - datetime.timedelta(days=1),
                 notes=marker,
             )

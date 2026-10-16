@@ -87,7 +87,8 @@ class HoldTests(ProductionTestCase):
         ):
             with self.assertRaises(InventoryError):
                 action()
-        complete_batch(batch_id=batch.pk, staff_id=self.staff.pk)  # completing is still allowed
+        with self.assertRaises(InventoryError):
+            complete_batch(batch_id=batch.pk, staff_id=self.staff.pk)
         self.assertEqual(
             hold_batch(
                 batch_id=batch.pk, source_type="MANUAL", reason="x", staff_id=self.staff.pk

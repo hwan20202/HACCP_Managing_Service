@@ -362,7 +362,12 @@ class ProductionApiTests(ApiTestCase):
         lot_id = self.receive_pass("r1", "50")
         created = self.post(
             "/batches/",
-            {"item_id": self.semi.pk, "process_type": "manufacture", "staff_id": self.staff.pk},
+            {
+                "item_id": self.semi.pk,
+                "process_type": "manufacture",
+                "staff_id": self.staff.pk,
+                "planned_quantity": "2000",
+            },
         )
         self.assertEqual(created.status_code, 201, created.content.decode())
         batch = created.json()
@@ -449,7 +454,7 @@ class ProductionApiTests(ApiTestCase):
             {"quantity": "1", "staff_id": self.staff.pk, "idempotency_key": "o1"},
         )
         self.assertEqual(no_date.status_code, 400)
-        self.assertIn("생산 시작일", no_date.json()["error"]["message"])
+        self.assertIn("생산을 시작", no_date.json()["error"]["message"])
         missing = self.post(f"/batches/{batch['id']}/cancel/", {"staff_id": self.staff.pk})
         self.assertEqual(missing.status_code, 400)
         cancelled = self.post(
