@@ -54,9 +54,10 @@ class BulkConcurrencyTests(TransactionTestCase):
         self.batch = create_batch(item_id=semi.pk, staff_id=self.staff.pk, planned_quantity="2")
         start_batch(batch_id=self.batch.pk, staff_id=self.staff.pk)
 
-    def race(self, same_key):
+    def race(self, same_key, reviewed=False):
         locked, release = threading.Event(), threading.Event()
         results = []
+        line_id = self.batch.bom.lines.get().pk
 
         def worker(first):
             close_old_connections()
@@ -69,12 +70,33 @@ class BulkConcurrencyTests(TransactionTestCase):
                     add_usages(
                         batch_id=self.batch.pk,
                         staff_id=self.staff.pk,
-                        entries=[{"lot_id": lot.pk, "quantity": "1"} for lot in self.lots],
+                        entries=[
+                            {
+                                "lot_id": lot.pk,
+                                "quantity": "1",
+                                **({"bom_line_id": line_id} if reviewed else {}),
+                            }
+                            for lot in self.lots
+                        ],
                         idempotency_key=f"{self.batch.pk}-" + ("same" if same_key else str(first)),
+                        **(
+                            {
+                                "expected_lines": [
+                                    {
+                                        "bom_line_id": line_id,
+                                        "actual": "0",
+                                        "standard": "2",
+                                        "quantity": "2",
+                                    }
+                                ]
+                            }
+                            if reviewed
+                            else {}
+                        ),
                     )
                 results.append("ok")
-            except InventoryError:
-                results.append("shortage")
+            except InventoryError as error:
+                results.append("stale" if reviewed and "변경" in str(error) else "shortage")
             except Exception as error:
                 results.append(repr(error))
             finally:
@@ -93,7 +115,9 @@ class BulkConcurrencyTests(TransactionTestCase):
             first.join(15)
             second.join(15)
         self.assertFalse(first.is_alive() or second.is_alive())
-        self.assertCountEqual(results, ["ok", "ok"] if same_key else ["ok", "shortage"])
+        self.assertCountEqual(
+            results, ["ok", "ok"] if same_key else ["ok", "stale" if reviewed else "shortage"]
+        )
         self.assertEqual(ProductionMaterialUsage.objects.filter(batch=self.batch).count(), 2)
         self.assertEqual(
             list(Inventory.objects.filter(lot__in=self.lots).values_list("quantity_e6", flat=True)),
@@ -105,3 +129,6 @@ class BulkConcurrencyTests(TransactionTestCase):
 
     def test_concurrent_double_click_is_one_bulk_request(self):
         self.race(True)
+
+    def test_reviewed_draft_rejects_second_request_with_a_different_key(self):
+        self.race(False, reviewed=True)

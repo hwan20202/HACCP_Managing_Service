@@ -44,6 +44,7 @@ const ProductionApiPage = {
   docsError: '',
   trace: null,
   busy: false,
+  bulkUse: null,
 
   // ---------- 공통 ----------
   today() {
@@ -282,6 +283,7 @@ const ProductionApiPage = {
 
   // ---------- 상세 ----------
   async select(id) {
+    this.bulkUse = null;
     this.s.creating = false;
     this.updateLayout();
     const serial=this.selectSerial=(this.selectSerial||0)+1;
@@ -451,13 +453,14 @@ const ProductionApiPage = {
       ${check.lines.map((l) => `<tr><td>${l.line_no}</td><td>${this.esc(l.item.item_code)} ${this.esc(l.item.name)}</td><td style="text-align:right;">${this.esc(l.standard)}</td><td style="text-align:right;">${this.esc(l.actual)}</td><td>${this.esc(l.unit)}</td>
         <td>${l.stock_managed === false ? '<span class="badge badge-neutral">재고 아님</span>' : b.status === 'IN_PROGRESS' ? `<button class="btn btn-secondary btn-sm" onclick="ProductionApiPage.pickBomLine(${l.item.id})">투입량 확인</button>` : ''}</td></tr>`).join('')}
       </tbody></table></div>` : '';
-    const form = b.status === 'IN_PROGRESS' ? this.renderUseForm() : '';
+    const form = b.status === 'IN_PROGRESS' ? (this.bulkUse ? this.renderBulkUse() : this.renderUseForm()) : '';
     return `
       <div class="card" style="margin-bottom:0.75rem;" id="prodUsages">
         <div class="card-header"><div class="card-title">원료 투입 (${b.usages.length}건)</div></div>
         ${b.usages.length ? `<details><summary>등록된 투입 ${b.usages.length}건 보기</summary><div class="table-wrapper"><table class="data-table"><thead><tr><th>원료</th><th>LOT</th><th style="text-align:right;">투입</th><th style="text-align:right;">정정 반영</th><th>단위</th></tr></thead><tbody>${rows}</tbody></table></div></details>`
           : `<p style="font-size:0.8rem;color:var(--text-muted);">${b.status === 'PLANNED' ? '생산을 시작하면 투입할 수 있습니다.' : '투입 기록이 없습니다.'}</p>`}
-        ${bom}
+        ${b.status === 'IN_PROGRESS' ? '<p><button class="btn btn-primary" onclick="ProductionApiPage.prepareBulkUse()">남은 원료 일괄 투입</button></p>' : ''}
+        ${this.bulkUse ? '' : bom}
         ${form}
       </div>`;
   },
@@ -500,6 +503,7 @@ const ProductionApiPage = {
 
   async pickBomLine(itemId) {
     if(this.busy) return;
+    this.bulkUse=null;
     const line=this.detail.readiness.lines.find(l=>l.item_id===itemId);
     if(!line) return;
     this.s.use={lineId:line.bom_line_id,itemId:'',quantity:this.remaining(line),allocations:{},key:this.key(),manual:false};
@@ -599,6 +603,143 @@ const ProductionApiPage = {
       this.s.use={lineId:'',itemId:'',quantity:'',allocations:{},key:this.key()};
       this.fefo=null;
       await this.select(batchId);
+    });
+  },
+
+  // ---------- 여러 원료 검토 · 일괄 투입 ----------
+  async prepareBulkUse(recalculate=false) {
+    if(this.busy) return;
+    const batchId=this.detail.id, previous=this.bulkUse;
+    const lines=recalculate ? previous.rows.filter(r=>r.selected).map(r=>({bom_line_id:r.bom_line_id,quantity:r.quantity,item_id:r.item_id||null})) : undefined;
+    if(recalculate && !lines.length) return this.toast('error','일괄 투입','원료를 선택하세요.');
+    await this.run('남은 원료 불러오기',async()=>{
+      const result=await this.post(`/batches/${batchId}/bulk-allocation/`,lines?{lines}:{});
+      if(this.detail.id!==batchId || this.bulkUse!==previous) return;
+      const rows=result.lines.map(r=>({...r,selected:true,allocations:Object.fromEntries(r.results.map(l=>[l.lot_id,l.quantity]))}));
+      // Unselected rows stay visible and can be selected again without reloading the batch.
+      if(recalculate) rows.push(...previous.rows.filter(r=>!r.selected));
+      this.bulkUse={batchId,rows,key:this.key(),basis:this.detail.bom_check?.basis,basisQuantity:this.detail.bom_check?.basis_quantity};
+      this.renderDetail();
+      document.getElementById('prodBulkUse')?.scrollIntoView({behavior:'smooth',block:'nearest'});
+    });
+  },
+
+  bulkTotal(row) {
+    let total=0n;
+    for(const lot of row.choices) {
+      if(!Object.hasOwn(row.allocations,lot.lot_id)) continue;
+      let amount=this.scaled(row.allocations[lot.lot_id]);
+      if(amount===null || amount<=0n) return null;
+      if(lot.unit!==row.unit) {
+        if(lot.unit==='kg' && row.unit==='g') amount*=1000n;
+        else if(lot.unit==='g' && row.unit==='kg' && amount%1000n===0n) amount/=1000n;
+        else return null;
+      }
+      total+=amount;
+    }
+    return total;
+  },
+
+  bulkErrors() {
+    const rows=this.bulkUse?.rows.filter(r=>r.selected)||[], errors=[], lots=new Map();
+    if(!rows.length) return ['투입할 원료를 선택하세요.'];
+    let count=0;
+    for(const row of rows) {
+      const total=this.bulkTotal(row), quantity=this.scaled(row.quantity);
+      if(quantity===null || quantity<=0n || total!==quantity) errors.push(`${row.name}: LOT 합계와 이번 실제 투입량을 맞춰 주세요.`);
+      for(const lot of row.choices) {
+        if(!Object.hasOwn(row.allocations,lot.lot_id)) continue;
+        count++;
+        const amount=this.scaled(row.allocations[lot.lot_id]);
+        lots.set(lot.lot_id,{amount:(lots.get(lot.lot_id)?.amount||0n)+(amount||0n),stock:this.scaled(lot.stock),name:lot.lot_number});
+      }
+    }
+    for(const lot of lots.values()) if(lot.amount>lot.stock) errors.push(`${lot.name}: 여러 원료에 배분한 합계가 가용재고를 초과합니다.`);
+    if(count>100) errors.push('한 번에 투입할 LOT 행은 최대 100개입니다. 원료를 나눠 선택하세요.');
+    return errors;
+  },
+
+  renderBulkUse() {
+    const draft=this.bulkUse, errors=this.bulkErrors();
+    return `<div id="prodBulkUse" style="margin-top:1rem;border-top:1px solid var(--border-subtle);padding-top:1rem">
+      <h3>남은 원료 일괄 투입</h3>
+      <p style="font-size:0.8rem">기준: ${draft.basis==='output'?'산출량':'계획량'} ${this.esc(draft.basisQuantity)} ${this.esc(this.detail.unit)}</p>
+      <p>기준량에서 기등록량을 뺀 수량입니다. 실제 사용한 수량·LOT를 확인하고 다른 부분만 수정하세요. 저장 전에는 재고가 차감되지 않습니다.</p>
+      <fieldset ${draft.submitted?'disabled':''} style="border:0;padding:0;min-width:0">
+      <div class="table-wrapper" style="max-height:560px;overflow:auto"><table class="data-table"><thead style="position:sticky;top:0;z-index:1"><tr><th>선택</th><th>원료</th><th>기준량</th><th>기등록량</th><th>이번 실제 투입량</th><th>LOT 배분 · 상태</th></tr></thead><tbody>
+      ${draft.rows.map((r,index)=>`<tr>
+        <td><input type="checkbox" aria-label="${this.esc(r.name)} 선택" ${r.selected?'checked':''} onchange="ProductionApiPage.editBulk(${index},'selected',this.checked)"></td>
+        <td>${this.esc(r.item_code)} ${this.esc(r.name)}</td><td>${this.esc(r.standard)} ${this.esc(r.unit)}</td><td>${this.esc(r.actual)} ${this.esc(r.unit)}</td>
+        <td><span style="display:inline-flex;gap:0.25rem;align-items:center"><input class="form-control" style="width:110px" type="number" min="0" step="any" aria-label="${this.esc(r.name)} 이번 실제 투입량" value="${this.esc(r.quantity)}" oninput="ProductionApiPage.editBulk(${index},'quantity',this.value)"> ${this.esc(r.unit)}</span></td>
+        <td><div data-bulk-summary="${index}">${this.bulkSummary(r)}</div>
+          <details><summary>LOT · 배분량 직접 수정</summary>
+          ${r.allowed_items.length>1?`<label>자동 배분 원료 <select class="form-control" onchange="ProductionApiPage.editBulk(${index},'item_id',this.value)"><option value="">기준 원료 우선 · 부족 시 대체 원료</option>${r.allowed_items.map(i=>`<option value="${i.id}" ${String(r.item_id)===String(i.id)?'selected':''}>${this.esc(i.name)}</option>`).join('')}</select></label>`:''}
+          ${r.choices.map(l=>`<label style="display:block;margin:0.5rem 0">${this.esc(l.name)} · ${this.esc(l.lot_number)}<br>소비기한 ${this.esc(l.expiration_date||'없음')} · 가용 ${this.esc(l.stock)} ${this.esc(l.unit)}<input class="form-control" type="number" min="0" max="${this.esc(l.stock)}" step="any" aria-label="${this.esc(r.name)} ${this.esc(l.lot_number)} 배분량" value="${this.esc(r.allocations[l.lot_id]||'')}" oninput="ProductionApiPage.editBulkLot(${index},${l.lot_id},this.value)"> ${this.esc(l.unit)}</label>`).join('')||'<p>사용 가능한 LOT가 없습니다.</p>'}
+          </details></td></tr>`).join('')||'<tr><td colspan="6">BOM 기준 남은 투입량이 없습니다. 추가 투입은 원료별 ‘투입량 확인’을 이용하세요.</td></tr>'}
+      </tbody></table></div>
+      <p><button class="btn btn-secondary" onclick="ProductionApiPage.prepareBulkUse(true)">선택 원료 LOT 다시 자동 배분</button> <small>선택 원료의 수동 배분을 새 제안으로 바꿉니다.</small></p>
+      </fieldset>
+      <p id="prodBulkSelected">선택 ${draft.rows.filter(r=>r.selected).length} / ${draft.rows.length}개 원료</p>
+      ${draft.submitted?'<p>등록 요청 후에는 같은 내용으로 재시도합니다. 내용을 수정하려면 ‘남은 원료 일괄 투입’으로 다시 불러오세요.</p>':''}
+      <div id="prodBulkErrors" role="alert" style="color:var(--color-danger)">${errors.map(e=>`<p>${this.esc(e)}</p>`).join('')}</div>
+      <button class="btn btn-primary" id="prodBulkSave" ${errors.length?'disabled':''} onclick="ProductionApiPage.saveBulkUse()">확인한 원료 일괄 등록</button>
+      <button class="btn btn-secondary" onclick="ProductionApiPage.closeBulkUse()">닫기</button>
+      <p>등록하면 선택 원료의 재고가 함께 차감됩니다. 하나라도 실패하면 이번 요청 전체를 저장하지 않습니다.</p>
+    </div>`;
+  },
+
+  bulkSummary(row) {
+    const total=this.bulkTotal(row), quantity=this.scaled(row.quantity);
+    const picks=row.choices.filter(l=>row.allocations[l.lot_id]).map(l=>`${this.esc(l.lot_number)} ${this.esc(row.allocations[l.lot_id])} ${this.esc(l.unit)}`).join(' / ');
+    const shortage=quantity!==null && total!==null && quantity>total?this.unscaled(quantity-total):'0';
+    return `${picks||'배분된 LOT 없음'}<br><strong>${total!==null?this.esc(this.unscaled(total)):'수량 확인'} / ${this.esc(row.quantity)} ${this.esc(row.unit)}</strong> · ${total===quantity && quantity>0n?'배분 완료':`배분 확인 · 부족 ${this.esc(shortage)} ${this.esc(row.unit)}`}`;
+  },
+
+  editBulk(index,field,value) {
+    if(this.busy || this.bulkUse?.submitted) return;
+    this.bulkUse.rows[index][field]=value;
+    if(field==='item_id') {
+      this.bulkUse.rows[index].allocations={};
+      document.querySelectorAll('#prodBulkUse [data-bulk-summary]')[index]?.closest('td')?.querySelectorAll('input').forEach(el=>{el.value='';});
+    }
+    this.refreshBulkStatus();
+  },
+  editBulkLot(index,lotId,value) {
+    if(this.busy || this.bulkUse?.submitted) return;
+    const row=this.bulkUse.rows[index];
+    if(!value || this.scaled(value)===0n) delete row.allocations[lotId];
+    else row.allocations[lotId]=value;
+    this.refreshBulkStatus();
+  },
+  refreshBulkStatus() {
+    const errors=this.bulkErrors();
+    document.getElementById('prodBulkSave').disabled=errors.length>0;
+    document.getElementById('prodBulkSelected').textContent=`선택 ${this.bulkUse.rows.filter(r=>r.selected).length} / ${this.bulkUse.rows.length}개 원료`;
+    document.getElementById('prodBulkErrors').innerHTML=errors.map(e=>`<p>${this.esc(e)}</p>`).join('');
+    document.querySelectorAll('#prodBulkUse [data-bulk-summary]').forEach(el=>{el.innerHTML=this.bulkSummary(this.bulkUse.rows[Number(el.dataset.bulkSummary)]);});
+  },
+  async closeBulkUse() {
+    if(this.busy) return;
+    const submitted=this.bulkUse?.submitted;
+    this.bulkUse=null;
+    if(submitted) await this.select(this.detail.id);
+    else this.renderDetail();
+  },
+
+  async saveBulkUse() {
+    if(this.busy || !this.bulkUse) return;
+    const errors=this.bulkErrors();
+    if(errors.length) return this.toast('error','일괄 투입',errors[0]);
+    const draft=this.bulkUse, rows=draft.rows.filter(r=>r.selected), batchId=draft.batchId;
+    const entries=rows.flatMap(r=>Object.entries(r.allocations).map(([lotId,quantity])=>({lot_id:Number(lotId),quantity,bom_line_id:r.bom_line_id})));
+    const expected_lines=rows.map(r=>({bom_line_id:r.bom_line_id,actual:r.actual,standard:r.standard,quantity:r.quantity}));
+    await this.run('원료 일괄 투입',async()=>{
+      draft.payload ||= {entries,expected_lines,staff_id:Number(this.s.staffId),idempotency_key:draft.key};
+      draft.submitted=true;
+      this.renderDetail();
+      await this.post(`/batches/${batchId}/usages/`,draft.payload);
+      this.toast('success','원료 투입 완료',`${rows.length}개 원료 · ${entries.length}개 LOT 투입 기록 저장`);
+      if(this.detail.id===batchId) await this.select(batchId);
     });
   },
 

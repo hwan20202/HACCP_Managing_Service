@@ -66,7 +66,7 @@ from .movements import (
     _staff,
     current_stock_e6,
 )
-from .quantity import from_e6
+from .quantity import from_e6, to_e6
 from .shelf_life import expiration_for
 from .stock import FEFO_ORDER_SQL, lot_stock
 
@@ -533,6 +533,7 @@ def add_usages(
     idempotency_key,
     expected_quantity=None,
     expected_bom_line_id=None,
+    expected_lines=None,
 ):
     """All-or-nothing request, including durable replay of the complete payload.
 
@@ -551,11 +552,31 @@ def add_usages(
                 "bom_line_id": int(row["bom_line_id"]) if row.get("bom_line_id") else None,
             }
         )
-    if len({r["lot_id"] for r in normalized}) != len(normalized):
+    identifiers = [
+        (r["lot_id"], r["bom_line_id"]) if expected_lines is not None else r["lot_id"]
+        for r in normalized
+    ]
+    if len(set(identifiers)) != len(normalized):
         raise InventoryError("같은 LOT은 한 번만 선택하세요.")
     key = _key("BULK_USE", idempotency_key)
     digest = hashlib.sha256(key.encode()).hexdigest()
     payload = {"batch_id": batch_id, "staff_id": staff_id, "entries": normalized}
+    if expected_lines is not None:
+        if not isinstance(expected_lines, list) or not 1 <= len(expected_lines) <= 100:
+            raise InventoryError("확인한 BOM 원료 목록이 필요합니다.")
+        try:
+            expected_lines = [
+                {
+                    "bom_line_id": int(row["bom_line_id"]),
+                    "actual": str(from_e6(to_e6(row["actual"]))),
+                    "standard": str(from_e6(to_e6(row["standard"]))),
+                    "quantity": str(from_e6(_quantity_e6(row["quantity"]))),
+                }
+                for row in expected_lines
+            ]
+        except (KeyError, TypeError, ValueError) as error:
+            raise InventoryError("확인한 BOM 원료와 수량을 다시 조회하세요.") from error
+        payload["expected_lines"] = expected_lines
     if expected_quantity is not None:
         payload["expected_quantity_e6"] = _quantity_e6(expected_quantity)
         payload["expected_bom_line_id"] = expected_bom_line_id
@@ -565,6 +586,8 @@ def add_usages(
             if previous.after_json != payload:
                 raise InventoryError("같은 요청 키로 다른 일괄 투입을 등록할 수 없습니다.")
             return
+        if expected_lines is not None:
+            _validate_bulk_lines(batch_id, normalized, expected_lines)
         if expected_quantity is not None:
             expected = _quantity_e6(expected_quantity)
             total = 0
@@ -609,7 +632,7 @@ def preview_plan(*, item_id, quantity, on_date=None):
     return material_readiness(batch)
 
 
-def propose_line_allocation(*, batch_id, line_id, quantity, item_id=None):
+def propose_line_allocation(*, batch_id, line_id, quantity, item_id=None, reserved=None):
     """Preview one BOM row, primary first then registered alternatives; never writes."""
     batch = _batch(batch_id, lock_open=True)
     line = (
@@ -632,7 +655,7 @@ def propose_line_allocation(*, batch_id, line_id, quantity, item_id=None):
         for lot in lot_stock(item_id=item.pk, usable_only=True):
             if remaining <= 0:
                 break
-            stock = lot.quantity_e6
+            stock = max(0, lot.quantity_e6 - (reserved or {}).get(lot.lot_id, 0))
             if item.base_unit == "g" and component.base_unit == "kg":
                 stock -= stock % 1000
             capacity = _component_quantity(stock, item.base_unit, component.base_unit)
@@ -664,6 +687,118 @@ def propose_line_allocation(*, batch_id, line_id, quantity, item_id=None):
         "shortfall": str(from_e6(remaining)),
         "results": entries,
     }
+
+
+def _validate_bulk_lines(batch_id, entries, expected_lines):
+    """Check each reviewed total and reject stale previews before any stock write."""
+    if not isinstance(expected_lines, list) or not 1 <= len(expected_lines) <= 100:
+        raise InventoryError("확인한 BOM 원료 목록이 필요합니다.")
+    check = batch_summary(batch_id)["bom_check"]
+    current = {row["line"].pk: row for row in (check or {}).get("lines", [])}
+    totals = {}
+    for row in entries:
+        lot = Lot.objects.select_related("item").filter(pk=row["lot_id"]).first()
+        if lot is None:
+            raise NotFound("선택한 LOT을 찾을 수 없습니다.")
+        line = current.get(row["bom_line_id"])
+        if not line or not line["stock_managed"]:
+            raise InventoryError("투입할 BOM 원료를 선택하세요.")
+        line_id = line["line"].pk
+        totals[line_id] = totals.get(line_id, 0) + _component_quantity(
+            row["quantity_e6"], lot.item.base_unit, line["line"].component_item.base_unit
+        )
+    seen = set()
+    for row in expected_lines:
+        try:
+            line_id = int(row["bom_line_id"])
+            actual = to_e6(row["actual"])
+            standard = to_e6(row["standard"])
+            quantity = _quantity_e6(row["quantity"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise InventoryError("확인한 BOM 원료와 수량을 다시 조회하세요.") from error
+        if line_id in seen or line_id not in current:
+            raise InventoryError("확인한 BOM 원료 목록이 올바르지 않습니다.")
+        seen.add(line_id)
+        line = current[line_id]
+        if actual != line["actual_e6"] or standard != line["standard_e6"]:
+            raise InventoryError(
+                "투입 또는 산출 기록이 변경되었습니다. 남은 원료를 다시 불러오세요."
+            )
+        if totals.get(line_id) != quantity:
+            raise InventoryError("원료별 LOT 합계가 이번 실제 투입량과 다릅니다.")
+    if seen != set(totals):
+        raise InventoryError("확인한 원료와 투입 목록이 다릅니다.")
+
+
+def propose_bulk_allocation(*, batch_id, lines=None):
+    """Read-only draft for remaining BOM rows; shared LOT stock is counted once."""
+    with transaction.atomic():
+        batch = _batch(batch_id, lock_open=True)
+        if batch.status != BatchStatus.IN_PROGRESS:
+            raise InventoryError("생산을 시작한 뒤 투입할 수 있습니다.")
+        check = batch_summary(batch_id)["bom_check"]
+        current = {row["line"].pk: row for row in (check or {}).get("lines", [])}
+        if lines is None:
+            lines = [
+                {"bom_line_id": pk, "quantity": str(from_e6(row["standard_e6"] - row["actual_e6"]))}
+                for pk, row in current.items()
+                if row["stock_managed"] and row["standard_e6"] > row["actual_e6"]
+            ]
+        if not isinstance(lines, list) or len(lines) > 100:
+            raise InventoryError("원료 목록은 100행 이내여야 합니다.")
+        reserved, results, seen = {}, [], set()
+        for request in lines:
+            try:
+                line_id = int(request["bom_line_id"])
+            except (KeyError, TypeError, ValueError) as error:
+                raise InventoryError("투입할 BOM 원료를 선택하세요.") from error
+            row = current.get(line_id)
+            if line_id in seen or not row or not row["stock_managed"]:
+                raise InventoryError("투입할 BOM 원료 목록을 확인하세요.")
+            seen.add(line_id)
+            line = row["line"]
+            allowed = [
+                line.component_item,
+                *[a.item for a in line.alternatives.select_related("item")],
+            ]
+            allocation = propose_line_allocation(
+                batch_id=batch_id,
+                line_id=line_id,
+                quantity=request.get("quantity"),
+                item_id=request.get("item_id") or None,
+                reserved=reserved,
+            )
+            for entry in allocation["results"]:
+                reserved[entry["lot_id"]] = reserved.get(entry["lot_id"], 0) + to_e6(
+                    entry["quantity"]
+                )
+            choices = [
+                {
+                    "lot_id": lot.lot_id,
+                    "lot_number": lot.lot_number,
+                    "name": lot.item_name,
+                    "unit": lot.base_unit,
+                    "stock": str(from_e6(lot.quantity_e6)),
+                    "expiration_date": str(lot.expiration_date) if lot.expiration_date else None,
+                }
+                for item in allowed
+                for lot in lot_stock(item_id=item.pk, usable_only=True)
+            ]
+            results.append(
+                {
+                    **allocation,
+                    "bom_line_id": line_id,
+                    "line_no": line.line_no,
+                    "name": line.component_item.name,
+                    "item_code": line.component_item.item_code,
+                    "standard": str(from_e6(row["standard_e6"])),
+                    "actual": str(from_e6(row["actual_e6"])),
+                    "choices": choices,
+                    "item_id": request.get("item_id") or "",
+                    "allowed_items": [{"id": item.pk, "name": item.name} for item in allowed],
+                }
+            )
+        return {"lines": results}
 
 
 def material_readiness(batch):

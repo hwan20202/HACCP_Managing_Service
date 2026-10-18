@@ -35,6 +35,9 @@ urlpatterns = [
     path("batches/<int:pk>/start/", api.batch_start, name="batch-start"),
     path("batches/<int:pk>/usages/", api.batch_usage, name="batch-usages"),
     path("batches/<int:pk>/allocation/", api.batch_allocation, name="batch-allocation"),
+    path(
+        "batches/<int:pk>/bulk-allocation/", api.batch_bulk_allocation, name="batch-bulk-allocation"
+    ),
     path("batches/<int:pk>/outputs/", api.batch_output, name="batch-outputs"),
     path("batches/<int:pk>/complete/", api.batch_complete, name="batch-complete"),
     path("batches/<int:pk>/cancel/", api.batch_cancel, name="batch-cancel"),

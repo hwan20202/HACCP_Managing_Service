@@ -62,6 +62,7 @@ const App = {
   navigate(page, updateNav = true) {
     if (!page) return;
     if (page === 'production-log') page = 'production-batches';
+    if (page === 'inventory-overview') page = 'raw-materials'; // retired menu / old links
     this.currentPage = page;
 
     // 활성 nav 업데이트
@@ -78,7 +79,6 @@ const App = {
       'raw-materials': '원료 수불대장',
       'sub-materials': '부자재 수불대장',
       'finished-goods': '완제품 수불대장',
-      'inventory-overview': '재고·수불 현황',
       'ccp-monitoring': 'CCP 모니터링',
       prerequisite: '선행요건 관리',
       'production-log': '생산 일지',
@@ -104,7 +104,6 @@ const App = {
       case 'raw-materials':  html = InventoryApiPage.render('raw'); break;
       case 'sub-materials':  html = InventoryApiPage.render('sub'); break;
       case 'finished-goods': html = InventoryApiPage.render('finished'); break;
-      case 'inventory-overview': html = InventoryApiPage.renderOverviewPage(); break;
       case 'ccp-monitoring': html = CCPPage.render(); break;
       case 'prerequisite':   html = PrerequisitePage.render(); break;
       case 'production-log': html = ProductionApiPage.render(); break;

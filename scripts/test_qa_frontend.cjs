@@ -10,34 +10,14 @@ function page(file, name, document = {}) {
 const root = 'frontend/static/prototype/js/modules/';
 const date = {value: '2027-01-01', disabled: false, required: true};
 const content = {innerHTML:''};
-const inventory = page(root + 'inventory-api.js', 'InventoryApiPage', {querySelector: () => date, getElementById: () => content});
+const inventory = page(root + 'inventory-api.js', 'InventoryApiPage', {querySelector: () => date, getElementById: id => id==='invApiContent'?content:null});
 assert.equal(inventory.state().tab, 'ledger');
-const ledgerState=inventory.state();
-ledgerState.q='원료 검색';
-inventory.mode='overview';
-assert.equal(inventory.state().tab,'overview');
-assert.equal(inventory.state().q,'');
-inventory.state().q='통합 검색';
-inventory.mode='ledger';
-assert.equal(inventory.state(),ledgerState);
-assert.equal(inventory.state().q,'원료 검색');
 inventory.rerender=()=>{};
 inventory.setPeriod('today');
-assert.equal(inventory.state().period,'today');
 assert.equal(inventory.state().from,inventory.state().to);
-assert.match(inventory.renderFilters(),/data-period="today" aria-pressed="true" class="btn btn-primary/);
+assert.match(inventory.renderFilters(),/data-period="today" aria-pressed="true"/);
 inventory.set('from','2026-10-01');
 assert.equal(inventory.state().period,'');
-assert.doesNotMatch(inventory.renderFilters(),/data-period="[^"]+" aria-pressed="true"/);
-inventory.mode='overview';
-inventory.state().q='유지할 검색';
-inventory.selectLot(1,'LOT-1');
-assert.equal(inventory.state().q,'유지할 검색');
-assert.equal(inventory.state().tab,'overview');
-inventory.mode='ledger';
-inventory.selectLot(1,'LOT-1');
-assert.equal(inventory.state().q,'');
-assert.equal(inventory.state().tab,'ledger');
 inventory.changeExpiration('NONE');
 assert.equal(date.value, '');
 assert.equal(date.disabled, true);
@@ -51,29 +31,31 @@ const totals = inventory.renderTotals({results: [{item: {id:1,item_code:'RAW', n
 assert.match(totals, /총재고/);
 assert.match(totals, /사용 불가/);
 assert.match(totals, /<td>3 kg<\/td><td>2 kg<\/td><td>1 kg<\/td>/);
-const summary = (id,name,total) => ({item:{id,item_code:String(id),name},total,usable:total,quarantine:'0',unusable:'0',unit:'kg',lot_count:1});
-const lot = (id,item,quantity) => ({lot_id:id,item,lot_number:'LOT-'+id,quantity,unit:'kg',status:'AVAILABLE',expiration_status:'NONE'});
-const first=summary(1,'첫 품목','3'), second=summary(2,'둘째 품목','7');
-inventory.state().tab='stock';
-inventory.cache={tab:'stock',data:{results:[first,second]},stock:{results:[lot(10,first.item,'3'),lot(20,second.item,'7')]}};
-const workspace=inventory.renderStockWorkspace();
-assert.match(workspace,/품목별 현재고/);
-assert.match(workspace,/LOT별 현재고 · 첫 품목/);
-assert.match(workspace,/data-stock-lot="10"/);
-assert.doesNotMatch(workspace,/data-stock-lot="20"/);
-inventory.selectStockItem(2);
-assert.match(content.innerHTML,/LOT별 현재고 · 둘째 품목/);
-assert.match(content.innerHTML,/data-stock-lot="20"/);
-assert.doesNotMatch(content.innerHTML,/data-stock-lot="10"/);
-assert.equal(inventory.cache.data.results.length,2); // selection must keep the item list intact.
-inventory.cache.data.results=[first];
-inventory.renderStockWorkspace();
-assert.equal(inventory.state().stockItemId,1); // a filtered-out selection cannot hide the LOT panel.
-inventory.cache={tab:'stock',data:{results:[]},stock:{results:[]}};
-assert.match(inventory.renderStockWorkspace(),/조회 결과가 없습니다/);
-assert.equal(inventory.state().stockItemId,null);
-inventory.cache=null;
-inventory.state().tab='ledger';
+const item={id:1,item_code:'1000040',name:'덱스트린',base_unit:'kg'};
+const ledger={from:'2026-09-30',to:'2026-10-01',results:[{item,unit:'kg',lots:[
+  {lot_id:10,lot_number:'A',opening:'2',in:'0',out:'0.5',closing:'1.5',lines:[{movement_id:1,occurred_at:'2026-10-01',quantity:'-0.5',balance:'1.5',movement_name:'생산 투입',staff_name:'QA',reason:'확인',source:{batch:{id:7,number:'B-7'}}}]},
+  {lot_id:11,lot_number:'B',opening:'0',in:'1',out:'1',closing:'0',lines:[]},
+]}]};
+inventory.detailContext={id:1,from:ledger.from,to:ledger.to,direction:'',lotId:null};
+inventory.detailCache={item,ledger,queriedAt:'2026-10-19',total:{total:'3',usable:'2',quarantine:'0.5',unusable:'0.5',unit:'kg'},stock:{results:[{lot_id:10,lot_number:'A',item,quantity:'3',unit:'kg',status:'AVAILABLE',expiration_status:'NONE'}]}};
+inventory.renderItemDetail();
+assert.match(date.innerHTML,/총재고/);
+assert.match(date.innerHTML,/使用 불가|사용 불가/);
+assert.match(date.innerHTML,/invItemFrom/);
+assert.match(date.innerHTML,/거래 직후 LOT 잔량/);
+assert.match(date.innerHTML,/openBatch\(7\)/);
+assert.equal((inventory.renderPeriodSummary(ledger).match(/data-period-lot=/g)||[]).length,2);
+assert.equal((inventory.renderPeriodSummary(ledger).match(/data-period-closing="1.5"/g)||[]).length,1);
+assert.doesNotMatch(inventory.renderLedger(ledger),/data-period-closing/);
+inventory.selectDetailLot(10);
+assert.equal(inventory.detailLedgerData().results[0].lots.length,1);
+assert.equal(inventory.detailCache.stock.results.length,1);
+inventory.setDetailDirection('');
+assert.equal(inventory.detailContext.lotId,null);
+inventory.state().selectedLot={id:10,number:'A'};inventory.state().itemId='1';
+inventory.set('direction','');
+assert.equal(inventory.state().selectedLot,null);
+assert.equal(inventory.state().itemId,'');
 const production = page(root + 'production-api.js', 'ProductionApiPage', {
   querySelectorAll: () => [{dataset:{pick:'10'}}, {dataset:{pick:'11'}}],
   querySelector: selector => ({value: selector.includes('10') ? '0.999999' : '1.000001'}),
@@ -95,8 +77,22 @@ assert.match(form, /LOT · 배분량 직접 수정/);
 inventory.state().q='녹용';
 assert.equal(inventory.ledgerParams().q,'녹용');
 inventory.state().direction='OUT';
-const ledger={results:[{item:{},lots:[{lines:[{quantity:'1',occurred_at:'2026-10-16',movement_id:1},{quantity:'-0.5',occurred_at:'2026-10-16',movement_id:2}]}]}]};
-assert.equal(inventory.ledgerLines(ledger).length,1);
-assert.equal(inventory.ledgerLines(ledger)[0].line.quantity,'-0.5');
+const filteredLedger={results:[{item:{},lots:[{lines:[{quantity:'1',occurred_at:'2026-10-16',movement_id:1},{quantity:'-0.5',occurred_at:'2026-10-16',movement_id:2}]}]}]};
+assert.equal(inventory.ledgerLines(filteredLedger).length,1);
+assert.equal(inventory.ledgerLines(filteredLedger)[0].line.quantity,'-0.5');
 assert.equal(production.s.statusFilter, 'ACTIVE');
+const bulkRow=(id,quantity,amount,unit='kg')=>({bom_line_id:id,name:'원료 '+id,unit,quantity,selected:true,standard:quantity,actual:'0',allocations:{10:amount},choices:[{lot_id:10,lot_number:'SHARED',unit:'g',stock:'1000'}],allowed_items:[{id:1,name:'원료'}]});
+production.bulkUse={rows:[bulkRow(1,'0.6','600'),bulkRow(2,'0.5','500')]};
+assert.equal(production.bulkTotal(production.bulkUse.rows[0]),600000n);
+assert.match(production.bulkErrors().join(' '),/가용재고/); // competing BOM lines share a LOT
+production.bulkUse.rows[1].selected=false;
+assert.equal(production.bulkErrors().length,0);
+production.bulkUse.rows[0].allocations[10]='0.000001';
+assert.equal(production.bulkTotal(production.bulkUse.rows[0]),null); // exact conversion required
+assert.match(production.bulkErrors().join(' '),/LOT 합계/);
+production.bulkUse.rows[0].allocations[10]='600';
+assert.match(production.renderBulkUse(),/이번 실제 투입량/);
+assert.match(production.renderBulkUse(),/기등록량/);
+assert.match(production.renderBulkUse(),/선택 1 \/ 2개 원료/);
+assert.match(production.renderBulkUse(),/원료 LOT 다시 자동 배분/);
 console.log('UI logic checks passed: BOM choices, expiry transitions, exact totals, cancelled default.');

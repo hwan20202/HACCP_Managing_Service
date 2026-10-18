@@ -27,9 +27,11 @@ def build_overview_example(staff, today):
     expected = {}
 
     def at(days, hour=9):
-        return datetime.datetime.combine(
+        planned = datetime.datetime.combine(
             today + datetime.timedelta(days=days), datetime.time(hour), tzinfo=KST
         )
+        # Today's fixture must also work before 09:00; never create future movements.
+        return min(planned, kst_now().replace(microsecond=0))
 
     def opening(label, days, quantity):
         number = at(days).strftime("%Y%m%d")

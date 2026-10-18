@@ -29,6 +29,7 @@ from .fields import KST
 from .holds import hold_batch, hold_lot, release_hold
 from .judgment import apply_incoming_judgment
 from .ledger import stock_ledger, stock_ledger_changes_since
+from .ledger_sources import attach_sources
 from .master_import import parse_item_row, parse_staff_row, parse_supplier_row
 from .models import (
     BatchStatus,
@@ -68,6 +69,7 @@ from .production import (
     fefo_candidates,
     material_readiness,
     preview_plan,
+    propose_bulk_allocation,
     propose_line_allocation,
     start_batch,
 )
@@ -503,7 +505,7 @@ def ledger(request):
         {
             "from": request.GET["from"],
             "to": request.GET["to"],
-            "results": [out.ledger_item(row) for row in items],
+            "results": attach_sources([out.ledger_item(row) for row in items]),
         }
     )
 
@@ -710,6 +712,11 @@ def batch_allocation(request, pk):
 
 
 @endpoint("POST")
+def batch_bulk_allocation(request, pk):
+    return ok(propose_bulk_allocation(batch_id=pk, lines=request.data.get("lines")))
+
+
+@endpoint("POST")
 def batch_start(request, pk):
     data = request.data
     _required(data, "staff_id")
@@ -740,6 +747,7 @@ def batch_usage(request, pk):
             idempotency_key=str(data["idempotency_key"]),
             expected_quantity=data.get("expected_quantity"),
             expected_bom_line_id=_int(data.get("expected_bom_line_id"), "expected_bom_line_id"),
+            expected_lines=data.get("expected_lines"),
         )
         return _batch_response(pk, status=201)
     _required(data, "lot_id", "quantity", "staff_id", "idempotency_key")
