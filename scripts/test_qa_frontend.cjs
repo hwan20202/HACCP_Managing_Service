@@ -9,7 +9,8 @@ function page(file, name, document = {}) {
 }
 const root = 'frontend/static/prototype/js/modules/';
 const date = {value: '2027-01-01', disabled: false, required: true};
-const inventory = page(root + 'inventory-api.js', 'InventoryApiPage', {querySelector: () => date});
+const content = {innerHTML:''};
+const inventory = page(root + 'inventory-api.js', 'InventoryApiPage', {querySelector: () => date, getElementById: () => content});
 assert.equal(inventory.state().tab, 'ledger');
 const ledgerState=inventory.state();
 ledgerState.q='원료 검색';
@@ -50,6 +51,29 @@ const totals = inventory.renderTotals({results: [{item: {id:1,item_code:'RAW', n
 assert.match(totals, /총재고/);
 assert.match(totals, /사용 불가/);
 assert.match(totals, /<td>3 kg<\/td><td>2 kg<\/td><td>1 kg<\/td>/);
+const summary = (id,name,total) => ({item:{id,item_code:String(id),name},total,usable:total,quarantine:'0',unusable:'0',unit:'kg',lot_count:1});
+const lot = (id,item,quantity) => ({lot_id:id,item,lot_number:'LOT-'+id,quantity,unit:'kg',status:'AVAILABLE',expiration_status:'NONE'});
+const first=summary(1,'첫 품목','3'), second=summary(2,'둘째 품목','7');
+inventory.state().tab='stock';
+inventory.cache={tab:'stock',data:{results:[first,second]},stock:{results:[lot(10,first.item,'3'),lot(20,second.item,'7')]}};
+const workspace=inventory.renderStockWorkspace();
+assert.match(workspace,/품목별 현재고/);
+assert.match(workspace,/LOT별 현재고 · 첫 품목/);
+assert.match(workspace,/data-stock-lot="10"/);
+assert.doesNotMatch(workspace,/data-stock-lot="20"/);
+inventory.selectStockItem(2);
+assert.match(content.innerHTML,/LOT별 현재고 · 둘째 품목/);
+assert.match(content.innerHTML,/data-stock-lot="20"/);
+assert.doesNotMatch(content.innerHTML,/data-stock-lot="10"/);
+assert.equal(inventory.cache.data.results.length,2); // selection must keep the item list intact.
+inventory.cache.data.results=[first];
+inventory.renderStockWorkspace();
+assert.equal(inventory.state().stockItemId,1); // a filtered-out selection cannot hide the LOT panel.
+inventory.cache={tab:'stock',data:{results:[]},stock:{results:[]}};
+assert.match(inventory.renderStockWorkspace(),/조회 결과가 없습니다/);
+assert.equal(inventory.state().stockItemId,null);
+inventory.cache=null;
+inventory.state().tab='ledger';
 const production = page(root + 'production-api.js', 'ProductionApiPage', {
   querySelectorAll: () => [{dataset:{pick:'10'}}, {dataset:{pick:'11'}}],
   querySelector: selector => ({value: selector.includes('10') ? '0.999999' : '1.000001'}),
