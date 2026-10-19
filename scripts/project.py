@@ -16,10 +16,14 @@ from urllib.request import urlopen
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def django_setup(production=False):
+def django_setup(production=False, qa=False):
     sys.path.insert(0, str(ROOT / "backend"))
     os.environ["DJANGO_SETTINGS_MODULE"] = (
-        "config.settings.production" if production else "config.settings.development"
+        "config.settings.qa"
+        if qa
+        else "config.settings.production"
+        if production
+        else "config.settings.development"
     )
     import django
 
@@ -33,7 +37,13 @@ def run_command(*args):
 def initialize(args):
     env_path = Path(os.environ["HACCP_ENV_FILE"])
     if not env_path.exists():
-        template = ROOT / (".env.production.example" if args.production else ".env.example")
+        template = ROOT / (
+            ".env.qa.example"
+            if args.qa
+            else ".env.production.example"
+            if args.production
+            else ".env.example"
+        )
         contents = template.read_text(encoding="utf-8").replace(
             "replace-with-generated-secret", secrets.token_urlsafe(64)
         )
@@ -43,13 +53,18 @@ def initialize(args):
         print(f"Created {env_path.name} with a unique secret.")
     else:
         print(f"Keeping existing {env_path.name}.")
-    django_setup(args.production)
+    django_setup(args.production, args.qa)
     from django.conf import settings
     from django.core.management import call_command
 
     for name in ("db", "uploads", "logs", "backups", "static"):
         (settings.DATA_DIR / name).mkdir(parents=True, exist_ok=True)
     call_command("migrate", interactive=False)
+    if args.qa:
+        prototype = settings.PROTOTYPE_DATA_FILE
+        if not prototype.exists():
+            prototype.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / "data/legacy-prototype/src/js/data.js", prototype)
     print("Initialized. Existing database records and uploads were preserved.")
 
 
@@ -64,7 +79,11 @@ def check(args):
     run_command("-m", "ruff", "format", "--check", ".")
     run_command("-m", "unittest", "discover", "-s", "scripts", "-p", "test_*.py", "-v")
     settings_name = (
-        "config.settings.production" if args.production else "config.settings.development"
+        "config.settings.qa"
+        if args.qa
+        else "config.settings.production"
+        if args.production
+        else "config.settings.development"
     )
     options = [f"--settings={settings_name}"]
     run_command("backend/manage.py", "check", *options)
@@ -75,7 +94,7 @@ def check(args):
 
 
 def serve(args):
-    django_setup(production=True)
+    django_setup(production=True, qa=args.qa)
     from config.wsgi import application
     from waitress import serve as waitress_serve
 
@@ -125,7 +144,7 @@ def smoke(args):
 
 
 def caddy(args):
-    django_setup(args.production)
+    django_setup(args.production, args.qa)
     from django.conf import settings
 
     executable = args.binary or shutil.which("caddy")
@@ -141,7 +160,12 @@ def caddy(args):
         XDG_CONFIG_HOME=(settings.DATA_DIR / "config").as_posix(),
     )
     subprocess.run(
-        [executable, "run", "--config", str(ROOT / "infra/caddy/Caddyfile")],
+        [
+            executable,
+            "run",
+            "--config",
+            str(ROOT / ("infra/caddy/Caddyfile.qa" if args.qa else "infra/caddy/Caddyfile")),
+        ],
         cwd=ROOT,
         env=env,
         check=True,
@@ -153,7 +177,7 @@ def backup(args):
         raise SystemExit(
             "Stop application writes, then pass --writes-stopped. See docs/deployment.md."
         )
-    django_setup(args.production)
+    django_setup(args.production, args.qa)
     import zipfile
     from datetime import datetime, timezone
 
@@ -188,7 +212,9 @@ def backup(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", default=".env", help="Path to a private environment file")
-    parser.add_argument("--production", action="store_true", help="Use production Django settings")
+    environment = parser.add_mutually_exclusive_group()
+    environment.add_argument("--production", action="store_true", help="Use production settings")
+    environment.add_argument("--qa", action="store_true", help="Use isolated hosted QA settings")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("init", help="Create local configuration/directories and apply migrations")
     sub.add_parser("check", help="Check versions, formatting, migrations and automated tests")
@@ -210,11 +236,11 @@ def main():
     env_path = Path(args.env_file).expanduser()
     os.environ["HACCP_ENV_FILE"] = str((ROOT / env_path).resolve())
     if args.command == "run":
-        if args.production:
-            raise SystemExit("Use 'serve' for production; 'run' is development only.")
+        if args.production or args.qa:
+            raise SystemExit("Use 'serve' for production/QA; 'run' is development only.")
         run_command("backend/manage.py", "runserver", f"127.0.0.1:{args.port}")
     elif args.command == "collectstatic":
-        django_setup(args.production)
+        django_setup(args.production, args.qa)
         from django.core.management import call_command
 
         call_command("collectstatic", interactive=False, clear=True)

@@ -28,4 +28,21 @@ urlpatterns = [
     path("movements/return/", api.return_view, name="return"),
     path("movements/disposal/", api.disposal_view, name="disposal"),
     path("movements/<int:pk>/correct/", api.correct, name="correct"),
+    path("batches/", api.batch_collection, name="batches"),
+    path("batches/fefo/", api.fefo, name="fefo"),
+    path("batches/preview/", api.batch_preview, name="batch-preview"),
+    path("batches/<int:pk>/", api.batch_detail, name="batch-detail"),
+    path("batches/<int:pk>/start/", api.batch_start, name="batch-start"),
+    path("batches/<int:pk>/usages/", api.batch_usage, name="batch-usages"),
+    path("batches/<int:pk>/allocation/", api.batch_allocation, name="batch-allocation"),
+    path(
+        "batches/<int:pk>/bulk-allocation/", api.batch_bulk_allocation, name="batch-bulk-allocation"
+    ),
+    path("batches/<int:pk>/outputs/", api.batch_output, name="batch-outputs"),
+    path("batches/<int:pk>/complete/", api.batch_complete, name="batch-complete"),
+    path("batches/<int:pk>/cancel/", api.batch_cancel, name="batch-cancel"),
+    path("boms/", api.bom_collection, name="boms"),
+    path("holds/", api.hold_collection, name="holds"),
+    path("holds/<int:pk>/", api.hold_detail, name="hold-detail"),
+    path("holds/<int:pk>/release/", api.hold_release, name="hold-release"),
 ]

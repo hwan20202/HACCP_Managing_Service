@@ -85,13 +85,27 @@ class DevLotApiTests(ReqTestCase):
         body = res.json()
         self.assertEqual(
             (body["lot"]["lot_number"], body["lot"]["supplier_name"], body["lot"]["quantity"]),
-            ("X01261011", "고흥농협", 450),  # LOT 번호는 수불 규칙(C2): LOT 약어 + 입고일
+            # LOT 번호는 수불 규칙: 원료는 소비기한 있음 → LOT 약어 + 소비기한(수불 0007)
+            ("X01270501", "고흥농협", 450),
         )
         self.assertEqual([d["result"] for d in body["result"]["documents"]], ["created"] * 3)
         steps = [s["step_id"] for s in body["trace"]["steps"]]
         self.assertTrue(flows.matches("REQ-DEV-LOT", steps), steps)
         self.assertEqual(
-            self.post("/api/dev/req/lots", LOT_BODY).json()["lot"]["lot_number"], "X01261011-2"
+            self.post("/api/dev/req/lots", LOT_BODY).json()["lot"]["lot_number"], "X01270501-2"
+        )
+
+    def test_raw_receipt_needs_explicit_expiration_status(self):
+        """수불 0007: 날짜 없는 원료 입고는 소비기한 유무를 직접 고름(개발 API도 기본값 없음)."""
+        body = {k: v for k, v in LOT_BODY.items() if k != "expiration_date"}
+        self.assertError(self.post("/api/dev/req/lots", body), 400, "INVENTORY_REJECTED")
+        res = self.post("/api/dev/req/lots", {**body, "expiration_status": "NONE"})
+        self.assertEqual(res.status_code, 201, res.content)
+        self.assertEqual(res.json()["lot"]["lot_number"], "X01261011")  # 없음 → 약어 + 입고일
+        self.assertError(
+            self.post("/api/dev/req/lots", {**body, "expiration_status": "X"}),
+            400,
+            "VALIDATION_ERROR",
         )
 
     def test_tc041_validation_failure_header(self):
@@ -152,8 +166,10 @@ class DevBatchApiTests(ReqTestCase):
         self.assertEqual(len(res.json()["result"]["documents"]), 3)
         steps = [s["step_id"] for s in res.json()["trace"]["steps"]]
         self.assertTrue(flows.matches("REQ-DEV-BAT", steps), steps)
+        # 수불 0006(MVP 벌크 범위): 새 포장배치는 만들지 않는다. 포장배치 = CCP 없음은
+        # REQ 서비스 테스트(예전 포장배치 13)로 확인
         res = self.post("/api/dev/req/batches", {**BATCH_BODY, "process_type": "PACKAGING"})
-        self.assertEqual((res.status_code, res.json()["result"]["documents"]), (201, []))
+        self.assertError(res, 400, "INVENTORY_REJECTED")
         res = self.post(
             "/api/dev/req/batches",
             {**BATCH_BODY, "quantity_kg": -1, "process_type": "X", "manufactured_date": "x"},

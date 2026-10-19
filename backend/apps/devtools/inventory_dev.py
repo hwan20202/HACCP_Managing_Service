@@ -3,19 +3,25 @@
 문서 쪽 개발 도구(작성 요구 [임시] 화면, 콘솔 프리셋, 개발 시드)가 쓰는 입고 LOT·생산 배치를
 수불 앱(apps.inventory) 테이블에 만든다. 수불 코드는 고치지 않고 공개 함수·모델만 쓴다.
 - 입고 LOT: 수불 입고 서비스 `register_receipt`(LOT 번호·재고 이동·입고 기록·훅을 수불 규칙대로)
-- 생산 배치: 수불(main)에 배치를 만드는 서비스가 아직 없어 **개발 전용으로 직접 INSERT**
-  (번호 PB-MMDD-nn, 상태 IN_PROGRESS). 수불 생산 서비스가 main에 들어오면 그것으로 바꾼다
+- 입고 LOT 문서: 수불 입고 훅이 require_for_lot을 부른다(문서 결과는 receive_lot 반환)
+- 생산 배치: **개발 전용으로 직접 INSERT**(번호 PB-MMDD-nn, 상태 IN_PROGRESS). 수불 생산 서비스
+  (create_batch·start_batch)는 MVP에서 반제품(SEMI)만 제조하므로 개발 품목(완제품)에는 쓰지 않는다.
+  포장배치는 수불 0006으로 만들 수 없다
 - 품목·공급처: 개발용 가상 기준정보(이름으로 찾거나 만듦)와 수불 기본 LOT 규칙
 개발 설정(개발 콘솔)과 테스트에서만 쓴다. 운영 코드(REQ·DOC·WF·EFF)는 이 모듈을 import하지 않는다.
 """
 
+import threading
 import uuid
+from contextlib import contextmanager
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.db import connection
 from django.utils import timezone
 
 from apps.core.http import ApiError
+from apps.inventory import document_bridge
 from apps.inventory.errors import InventoryError
 from apps.inventory.master_import import ensure_default_lot_rules
 from apps.inventory.models import Item, Supplier
@@ -90,7 +96,12 @@ def supplier_id(name):
     return Supplier.objects.create(supplier_code=code, name=name).pk
 
 
-def receive(
+def receive(**kwargs):
+    """receive_lot(...)과 같고 lot_id만 돌려준다."""
+    return receive_lot(**kwargs)[0]
+
+
+def receive_lot(
     *,
     item_id,
     supplier_name,
@@ -98,28 +109,55 @@ def receive(
     quantity,
     staff_id,
     expiration_date=None,
+    expiration_status=None,
+    inspection=None,
     idempotency_key=None,
+    documents=True,
 ):
-    """수불 입고 서비스로 입고 LOT 1개. 판정은 넣지 않는다(LOT은 QUARANTINE). 반환: lot_id.
+    """수불 입고 서비스로 입고 LOT 1개. 반환: (lot_id, 문서 결과).
+
+    수불 입고 훅(document_bridge.incoming_received)이 같은 트랜잭션에서 LOT 문서(D01·D02·D03)를
+    만든다 — 문서 결과는 require_for_lot 반환과 같다(같은 요청 키로 다시 부르면 None).
+    inspection을 주면 새 D03에 채우고 그 최종판정을 수불이 입고 판정으로 반영한다(수불 입고 화면).
+    판정이 없으면 LOT은 QUARANTINE.
 
     idempotency_key를 주면 같은 키로 다시 불러도 입고가 늘지 않는다(수불 규칙 — 개발 시드용).
+    expiration_status(수불 0007): 소비기한 유무 KNOWN(있음) / NONE(없음). 원료는 날짜(→ KNOWN)를
+    주거나 이 값을 직접 골라야 입고된다 — 기본값을 넣지 않는다(실제 입고와 같음).
+    날짜 없는 LOT을 '없음'으로 만드는 것은 개발 시드·콘솔 준비(fixtures)만 명시적으로 한다.
+    documents=False: 문서 없이 LOT만 — 훅 연결 전에 입고된 LOT 흉내(P7 S5 "문서 없음" 줄 확인용).
     """
     ensure_default_lot_rules()  # 수불 기본 LOT 번호 규칙(없을 때만 만듦)
+    data = ReceiptInput(
+        item_id=item_id,
+        supplier_id=supplier_id(supplier_name),
+        staff_id=staff_id,
+        received_date=received_date,
+        quantity=Decimal(str(quantity)),
+        idempotency_key=idempotency_key or f"dev-{uuid.uuid4().hex}",
+        expiration_date=expiration_date,
+        expiration_status=expiration_status,
+        inspection=inspection,
+    )
     try:
-        receipt = register_receipt(
-            ReceiptInput(
-                item_id=item_id,
-                supplier_id=supplier_id(supplier_name),
-                staff_id=staff_id,
-                received_date=received_date,
-                quantity=Decimal(str(quantity)),
-                idempotency_key=idempotency_key or f"dev-{uuid.uuid4().hex}",
-                expiration_date=expiration_date,
-            )
-        )
+        if documents:
+            receipt = register_receipt(data)
+        else:
+            with _without_lot_documents():
+                receipt = register_receipt(data)
     except InventoryError as error:  # 수불 입고 규칙 거부(예: 미래 입고일) → 400
         raise InventoryRejected(str(error)) from error
-    return receipt.lot_id
+    return receipt.lot_id, receipt.documents
+
+
+_HOOK_LOCK = threading.Lock()
+
+
+@contextmanager
+def _without_lot_documents():
+    """개발 전용: 입고 훅을 잠시 빈 함수로(문서 없는 예전 LOT 흉내). 운영 코드는 쓰지 않는다."""
+    with _HOOK_LOCK, patch.object(document_bridge, "incoming_received", lambda **_: None):
+        yield
 
 
 def _planned_e6(item_id, quantity_kg):
@@ -144,6 +182,8 @@ def make_batch(*, item_id, process_type, manufactured_date, quantity_kg, staff_i
 
     notes를 주면 같은 notes 배치가 있을 때 새로 만들지 않고 그 id를 돌려준다(개발 시드용).
     """
+    if process_type == "PACKAGING":  # 수불 0006: 포장배치는 MVP 범위 밖(새로 만들지 않음)
+        raise InventoryRejected("포장배치는 이번 범위(입고 ~ 제조 벌크 산출)에서 만들지 않습니다.")
     if notes:
         with connection.cursor() as cursor:
             cursor.execute("SELECT id FROM production_batches WHERE notes = %s", [notes])
@@ -221,6 +261,7 @@ __all__ = [
     "item_exists",
     "supplier_id",
     "receive",
+    "receive_lot",
     "make_batch",
     "use_lot",
     "touch_lot",

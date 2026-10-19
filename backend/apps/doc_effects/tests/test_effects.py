@@ -477,6 +477,7 @@ LOT_BODY = {
     "supplier_name": "고흥농협",
     "received_date": DAY,
     "quantity": 450,
+    "expiration_status": "NONE",  # 수불 0007: 원료는 소비기한 유무를 직접 선택(기본값 없음)
 }
 
 

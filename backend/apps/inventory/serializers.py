@@ -47,6 +47,7 @@ def item(obj):
         "origin_country": obj.origin_country,
         "food_type": obj.food_type,
         "minimum_stock": qty(obj.minimum_stock_e6),
+        "is_stock_managed": obj.is_stock_managed,
         "is_active": obj.is_active,
     }
 
@@ -86,6 +87,7 @@ def lot(obj, quantity_e6=None):
         "quantity": qty(quantity_e6),
         "manufactured_date": iso(obj.manufactured_date),
         "expiration_date": iso(obj.expiration_date),
+        "expiration_status": obj.expiration_status,
         "created_at": iso(obj.created_at),
     }
 
@@ -110,6 +112,7 @@ def receipt(obj):
         "unit": lot_obj.item.base_unit,
         "manufactured_date": iso(lot_obj.manufactured_date),
         "expiration_date": iso(lot_obj.expiration_date),
+        "expiration_status": lot_obj.expiration_status,
         "staff": {"id": obj.staff_id, "name": obj.staff.name},
         "receipt_status": obj.receipt_status,
         "cancelled_at": iso(obj.cancelled_at),
@@ -134,9 +137,13 @@ def lot_stock(row):
         "quantity": qty(row.quantity_e6),
         "unit": row.base_unit,
         "is_usable": row.is_usable,
+        "can_use": row.can_use,
+        "is_expired": row.is_expired,
+        "use_priority": row.use_priority,
         "active_hold_count": row.active_hold_count,
         "manufactured_date": iso(row.manufactured_date),
         "expiration_date": iso(row.expiration_date),
+        "expiration_status": row.expiration_status,
         "days_to_expiry": row.days_to_expiry,
         "received_date": iso(row.received_date),
         "supplier_name": row.supplier_name,
@@ -182,6 +189,7 @@ def ledger_item(row):
                 "lot_number": lot_row.lot_number,
                 "status": lot_row.status,
                 "expiration_date": iso(lot_row.expiration_date),
+                "expiration_status": lot_row.expiration_status,
                 "opening": qty(lot_row.opening_e6),
                 "in": qty(lot_row.in_e6),
                 "out": qty(lot_row.out_e6),
@@ -203,6 +211,159 @@ def ledger_item(row):
             }
             for lot_row in row.lots
         ],
+    }
+
+
+def batch(obj):
+    return {
+        "id": obj.pk,
+        "batch_number": obj.batch_number,
+        "process_type": obj.process_type,
+        "status": obj.status,
+        "status_name": obj.get_status_display(),
+        "item": {
+            "id": obj.item_id,
+            "item_code": obj.item.item_code,
+            "name": obj.item.name,
+            "item_type": obj.item.item_type_id,
+        },
+        "unit": obj.item.base_unit,
+        "bom_id": obj.bom_id,
+        "planned_date": iso(obj.planned_date),
+        "planned_quantity": qty(obj.planned_quantity_e6),
+        "manufactured_date": iso(obj.manufactured_date),
+        "started_at": iso(obj.started_at),
+        "completed_at": iso(obj.completed_at),
+        "staff": {"id": obj.staff_id, "name": obj.staff.name},
+        "notes": obj.notes,
+        "cancelled_at": iso(obj.cancelled_at),
+        "cancel_reason": obj.cancel_reason,
+        "created_at": iso(obj.created_at),
+    }
+
+
+def _batch_line(row):
+    item_obj = row["item"]
+    return {
+        "lot_id": row["lot_id"],
+        "lot_number": row["lot_number"],
+        "item": {"id": item_obj.pk, "item_code": item_obj.item_code, "name": item_obj.name},
+        "unit": item_obj.base_unit,
+        "quantity": qty(row["quantity_e6"]),
+        "net_quantity": qty(row["net_quantity_e6"]),
+        "stock_movement_id": row["stock_movement_id"],
+    }
+
+
+def batch_detail(summary):
+    data = batch(summary["batch"])
+    data["usages"] = [
+        {"id": row["usage_id"], "bom_line_id": row["bom_line_id"], **_batch_line(row)}
+        for row in summary["usages"]
+    ]
+    data["outputs"] = [
+        {"id": row["output_id"], "lot_quantity": qty(row["stock_e6"]), **_batch_line(row)}
+        for row in summary["outputs"]
+    ]
+    lot = summary["output_lot"]  # 배치의 산출 LOT (하나). 산출 전·예전 다중 LOT 기록은 None
+    data["output_lot"] = lot and {
+        "lot_id": lot["lot_id"],
+        "lot_number": lot["lot_number"],
+        "net_quantity": qty(lot["net_quantity_e6"]),
+        "stock": qty(lot["stock_e6"]),
+    }
+    check = summary["bom_check"]
+    data["bom_check"] = check and {
+        "basis": check["basis"],
+        "basis_quantity": qty(check["basis_e6"]),
+        "lines": [
+            {
+                "line_no": row["line"].line_no,
+                "item": {
+                    "id": row["line"].component_item_id,
+                    "item_code": row["line"].component_item.item_code,
+                    "name": row["line"].component_item.name,
+                },
+                "unit": row["line"].component_item.base_unit,
+                "standard": qty(row["standard_e6"]),
+                "actual": qty(row["actual_e6"]),
+                "stock_managed": row["stock_managed"],
+            }
+            for row in check["lines"]
+        ],
+    }
+    return data
+
+
+def bom(obj, lines):
+    return {
+        "id": obj.pk,
+        "item_id": obj.item_id,
+        "version": obj.version,
+        "base_quantity": qty(obj.base_quantity_e6),
+        "effective_from": iso(obj.effective_from),
+        "is_active": obj.is_active,
+        "lines": [
+            {
+                "id": line.pk,
+                "line_no": line.line_no,
+                "item": {
+                    "id": line.component_item_id,
+                    "item_code": line.component_item.item_code,
+                    "name": line.component_item.name,
+                },
+                "unit": line.component_item.base_unit,
+                "quantity": qty(line.quantity_e6),
+                "alternatives": [
+                    {
+                        "id": alternative.item_id,
+                        "item_code": alternative.item.item_code,
+                        "name": alternative.item.name,
+                        "unit": alternative.item.base_unit,
+                    }
+                    for alternative in line.alternatives.select_related("item").order_by("id")
+                ],
+            }
+            for line in lines
+        ],
+    }
+
+
+def hold(obj):
+    return {
+        "id": obj.pk,
+        "target": "batch" if obj.batch_id else "lot",
+        "lot": obj.lot_id
+        and {
+            "id": obj.lot_id,
+            "lot_number": obj.lot.lot_number,
+            "item_code": obj.lot.item.item_code,
+        },
+        "batch": obj.batch_id and {"id": obj.batch_id, "batch_number": obj.batch.batch_number},
+        "source_type": obj.source_type_id,
+        "source_name": obj.source_type.name,
+        "source_document_id": obj.source_document_id,
+        "parent_hold_id": obj.parent_hold_id,
+        "reason": obj.reason,
+        "held_by": {"id": obj.held_by_id, "name": obj.held_by.name},
+        "held_at": iso(obj.held_at),
+        "is_open": obj.released_at is None,
+        "released_by": obj.released_by_id
+        and {"id": obj.released_by_id, "name": obj.released_by.name},
+        "released_at": iso(obj.released_at),
+        "disposition": obj.disposition_id,
+        "release_reason": obj.release_reason,
+    }
+
+
+def fefo_pick(lot_obj, take_e6, stock_e6):
+    return {
+        "lot_id": lot_obj.pk,
+        "lot_number": lot_obj.lot_number,
+        "expiration_date": iso(lot_obj.expiration_date),
+        "expiration_status": lot_obj.expiration_status,
+        "take": qty(take_e6),
+        "stock": qty(stock_e6),
     }
 
 

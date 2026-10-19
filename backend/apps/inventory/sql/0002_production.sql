@@ -23,6 +23,7 @@
    P8. 생산 LOT 번호 (BOM v4 멘토안, 10/12): 반제품 = LOT 약어 + 제조일 (BNY261007),
        완제품 = 제조일 + 근무조 (261011A, 완제품코드와 함께 읽음). 같은 날 같은 품목이 또 생기면 -2, -3
        → 완제품 LOT 은 배치의 shift 로 채번
+       (10/14 변경: 반제품·완제품 모두 제조일(생산 시작일) + 생산 순번, 근무조 폐지 — 0005)
 
    [10/11 ERD 협의로 정해진 것]
    D1. 문서 ↔ 배치 연결은 문서 쪽 document_ref.production_batch_id (+ process_code) 가 이 테이블을 FK 로 참조
@@ -118,7 +119,7 @@ CREATE TABLE production_batches (
     planned_date         TEXT    CHECK (planned_date IS NULL OR planned_date IS date(planned_date)),
     planned_quantity_e6  INTEGER CHECK (planned_quantity_e6 IS NULL OR planned_quantity_e6 > 0),
     manufactured_date    TEXT    CHECK (manufactured_date IS NULL OR manufactured_date IS date(manufactured_date)),   -- 생산 LOT 채번 기준일
-    shift                TEXT    CHECK (shift IS NULL OR shift IN ('A', 'B', 'C')),   -- 근무조 A 주간 / B 야간 / C 오후. 완제품 LOT 채번에 사용
+    shift                TEXT    CHECK (shift IS NULL OR shift IN ('A', 'B', 'C')),   -- 근무조: 10/14 폐지 (0005). v_doc_batch 계약 때문에 열만 남김, 항상 NULL
     started_at           TEXT    CHECK (started_at   IS NULL OR started_at   IS datetime(started_at)),
     completed_at         TEXT    CHECK (completed_at IS NULL OR completed_at IS datetime(completed_at)),
     staff_id             INTEGER NOT NULL REFERENCES staff(id),        -- 작업 책임자 / 기록자

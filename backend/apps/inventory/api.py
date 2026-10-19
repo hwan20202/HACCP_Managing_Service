@@ -17,22 +17,34 @@ import json
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.http import JsonResponse
 from django.views.decorators.csrf import ensure_csrf_cookie
+
+from apps.core.http import ApiError
 
 from . import serializers as out
 from .errors import InventoryError, NotFound
 from .fields import KST
+from .holds import hold_batch, hold_lot, release_hold
 from .judgment import apply_incoming_judgment
 from .ledger import stock_ledger, stock_ledger_changes_since
+from .ledger_sources import attach_sources
 from .master_import import parse_item_row, parse_staff_row, parse_supplier_row
 from .models import (
+    BatchStatus,
+    Bom,
+    BomLine,
+    ExpirationStatus,
+    Hold,
     IncomingReceipt,
     Inventory,
     Item,
     ItemType,
     Lot,
     LotStatus,
+    ProcessType,
+    ProductionBatch,
     ReceiptStatus,
     Staff,
     StockMovement,
@@ -46,7 +58,22 @@ from .movements import (
     record_opening_balance,
     return_to_supplier,
 )
-from .quantity import from_e6
+from .production import (
+    add_output,
+    add_usage,
+    add_usages,
+    batch_summary,
+    cancel_batch,
+    complete_batch,
+    create_batch,
+    fefo_candidates,
+    material_readiness,
+    preview_plan,
+    propose_bulk_allocation,
+    propose_line_allocation,
+    start_batch,
+)
+from .quantity import from_e6, to_e6
 from .receiving import ReceiptInput, cancel_receipt, register_receipt
 from .stock import item_stock, lot_stock
 
@@ -63,8 +90,10 @@ class Conflict(InventoryError):
     pass
 
 
-def error_response(status, message, fields=None):
+def error_response(status, message, fields=None, code=None):
     body = {"message": message}
+    if code:
+        body["code"] = code
     if fields:
         body["fields"] = fields
     return JsonResponse({"error": body}, status=status, json_dumps_params={"ensure_ascii": False})
@@ -100,6 +129,8 @@ def endpoint(*methods):
                 return error_response(400, str(error), error.fields)
             except InventoryError as error:
                 return error_response(400, str(error))
+            except ApiError as error:  # raised by the document app inside a hook (rolled back)
+                return error_response(error.status, error.message, error.details, error.code)
 
         wrapped = ensure_csrf_cookie(wrapper) if "GET" in methods else wrapper
         return wrapped
@@ -294,6 +325,15 @@ item_detail = _master_detail("items")
 RECEIPT_RELATED = ("lot__item", "supplier", "staff")
 
 
+def _inspection(value):
+    """Visual inspection values for the document app's D03 (checked there). Object or empty."""
+    if value in (None, ""):
+        return None
+    if not isinstance(value, dict):
+        raise BadRequest("inspection은 객체여야 합니다.", {"inspection": "객체여야 합니다."})
+    return value
+
+
 @endpoint("GET", "POST")
 def receipt_collection(request):
     if request.method == "POST":
@@ -310,7 +350,9 @@ def receipt_collection(request):
                 supplier_lot_number=data.get("supplier_lot_number"),
                 manufactured_date=_date(data.get("manufactured_date"), "manufactured_date"),
                 expiration_date=_date(data.get("expiration_date"), "expiration_date"),
+                expiration_status=data.get("expiration_status"),
                 judgment=str(data["judgment"]).upper() if data.get("judgment") else None,
+                inspection=_inspection(data.get("inspection")),
             )
         )
         receipt = IncomingReceipt.objects.select_related(*RECEIPT_RELATED).get(pk=receipt.pk)
@@ -400,12 +442,21 @@ def stock_lots(request):
     status = request.GET.get("status")
     if status and status not in LotStatus.values:
         raise BadRequest(f"status 는 {LotStatus.values} 중 하나여야 합니다.")
+    expiration_status = (request.GET.get("expiration_status") or "").upper() or None
+    if expiration_status and expiration_status not in ExpirationStatus.values:
+        raise BadRequest(f"expiration_status 는 {ExpirationStatus.values} 중 하나여야 합니다.")
     rows = lot_stock(
         item_type=request.GET.get("item_type") or None,
         item_id=_int(request.GET.get("item_id"), "item_id"),
         status=status,
         include_empty=_flag(request.GET.get("include_empty", "0")),
         expiring_within_days=_int(request.GET.get("expiring_within_days"), "expiring_within_days"),
+        lot_number=request.GET.get("lot_number") or None,
+        manufactured_from=_date(request.GET.get("manufactured_from"), "manufactured_from"),
+        manufactured_to=_date(request.GET.get("manufactured_to"), "manufactured_to"),
+        expiration_status=expiration_status,
+        usable_only=_flag(request.GET.get("usable_only", "0")),
+        q=request.GET.get("q"),
     )
     return ok({"results": [out.lot_stock(row) for row in rows]})
 
@@ -437,15 +488,24 @@ def ledger_params(request):
     }
 
 
+def ledger_search(request):
+    """ledger_params + LOT 번호 검색 (ledger/, ledger/export.csv)."""
+    return {
+        **ledger_params(request),
+        "lot_number": request.GET.get("lot_number") or None,
+        "q": request.GET.get("q") or None,
+    }
+
+
 @endpoint("GET")
 def ledger(request):
-    params = ledger_params(request)
+    params = ledger_search(request)
     items = stock_ledger(params.pop("date_from"), params.pop("date_to"), **params)
     return ok(
         {
             "from": request.GET["from"],
             "to": request.GET["to"],
-            "results": [out.ledger_item(row) for row in items],
+            "results": attach_sources([out.ledger_item(row) for row in items]),
         }
     )
 
@@ -502,6 +562,7 @@ def opening_balance(request):
         expiration_date=_date(data.get("expiration_date"), "expiration_date"),
         status=data.get("status") or LotStatus.AVAILABLE,
         reason=data.get("reason"),
+        expiration_status=data.get("expiration_status"),
     )
     return _movement_response(movement)
 
@@ -557,3 +618,285 @@ def correct(request, pk):
         idempotency_key=str(data["idempotency_key"]),
     )
     return _movement_response(movement)
+
+
+# ---------------------------------------------------------------------------
+# Production (production.py)
+# ---------------------------------------------------------------------------
+
+BATCH_RELATED = ("item", "staff")
+
+
+def _batch_response(batch_id, status=200):
+    summary = batch_summary(batch_id)
+    summary["batch"] = ProductionBatch.objects.select_related(*BATCH_RELATED).get(pk=batch_id)
+    data = out.batch_detail(summary)
+    data["readiness"] = material_readiness(summary["batch"])
+    return ok(data, status=status)
+
+
+@endpoint("GET", "POST")
+def batch_collection(request):
+    if request.method == "POST":
+        data = request.data
+        _required(data, "item_id", "staff_id")
+        batch = create_batch(
+            item_id=_int(data["item_id"], "item_id"),
+            # 제조만 (포장배치는 MVP 범위 밖, 10/15). 생략하면 MANUFACTURE
+            process_type=str(data.get("process_type") or ProcessType.MANUFACTURE).upper(),
+            staff_id=_int(data["staff_id"], "staff_id"),
+            planned_date=_date(data.get("planned_date"), "planned_date"),
+            planned_quantity=data.get("planned_quantity"),
+            manufactured_date=_date(data.get("manufactured_date"), "manufactured_date"),
+            bom_id=_int(data.get("bom_id"), "bom_id"),
+            notes=data.get("notes"),
+        )
+        return _batch_response(batch.pk, status=201)
+
+    rows = ProductionBatch.objects.select_related(*BATCH_RELATED).order_by("-pk")
+    if _flag(request.GET.get("exclude_cancelled", "0")):
+        rows = rows.exclude(status=BatchStatus.CANCELLED)
+    if status := request.GET.get("status"):
+        if status not in BatchStatus.values:
+            raise BadRequest(f"status 는 {BatchStatus.values} 중 하나여야 합니다.")
+        rows = rows.filter(status=status)
+    if process_type := request.GET.get("process_type"):
+        if process_type not in ProcessType.values:
+            raise BadRequest(f"process_type 은 {ProcessType.values} 중 하나여야 합니다.")
+        rows = rows.filter(process_type=process_type)
+    if item_id := _int(request.GET.get("item_id"), "item_id"):
+        rows = rows.filter(item_id=item_id)
+    # Period on the manufacturing date (or the planned date while not yet made).
+    if date_from := _date(request.GET.get("from"), "from"):
+        rows = rows.filter(
+            Q(manufactured_date__gte=date_from)
+            | Q(manufactured_date__isnull=True, planned_date__gte=date_from)
+        )
+    if date_to := _date(request.GET.get("to"), "to"):
+        rows = rows.filter(
+            Q(manufactured_date__lte=date_to)
+            | Q(manufactured_date__isnull=True, planned_date__lte=date_to)
+        )
+    count, page = _page(request, rows)
+    return ok({"count": count, "results": [out.batch(b) for b in page]})
+
+
+@endpoint("GET")
+def batch_detail(request, pk):
+    return _batch_response(pk)
+
+
+@endpoint("GET")
+def batch_preview(request):
+    item_id = _int(request.GET.get("item_id"), "item_id", required=True)
+    _get(Item, item_id, "품목")
+    return ok(
+        preview_plan(
+            item_id=item_id,
+            quantity=request.GET.get("quantity"),
+            on_date=_date(request.GET.get("planned_date"), "planned_date"),
+        )
+    )
+
+
+@endpoint("GET")
+def batch_allocation(request, pk):
+    return ok(
+        propose_line_allocation(
+            batch_id=pk,
+            line_id=_int(request.GET.get("bom_line_id"), "bom_line_id", required=True),
+            quantity=request.GET.get("quantity"),
+            item_id=_int(request.GET.get("item_id"), "item_id"),
+        )
+    )
+
+
+@endpoint("POST")
+def batch_bulk_allocation(request, pk):
+    return ok(propose_bulk_allocation(batch_id=pk, lines=request.data.get("lines")))
+
+
+@endpoint("POST")
+def batch_start(request, pk):
+    data = request.data
+    _required(data, "staff_id")
+    start_batch(
+        batch_id=pk,
+        staff_id=_int(data["staff_id"], "staff_id"),
+        started_at=_datetime(data.get("started_at"), "started_at"),
+        manufactured_date=_date(data.get("manufactured_date"), "manufactured_date"),
+    )
+    return _batch_response(pk)
+
+
+@endpoint("POST")
+def batch_usage(request, pk):
+    data = request.data
+    if "entries" in data:
+        _required(data, "staff_id", "idempotency_key")
+        entries = data["entries"]
+        if not isinstance(entries, list) or any(not isinstance(row, dict) for row in entries):
+            raise BadRequest("투입 목록 형식이 올바르지 않습니다.")
+        for row in entries:
+            row["lot_id"] = _int(row.get("lot_id"), "lot_id", required=True)
+            row["bom_line_id"] = _int(row.get("bom_line_id"), "bom_line_id")
+        add_usages(
+            batch_id=pk,
+            entries=entries,
+            staff_id=_int(data["staff_id"], "staff_id"),
+            idempotency_key=str(data["idempotency_key"]),
+            expected_quantity=data.get("expected_quantity"),
+            expected_bom_line_id=_int(data.get("expected_bom_line_id"), "expected_bom_line_id"),
+            expected_lines=data.get("expected_lines"),
+        )
+        return _batch_response(pk, status=201)
+    _required(data, "lot_id", "quantity", "staff_id", "idempotency_key")
+    add_usage(
+        batch_id=pk,
+        lot_id=_int(data["lot_id"], "lot_id"),
+        quantity=data["quantity"],
+        staff_id=_int(data["staff_id"], "staff_id"),
+        idempotency_key=str(data["idempotency_key"]),
+        occurred_at=_datetime(data.get("occurred_at"), "occurred_at"),
+        bom_line_id=_int(data.get("bom_line_id"), "bom_line_id"),
+    )
+    return _batch_response(pk, status=201)
+
+
+@endpoint("POST")
+def batch_output(request, pk):
+    data = request.data
+    _required(data, "quantity", "staff_id", "idempotency_key")
+    add_output(
+        batch_id=pk,
+        quantity=data["quantity"],
+        staff_id=_int(data["staff_id"], "staff_id"),
+        idempotency_key=str(data["idempotency_key"]),
+        occurred_at=_datetime(data.get("occurred_at"), "occurred_at"),
+        lot_number=data.get("lot_number"),
+        expiration_date=_date(data.get("expiration_date"), "expiration_date"),
+    )
+    return _batch_response(pk, status=201)
+
+
+@endpoint("POST")
+def batch_complete(request, pk):
+    data = request.data
+    _required(data, "staff_id")
+    complete_batch(
+        batch_id=pk,
+        staff_id=_int(data["staff_id"], "staff_id"),
+        completed_at=_datetime(data.get("completed_at"), "completed_at"),
+    )
+    return _batch_response(pk)
+
+
+@endpoint("POST")
+def batch_cancel(request, pk):
+    data = request.data
+    _required(data, "staff_id", "reason")
+    cancel_batch(batch_id=pk, staff_id=_int(data["staff_id"], "staff_id"), reason=data["reason"])
+    return _batch_response(pk)
+
+
+@endpoint("GET")
+def fefo(request):
+    """Usable LOTs to cover a quantity of an item, earliest expiration first."""
+    item_id = _int(request.GET.get("item_id"), "item_id", required=True)
+    quantity = request.GET.get("quantity")
+    if not quantity:
+        raise BadRequest("'quantity' 값이 필요합니다.", {"quantity": "required"})
+    picks = fefo_candidates(
+        item_id=item_id, quantity=quantity, on_date=_date(request.GET.get("on_date"), "on_date")
+    )
+    covered = sum(take for _, take, _ in picks)
+    return ok(
+        {
+            "item_id": item_id,
+            "quantity": quantity,
+            "covered": out.qty(covered),
+            "shortfall": out.qty(max(to_e6(quantity) - covered, 0)),
+            "results": [out.fefo_pick(*pick) for pick in picks],
+        }
+    )
+
+
+@endpoint("GET")
+def bom_collection(request):
+    """BOMs (read only — BOM data is loaded by the data team)."""
+    rows = Bom.objects.order_by("item_id", "-version")
+    if item_id := _int(request.GET.get("item_id"), "item_id"):
+        rows = rows.filter(item_id=item_id)
+    if not _flag(request.GET.get("include_inactive", "0")):
+        rows = rows.filter(is_active=True)
+    lines = {}
+    for line in (
+        BomLine.objects.filter(bom__in=rows).select_related("component_item").order_by("line_no")
+    ):
+        lines.setdefault(line.bom_id, []).append(line)
+    return ok({"results": [out.bom(b, lines.get(b.pk, [])) for b in rows]})
+
+
+# ---------------------------------------------------------------------------
+# Holds (holds.py)
+# ---------------------------------------------------------------------------
+
+HOLD_RELATED = ("lot__item", "batch", "source_type", "held_by", "released_by")
+
+
+def _hold_response(hold_id, status=200):
+    return ok(out.hold(Hold.objects.select_related(*HOLD_RELATED).get(pk=hold_id)), status=status)
+
+
+@endpoint("GET", "POST")
+def hold_collection(request):
+    if request.method == "POST":
+        data = request.data
+        _required(data, "source_type", "reason", "staff_id")
+        lot_id = _int(data.get("lot_id"), "lot_id")
+        batch_id = _int(data.get("batch_id"), "batch_id")
+        if bool(lot_id) == bool(batch_id):
+            raise BadRequest("lot_id 와 batch_id 중 하나만 보내세요.")
+        common = {
+            "source_type": str(data["source_type"]).upper(),
+            "reason": str(data["reason"]),
+            "staff_id": _int(data["staff_id"], "staff_id"),
+            "source_document_id": _int(data.get("source_document_id"), "source_document_id"),
+            "held_at": _datetime(data.get("held_at"), "held_at"),
+        }
+        hold = (
+            hold_lot(lot_id=lot_id, **common) if lot_id else hold_batch(batch_id=batch_id, **common)
+        )
+        return _hold_response(hold.pk, status=201)
+
+    rows = Hold.objects.select_related(*HOLD_RELATED).order_by("-pk")
+    if _flag(request.GET.get("open", "0")):
+        rows = rows.filter(released_at__isnull=True)
+    if lot_id := _int(request.GET.get("lot_id"), "lot_id"):
+        rows = rows.filter(lot_id=lot_id)
+    if batch_id := _int(request.GET.get("batch_id"), "batch_id"):
+        rows = rows.filter(batch_id=batch_id)
+    if parent_id := _int(request.GET.get("parent_hold_id"), "parent_hold_id"):
+        rows = rows.filter(parent_hold_id=parent_id)
+    count, page = _page(request, rows)
+    return ok({"count": count, "results": [out.hold(h) for h in page]})
+
+
+@endpoint("GET")
+def hold_detail(request, pk):
+    _get(Hold, pk, "보류")
+    return _hold_response(pk)
+
+
+@endpoint("POST")
+def hold_release(request, pk):
+    data = request.data
+    _required(data, "disposition", "reason", "staff_id")
+    release_hold(
+        hold_id=pk,
+        disposition=str(data["disposition"]).upper(),
+        reason=str(data["reason"]),
+        staff_id=_int(data["staff_id"], "staff_id"),
+        released_at=_datetime(data.get("released_at"), "released_at"),
+    )
+    return _hold_response(pk)

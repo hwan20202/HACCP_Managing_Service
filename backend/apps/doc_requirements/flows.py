@@ -16,7 +16,8 @@ FLOWS = {
     "REQ-DEV-LOT": ["REQ-DEV-01", "REQ-DEV-02", *LOT, "REQ-DEV-04"],
     "REQ-DEV-BAT": ["REQ-DEV-01", "REQ-DEV-02", *BAT, "REQ-DEV-04"],
     "REQ-DEV-RE-LOT": ["REQ-DEV-01", "REQ-DEV-RE1", *LOT, "REQ-DEV-04"],
-    # P6 D-080: inspection이 있으면 00b(형식 검사), 개발 API는 수불 대신 판정 반영(REQ-DEV-02b)
+    # P6 D-080: inspection이 있으면 00b(형식 검사). 판정 반영은 수불 입고(register_receipt)가 한다
+    # (수불 document_bridge 연결 — 예전 개발 API의 REQ-DEV-02b 흉내 단계는 없앰)
     "REQ-LOT-INSP": ["REQ-LOT-00", "REQ-LOT-00b", *LOT[1:]],
     "REQ-DEV-LOT-INSP": [
         "REQ-DEV-01",
@@ -24,7 +25,6 @@ FLOWS = {
         "REQ-LOT-00",
         "REQ-LOT-00b",
         *LOT[1:],
-        "REQ-DEV-02b",
         "REQ-DEV-04",
     ],
     "REQ-DEV-RE-BAT": ["REQ-DEV-01", "REQ-DEV-RE1", *BAT, "REQ-DEV-04"],

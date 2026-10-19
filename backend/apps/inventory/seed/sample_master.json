@@ -18,6 +18,8 @@
      "shelf_life_months": "24", "minimum_stock": "0"},
     {"item_code": "2000001", "short_code": "CGP", "item_type": "PACKAGING", "name": "가상파우치", "base_unit": "장",
      "minimum_stock": "1000"},
+    {"item_code": "3000501", "item_type": "SEMI", "name": "가상반제품환(벌크)", "base_unit": "개",
+     "unit_weight_mg": "4000", "shelf_life_months": "24", "food_type": "기타가공품"},
     {"item_code": "4000001", "item_type": "FINISHED", "name": "가상완제품환", "base_unit": "개",
      "unit_weight_mg": "4000", "shelf_life_months": "24", "food_type": "기타가공품"}
   ]

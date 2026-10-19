@@ -34,6 +34,7 @@ from .movements import (
 from .quantity import to_e6
 from .receiving import ReceiptInput, cancel_receipt, register_receipt
 from .stock import item_stock, lot_stock
+from .test_support import seed_document_forms
 
 
 def at(day, hour=9):
@@ -43,6 +44,7 @@ def at(day, hour=9):
 class ServiceTestCase(TestCase):
     @classmethod
     def setUpTestData(cls):
+        seed_document_forms()
         call_command("seed_master", "--sample", stdout=StringIO())
         cls.raw_a = Item.objects.get(item_code="1000001")
         cls.raw_b = Item.objects.get(item_code="1000002")
@@ -64,6 +66,7 @@ class ServiceTestCase(TestCase):
                 quantity=quantity,
                 idempotency_key=key,
                 expiration_date=expiration,
+                expiration_status=None if expiration else "NONE",  # 0007
             )
         )
 
@@ -99,8 +102,16 @@ class OpeningBalanceTests(ServiceTestCase):
         self.assertEqual(self.stock(lot), to_e6("120.5"))
 
     def test_blank_lot_number_uses_incoming_rule(self):
-        lot = self.opening(self.raw_a, "1", "o1").lot
+        # 원료: 소비기한 없음 -> 기준일(입고일 자리)로, 있음 -> 소비기한으로 채번 (0007)
+        lot = self.opening(self.raw_a, "1", "o1", expiration_status="NONE").lot
         self.assertEqual(lot.lot_number, f"AGA{self.day1:%y%m%d}")
+        self.assertEqual(lot.expiration_status, "NONE")
+        dated = self.opening(self.raw_a, "1", "o2", expiration_date=datetime.date(2027, 3, 1)).lot
+        self.assertEqual((dated.lot_number, dated.expiration_status), ("AGA270301", "KNOWN"))
+        with self.assertRaises(InventoryError):  # 미확인으로는 원료 채번 불가
+            self.opening(self.raw_a, "1", "o3")
+        legacy = self.opening(self.raw_a, "1", "o4", lot_number="OLD-9").lot  # 기존 번호는 허용
+        self.assertEqual(legacy.expiration_status, "UNKNOWN")
 
     def test_finished_goods_need_lot_number(self):
         with self.assertRaises(InventoryError):
@@ -294,7 +305,7 @@ class MovementTests(ServiceTestCase):
         )
         self.assertEqual(self.stock(self.lot), to_e6(50))
 
-    def test_receipt_and_corrections_are_not_correctable(self):
+    def test_full_receipt_correction_is_a_cancellation(self):
         receipt_movement = StockMovement.objects.get(movement_type_id="RECEIPT")
         with self.assertRaisesMessage(InventoryError, "입고 취소"):
             correct_movement(
