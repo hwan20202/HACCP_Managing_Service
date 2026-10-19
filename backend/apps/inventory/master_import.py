@@ -8,11 +8,12 @@ whole import is rejected if any row is invalid, so a file is applied all or noth
     suppliers.csv  supplier_code*, name*, is_active
     items.csv      item_code*, item_type*, name*, base_unit*, short_code, unit_weight_mg,
                    shelf_life_months, shelf_life_days, origin_country, food_type,
-                   minimum_stock, is_active   (소비기한은 개월·일수 중 하나만)
+                   minimum_stock, is_stock_managed, is_active   (소비기한은 개월·일수 중 하나만)
 
 (* required)  item_type: RAW / PACKAGING / SEMI / FINISHED.  minimum_stock is in the base
 unit (e.g. 12.5 for 12.5 kg) and is stored as minimum_stock_e6.  is_active: 1/0, Y/N,
-true/false; blank means 1.
+true/false; blank means 1. is_stock_managed: 0 for 정제수 같은 공정용수 (LOT·재고 없음), same
+values as is_active, blank means 1.
 """
 
 import datetime
@@ -23,10 +24,12 @@ from django.db import IntegrityError, transaction
 from .models import Item, ItemType, LotKind, LotNumberRule, Staff, Supplier
 from .quantity import to_e6
 
-# BOM v4 멘토안 (10/12 채택). 같은 날 같은 품목이 또 생기면 -2, -3 (가정)
+# 원료·포장재: BOM v4 멘토안 (같은 날 같은 품목이 또 생기면 -2, -3, 가정)
+# 반제품·완제품: 제조일(생산 시작일) + 품목별 생산 순번 (v6.1, 근무조 폐지 10/14)
 DEFAULT_INCOMING_PATTERN = "{short_code}{date:yyMMdd}{seq:-N}"  # LOT 약어 + 입고일
-DEFAULT_PRODUCED_PATTERN = "{short_code}{date:yyMMdd}{seq:-N}"  # LOT 약어 + 제조일 (반제품)
-DEFAULT_FINISHED_PATTERN = "{date:yyMMdd}{shift}{seq:-N}"  # 제조일 + 근무조 (완제품)
+DEFAULT_INCOMING_SEMI_PATTERN = "{date:yyMMdd}{seq:A}"  # 구매 반제품: 입고일 + 순번 (가정)
+DEFAULT_PRODUCED_PATTERN = "{date:yyMMdd}{seq:A}"  # 제조일 + 품목별 생산 순번 (반제품)
+DEFAULT_FINISHED_PATTERN = "{date:yyMMdd}{seq:A}"  # 제조일 + 품목별 생산 순번 (완제품)
 DEFAULT_RULE_EFFECTIVE_FROM = datetime.date(2026, 1, 1)
 
 _TRUE = {"1", "y", "yes", "true", "t", "사용"}
@@ -132,6 +135,7 @@ def parse_item_row(row, item_types=None):
         "origin_country": _text(row, "origin_country"),
         "food_type": _text(row, "food_type"),
         "minimum_stock_e6": minimum_stock_e6,
+        "is_stock_managed": _bool(row, "is_stock_managed"),
         "is_active": _bool(row, "is_active"),
     }
 
@@ -192,12 +196,18 @@ def ensure_default_lot_rules():
     """Create each default rule whose (kind, item type) has no active rule. Returns new rules."""
     defaults = [
         (LotKind.INCOMING, None, DEFAULT_INCOMING_PATTERN, "기본 입고 LOT 규칙 (seed_master 생성)"),
-        (LotKind.PRODUCED, None, DEFAULT_PRODUCED_PATTERN, "기본 생산 LOT 규칙 (seed_master 생성)"),
+        (
+            LotKind.INCOMING,
+            "SEMI",
+            DEFAULT_INCOMING_SEMI_PATTERN,
+            "구매 반제품 LOT: 입고일 + 순번 (가정)",
+        ),
+        (LotKind.PRODUCED, "SEMI", DEFAULT_PRODUCED_PATTERN, "반제품 LOT: 제조일 + 생산 순번"),
         (
             LotKind.PRODUCED,
             "FINISHED",
             DEFAULT_FINISHED_PATTERN,
-            "완제품 LOT 규칙: 제조일 + 근무조 (seed_master 생성)",
+            "완제품 LOT: 제조일 + 생산 순번 (근무조 폐지)",
         ),
     ]
     created = []

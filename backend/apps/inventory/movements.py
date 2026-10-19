@@ -5,6 +5,7 @@
     return_to_supplier      공급처 반품     RETURN_TO_SUPPLIER
     dispose                 폐기           DISPOSAL
     correct_movement        정정           CORRECTION_IN / CORRECTION_OUT against one movement
+                                           (입고 수량 과다 입력도 일부 정정 가능, 10/14)
 
 Every function runs in one transaction (BEGIN IMMEDIATE, rule S5) and is idempotent per
 idempotency_key: sending the same request again returns the first movement.
@@ -18,14 +19,17 @@ import datetime
 from django.db import transaction
 
 from .errors import InventoryError, NotFound
+from .expiration import incoming_number_date, resolve_status
 from .fields import KST, kst_now, to_kst_text
 from .lot_numbers import next_lot_number
 from .models import (
+    IncomingReceipt,
     Inventory,
     Item,
     Lot,
     LotKind,
     LotStatus,
+    ReceiptStatus,
     Staff,
     StockMovement,
 )
@@ -33,8 +37,10 @@ from .quantity import from_e6, to_e6
 
 INCOMING_ITEM_TYPES = {"RAW", "PACKAGING"}
 OPENING_STATUSES = {LotStatus.AVAILABLE, LotStatus.QUARANTINE, LotStatus.REJECTED}
-# Corrections for receipts go through receiving.cancel_receipt, which keeps the receipt row in step.
-NOT_CORRECTABLE = {"RECEIPT", "CORRECTION_IN", "CORRECTION_OUT"}
+# A receipt can be corrected in part (입고 수량을 많이 넣은 경우, 10/14 PM 미팅 D3: 과거 수불도
+# 수정 가능해야 함). Taking it to 0 is a cancellation: receiving.cancel_receipt keeps the receipt
+# row in step (receipt_status = CANCELLED).
+NOT_CORRECTABLE = {"CORRECTION_IN", "CORRECTION_OUT"}
 DIRECTION = {"ADJUST_IN": 1, "ADJUST_OUT": -1, "RETURN_TO_SUPPLIER": -1, "DISPOSAL": -1}
 
 
@@ -74,6 +80,12 @@ def _reason(reason, label="사유"):
     if not reason:
         raise InventoryError(f"{label}를 입력하세요.")
     return reason
+
+
+def not_stock_managed_error(item):
+    return InventoryError(
+        f"재고 관리 대상이 아닌 품목입니다: {item} (LOT·재고·투입 기록을 만들지 않습니다)"
+    )
 
 
 def _occurred_at(value):
@@ -177,11 +189,14 @@ def record_opening_balance(
     expiration_date=None,
     status=LotStatus.AVAILABLE,
     reason=None,
+    expiration_status=None,
 ):
     """Create a LOT for stock that existed before go-live and record OPENING_BALANCE.
 
     lot_number: the existing LOT number. Blank -> numbered by the INCOMING rule
-    (RAW / PACKAGING only). occurred_at: usually the go-live date (required).
+    (RAW / PACKAGING only; a raw material then needs 소비기한 유무 KNOWN or NONE, as on receipt,
+    and is numbered by 소비기한 or by the go-live date). occurred_at: usually the go-live date.
+    expiration_status: KNOWN / NONE / UNKNOWN; blank -> KNOWN with a date, else UNKNOWN (0007).
     """
     if occurred_at is None:
         raise InventoryError("기초재고 기준일을 입력하세요.")
@@ -191,6 +206,7 @@ def record_opening_balance(
     key = _key("OPENING", idempotency_key)
     if manufactured_date and expiration_date and expiration_date < manufactured_date:
         raise InventoryError("소비기한이 제조일보다 빠를 수 없습니다.")
+    expiration_status = resolve_status(expiration_status, expiration_date)
 
     with transaction.atomic():
         existing = _replay(key, None, "OPENING_BALANCE", quantity_e6)
@@ -199,6 +215,8 @@ def record_opening_balance(
         item = Item.objects.filter(pk=item_id).first()
         if item is None:
             raise NotFound(f"품목을 찾을 수 없습니다. (id={item_id})")
+        if not item.is_stock_managed:
+            raise not_stock_managed_error(item)
         staff = _staff(staff_id)
         when = _occurred_at(occurred_at)
         kind = LotKind.INCOMING if item.item_type_id in INCOMING_ITEM_TYPES else LotKind.PRODUCED
@@ -206,7 +224,12 @@ def record_opening_balance(
         if not lot_number:
             if kind != LotKind.INCOMING:
                 raise InventoryError("반제품·완제품의 기초재고는 기존 LOT 번호를 입력하세요.")
-            lot_number = next_lot_number(lot_kind=kind, item=item, base_date=when.date())
+            expiration_status, number_date = incoming_number_date(
+                item, expiration_status, expiration_date, when.date()
+            )
+            lot_number = next_lot_number(
+                lot_kind=kind, item=item, base_date=number_date, rule_date=when.date()
+            )
         if Lot.objects.filter(item=item, lot_number=lot_number).exists():
             raise InventoryError(f"이미 있는 LOT 번호입니다: {item.item_code} / {lot_number}")
         lot = Lot.objects.create(
@@ -216,6 +239,7 @@ def record_opening_balance(
             status=status,
             manufactured_date=manufactured_date,
             expiration_date=expiration_date,
+            expiration_status=expiration_status or "",
         )
         return _create(
             lot, "OPENING_BALANCE", quantity_e6, staff, when, key, reason or "기초재고 이관"
@@ -296,7 +320,7 @@ def correct_movement(*, movement_id, reason, staff_id, idempotency_key, quantity
 
     The original stays (I2). quantity None -> everything not yet corrected. The correction is
     dated at the original's time so the ledger shows the corrected balance from that point.
-    Receipts are corrected with receiving.cancel_receipt instead.
+    A receipt can only be corrected in part; taking it to 0 is receiving.cancel_receipt.
     """
     reason = _reason(reason, "정정 사유")
     key = _key("CORRECTION", idempotency_key)
@@ -309,10 +333,7 @@ def correct_movement(*, movement_id, reason, staff_id, idempotency_key, quantity
         if original is None:
             raise NotFound(f"수불 기록을 찾을 수 없습니다. (id={movement_id})")
         if original.movement_type_id in NOT_CORRECTABLE:
-            hint = (
-                " 입고는 입고 취소를 사용하세요." if original.movement_type_id == "RECEIPT" else ""
-            )
-            raise InventoryError(f"이 유형은 정정할 수 없습니다: {original.movement_type}.{hint}")
+            raise InventoryError(f"이 유형은 정정할 수 없습니다: {original.movement_type}.")
         type_code = "CORRECTION_OUT" if original.movement_type.direction > 0 else "CORRECTION_IN"
         corrected = sum(original.corrections.values_list("quantity_e6", flat=True), start=0)
         remaining = original.quantity_e6 - corrected
@@ -327,6 +348,14 @@ def correct_movement(*, movement_id, reason, staff_id, idempotency_key, quantity
                 f"정정 가능한 수량을 넘었습니다. (원 기록 {from_e6(original.quantity_e6)}, "
                 f"남은 정정 가능 {from_e6(remaining)})"
             )
+        if original.movement_type_id == "RECEIPT":
+            receipt = IncomingReceipt.objects.filter(stock_movement=original).first()
+            if receipt is not None and receipt.receipt_status == ReceiptStatus.CANCELLED:
+                raise InventoryError("취소된 입고는 정정할 수 없습니다.")
+            if quantity_e6 == remaining:
+                raise InventoryError(
+                    "입고 수량 전체를 정정하려면 입고 취소를 사용하세요. (정정 후 0이 됩니다)"
+                )
         staff = _staff(staff_id)
         lot = original.lot
         if type_code == "CORRECTION_OUT":

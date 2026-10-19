@@ -1,0 +1,31 @@
+{
+	admin off
+}
+
+{$HACCP_SITE_ADDRESS} {
+	bind {$HACCP_BIND:127.0.0.1}
+	encode zstd gzip
+	request_body {
+		max_size 30MB
+	}
+	route {
+		# Covers HTML, API, static and attachment downloads alike.
+		basic_auth {
+			{$HACCP_QA_AUTH_USER} {$HACCP_QA_AUTH_HASH}
+		}
+		header {
+			X-Content-Type-Options nosniff
+			Referrer-Policy same-origin
+			-Server
+		}
+		handle_path /static/* {
+			root * "{$HACCP_STATIC_DIR}"
+			file_server
+		}
+		handle {
+			reverse_proxy {$HACCP_UPSTREAM:127.0.0.1:8002} {
+				header_up X-Forwarded-Proto {scheme}
+			}
+		}
+	}
+}

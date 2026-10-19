@@ -9,6 +9,7 @@ htmlcov/
 .env.*
 !.env.example
 !.env.production.example
+!.env.qa.example
 .DS_Store
 Thumbs.db
 desktop.ini

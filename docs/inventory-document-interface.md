@@ -20,12 +20,12 @@
 | 테이블 | 주요 컬럼 | 비고 |
 |---|---|---|
 | `staff` | `id`, `staff_code`(UNIQUE), `name`, `is_active` | 작성자·결재자 등은 `staff.id` 참조 |
-| `items` | `id`, `item_code`(UNIQUE), `short_code`(LOT 약어), `name`, `item_type`, `base_unit`, `unit_weight_mg`, `origin_country`, `shelf_life_months` / `shelf_life_days` | `item_type`: RAW 원료 / PACKAGING 포장재 / SEMI 반제품 / FINISHED 완제품 |
-| `lots` | `id`, `lot_number`(**품목 안에서 UNIQUE**), `item_id`, `lot_kind`, `status`, `manufactured_date`, `expiration_date` | `lot_kind`: INCOMING / PRODUCED |
-| `production_batches` | `id`, `batch_number`(UNIQUE), `process_type`, `item_id`, `status`, `manufactured_date`, `shift`, … | `process_type`: MANUFACTURE / PACKAGING, `shift`: A 주간 / B 야간 / C 오후 |
+| `items` | `id`, `item_code`(UNIQUE), `short_code`(LOT 약어), `name`, `item_type`, `base_unit`, `unit_weight_mg`, `origin_country`, `shelf_life_months` / `shelf_life_days`, `is_stock_managed` | `item_type`: RAW 원료 / PACKAGING 포장재 / SEMI 반제품 / FINISHED 완제품. `is_stock_managed = 0` 은 정제수 같은 재고 비관리 품목 (LOT 없음, 10/14) |
+| `lots` | `id`, `lot_number`(**품목 안에서 UNIQUE**), `item_id`, `lot_kind`, `status`, `manufactured_date`, `expiration_date`, `expiration_status` | `lot_kind`: INCOMING / PRODUCED |
+| `production_batches` | `id`, `batch_number`(UNIQUE), `process_type`, `item_id`, `status`, `manufactured_date`, `shift`, … | `process_type`: MANUFACTURE / PACKAGING — 10/15 부터 새 배치는 MANUFACTURE 만 (포장배치는 MVP 범위 밖, 예전 행만 PACKAGING). `manufactured_date` = 생산 시작일. `shift` 는 10/14 폐지 (열만 남고 항상 NULL) |
 
-**LOT 번호** (BOM v4 멘토안): 원료·포장재 `LOT 약어 + 입고일` (`AHN261005`), 반제품 `LOT 약어 + 제조일` (`BNY261007`), 완제품 `제조일 + 근무조` (`261011A`). 같은 날 같은 품목이 또 생기면 `-2`, `-3`.
-완제품은 제품이 달라도 번호가 같을 수 있으므로 **LOT 은 `lot_id` 로 식별**하고, 화면·라벨에는 품목코드와 함께 표시합니다 (`4000001 / 261011A`). `document_ref.label` 같은 표시용 값으로 LOT 을 찾지 마세요.
+**LOT 번호**: 원료는 소비기한 있음이면 `LOT 약어 + 소비기한`, 없음이면 `LOT 약어 + 입고일` (0007). 포장재 `LOT 약어 + 입고일`, 구매 반제품 `입고일 + 순번` (가정). 같은 기준일이 또 생기면 `-2`, `-3`. 반제품 LOT 은 제조 시작일 + 품목별 순번 (`261014A`, `261014B`). 근무조는 10/14 폐지.
+반제품 LOT 은 제품이 달라도 번호가 같을 수 있으므로 (완제품 LOT 의 품목 약어는 완제품 채번을 다룰 때 — 10/14 PM 미팅 A1) **LOT 은 `lot_id` 로 식별**하고, 화면·라벨에는 품목코드와 함께 표시합니다 (`4000001 / 261011A`). `document_ref.label` 같은 표시용 값으로 LOT 을 찾지 마세요.
 
 **`lots.status`** — 품질 판정만 나타냄
 
@@ -60,14 +60,17 @@
 | `supplier_name` | 공급처 | 입고 건 없으면 NULL |
 | `supplier_lot_number` | 공급처 LOT 번호 | 있음 |
 | `received_date` | 입고일 (입고 문서 업무일) | 입고 건 없으면 NULL |
-| `quantity_e6` | 입고 수량 (`_e6`) | 입고 건 없으면 NULL |
+| `quantity_e6` | 입고 등록 수량 (`_e6`) | 입고 건 없으면 NULL |
 | `manufactured_date`, `expiration_date` | 제조일, 소비기한 | 있음 |
 | `lot_status` | QUARANTINE / AVAILABLE / REJECTED | |
 | `receipt_status` | COMPLETED / CANCELLED (입고 취소) | 입고 건 없으면 NULL |
 | `subject_label` | `품목코드 품명 / LOT번호 / 입고일(또는 제조일)` 표시용 | |
+| `net_quantity_e6` | 입고 수량 − 입고 정정·취소분 (10/14 추가, 0005). 취소된 입고는 0 | 입고 건 없으면 NULL |
+| `expiration_status` | 소비기한 유무 KNOWN 있음 / NONE 없음 / UNKNOWN 미확인 (0007). 날짜가 없을 때 "없음"과 "미확인"을 이 값으로 구분 | 항상 있음 |
 
 - 생산 LOT, 기초재고 이관 LOT 은 입고 건이 없어 공급처·입고일·입고 수량이 NULL
 - 입고가 취소돼도 행은 남고 `receipt_status = CANCELLED`
+- 입고 수량을 일부 정정하면 `quantity_e6` 는 그대로, `net_quantity_e6` 가 줄어듦 (10/14 PM 미팅 D3)
 
 문서 쪽 요청 대비 바뀐 이름: `quantity` → `quantity_e6`, `unit` → `base_unit`, `material_kind` → `item_type` / `item_type_name`, `origin` → `origin_country`
 
@@ -78,16 +81,17 @@
 | 컬럼 | 뜻 |
 |---|---|
 | `production_batch_id` | `production_batches.id` |
-| `batch_number`, `process_type`, `status` | 배치 번호, MANUFACTURE / PACKAGING, 상태 |
-| `shift` | 근무조 A 주간 / B 야간 / C 오후 (NULL 가능) |
+| `batch_number`, `process_type`, `status` | 배치 번호, MANUFACTURE / PACKAGING(예전 행만), 상태 |
+| `shift` | 근무조 — 10/14 폐지, 항상 NULL (계약 때문에 열만 유지) |
 | `item_id`, `item_code`, `item_name`, `item_type`, `base_unit` | 산출 품목 |
 | `unit_weight_mg` | 기준단위 1개 무게(mg, NULL 가능). kg 환산: 개수 × `unit_weight_mg` ÷ 1,000,000 (예: 환 10,000개 × 4,000mg = 40kg). 문서 요청 V1 |
 | `bom_id`, `bom_version` | 기준 BOM (없으면 NULL) |
 | `planned_date`, `planned_quantity_e6` | 계획 (NULL 가능 — 사후 입력) |
 | `manufactured_date`, `started_at`, `completed_at` | 제조일, 시작·완료 시각 |
 | `output_quantity_e6` | 산출 합계 (정정 반영, `base_unit` 기준) |
-| `output_lot_count`, `input_line_count` | 산출 LOT 수, 투입 줄 수 |
+| `output_lot_count`, `input_line_count` | 산출 LOT 수(서로 다른 LOT, 0006 부터 0 또는 1), 투입 줄 수 |
 | `staff_name` | 작업 책임자 |
+| `output_lot_number` | 배치의 산출 LOT 번호 (10/15 추가, 0006). 산출 전 NULL, 예전 다중 LOT 배치는 쉼표로 나열 |
 | `subject_label` | `품목코드 품명 / 배치번호 / 제조일` 표시용 |
 
 문서 쪽 요청 대비: `quantity_kg` 대신 `output_quantity_e6` + `base_unit` (완제품은 단위가 `개`). kg 가 필요하면 `unit_weight_mg` 로 환산
@@ -132,16 +136,43 @@ apply_incoming_judgment(
 
 승인본 이후 대장이 바뀌었는지 확인. `since`(승인 시각) 이후 기록된 수불 중 그 기간 대장에 영향을 주는 것을 `list[LedgerChange]` 로 반환. `affects` 가 `OPENING`(기간 이전 → 이월 변경) 또는 `PERIOD`.
 
-## 5. 수불 → 문서 호출 (문서 쪽 함수 요청)
+### 보류 (`apps.inventory.holds`, 0003 — 10/11 미팅 A1 '다' 안, 가정)
 
-`apps/inventory/document_bridge.py` 에서 호출합니다. 수불 트랜잭션 안에서 불리므로 문서 쪽에서 오류가 나면 입고·취소도 롤백됩니다. 지금은 빈 함수이고, 문서 쪽 함수가 정해지면 연결합니다.
+CCP 이탈 등으로 배치·LOT 를 보류할 때 문서 쪽이 부를 수 있는 함수입니다 (호출 시점은 합의 필요).
 
-| 시점 | 수불 쪽 훅 | 문서 쪽에 필요한 것 |
+```python
+hold_batch(
+    batch_id=..., source_type="CCP", reason="금속검출 이탈", staff_id=..., source_document_id=...
+)
+hold_lot(lot_id=..., source_type="CCP", reason=..., staff_id=..., source_document_id=...)
+release_hold(hold_id=..., disposition="RELEASE", reason=..., staff_id=...)
+```
+
+- 한 제조배치의 산출 LOT 은 하나 (10/15, 0006). 산출을 나눠 입력하면 `production_outputs` 행은 늘지만 `lot_id` 는 같음
+- 보류 테이블 하나(`holds`)에 대상은 LOT 또는 배치. 배치를 보류하면 그 배치의 산출 LOT 에 전파 보류가 생기고, 보류 중인 배치에는 투입·산출을 추가할 수 없음
+- `source_type`: CCP / INCOMING_INSPECTION / FINISHED_INSPECTION 은 `source_document_id`(document_id) 필수, MANUAL 은 선택
+- `disposition`: RELEASE / REWORK / RETURN / DISPOSE. 처분은 기록이고 반품·폐기 재고 차감은 수불 이동으로 따로
+- 배치 보류 해제 시 열린 전파 보류도 같이 해제. LOT 별로 먼저 해제 가능
+- 이미 열린 보류가 있으면 새로 만들지 않고 그 보류를 돌려줌
+
+## 5. 수불 → 문서 호출
+
+`apps/inventory/document_bridge.py` 에서 문서 쪽 함수(`apps.doc_requirements.services`)를 부릅니다. 계약은 문서 쪽 [document-inventory-interface.md](document-inventory-interface.md). 수불 트랜잭션 안에서 수불 쓰기를 먼저 한 뒤 부르므로, 문서 쪽 오류(`ApiError`)가 나면 입고·취소·생산 시작도 롤백됩니다. API 응답은 문서 쪽 상태 코드와 `error.code`(예: `VALIDATION_ERROR`, `TEMPLATE_NOT_FOUND`)를 그대로 돌려줍니다.
+
+| 시점 | 수불 쪽 훅 | 문서 쪽 함수 |
 |---|---|---|
-| 입고 화면 그리기 | — | `get_incoming_inspection_form()` — 체크리스트 항목·검증 기준 |
-| 입고 등록 | `incoming_received(lot_id=...)` | `create_incoming_inspection(lot_id, answers, staff_id)` — 그날 육안검사일지에 LOT 행 추가 (작성완료·결재중이면 새 일지?) |
-| 입고 취소 | `incoming_receipt_cancelled(lot_id=..., reason=..., staff_id=...)` | 육안검사일지의 해당 LOT 행 처리 방식 |
-| HOLD 근거 문서 | `lot_holds.source_document_id` 에 `document_id` 저장 | 최신 내용·최신 승인본 조회 메소드 이름·반환 형태 |
+| 입고 등록 | `incoming_received(lot_id=..., staff_id=..., inspection=None)` | `require_for_lot(staff_id, lot_id, inspection)` — LOT 마다 D01·D02·D03 (작성중). `inspection` 은 새 D03 에만 채움 |
+| 입고 등록 + 육안검사 | `ReceiptInput.inspection` / API `inspection` | 문서 생성 뒤 판정을 수불이 반영(`apply_incoming_judgment`, `document_id` = D03). `judgment` 를 안 주면 `inspection.verdict` 를 판정으로 씀. 둘 다 주면 같아야 함 |
+| 입고 취소 전 | `receipt_cancel_blockers(lot_id=...)` | `docs_for_lot(lot_id)` — LOT 문서가 `submitted`·`approved`·`correcting`(정정 중) 이면 취소 거부. 작성중·작성완료·반려는 취소 가능 |
+| 입고 취소 | `incoming_receipt_cancelled(lot_id=..., reason=..., staff_id=...)` | 없음 — 문서 쪽 처리 미정(빈 함수 유지) |
+| HOLD 근거 문서 | `holds.source_document_id` 에 `document_id` 저장 (0003 에서 `lot_holds` → `holds`) | ⑥ `get_source_document` 로 조회 |
+| 생산 시작 (계획 없이 바로 완료한 경우는 완료 때) | `batch_started(batch_id=..., staff_id=...)` | `require_for_batch(staff_id, batch_id)` — 제조 배치면 CCP-1P·2B·3P 일지 (ERD v7 ③) |
+
+주의
+
+- 문서 양식(D01·D02·D03, CCP-1P·2B·3P)이 DB 에 있어야 입고·생산 시작이 됩니다. 없으면 `TEMPLATE_NOT_FOUND` 로 입고가 롤백됩니다. 개발 DB 는 `seed_dev_p4`·`seed_dev_workflow` 가 넣고, 운영 DB 에 양식을 넣는 방법은 문서 쪽과 정해야 합니다.
+- 담당자(`staff_id`)는 문서 쪽에서도 활성 직원이어야 합니다(`INVALID_STAFF`).
+- 문서 쪽 명세의 `create_incoming_inspection`·`get_incoming_inspection_form`·`get_source_document`·`ledger_approved_until` 은 아직 코드에 없습니다. 지금 연결한 것은 실제로 있는 `require_for_lot`·`require_for_batch`·`docs_for_lot` 입니다. 수불대장 잠금(`ledger_approved_until` 이하 날짜의 수불 등록·정정 막기, 문서 쪽 4장 요청)은 **이번 범위에서 제외**합니다 — 10/14 PM 미팅 D3(결재 여부와 무관하게 소급 수정 허용, 기간 잠금 없음)·D4(수불대장은 시스템 결재 없이 출력까지만). 함수가 생겨도 수불은 부르지 않습니다.
 
 ## 6. 직접 확인하기
 
@@ -158,8 +189,9 @@ python backend\manage.py show_view v_doc_incoming_lot --sql    # 뷰 정의
 
 ## 7. 아직 정해지지 않은 것
 
+결재 후 과거 수불 정정은 정해짐 — 10/14 PM 미팅 D3·D4: 소급 수정 허용, 기간 잠금 없음, 수불대장은 출력까지만. 문서 쪽 수불대장 잠금 요청은 이번 범위에서 제외(5절).
+
 | 항목 | 상태 |
 |---|---|
-| 배치 HOLD 와 산출 LOT 전파 | 방식 결정 후 새 마이그레이션 (`lot_holds` 재정의) |
-| 결재 후 과거 수불 정정 | 제안: 승인된 달은 소급 수불 금지, 정정 이동으로만 기록 → 문서 쪽 "월별 D04 승인 여부" 함수 필요 |
-| 통합 입고 체크리스트 | 5절 문서 쪽 함수 형식 |
+| CCP 이탈 보류 연결 | 수불 쪽 함수는 준비됨(아래). 누가 언제 부를지, 해제 조건(개선조치 완료·승인)은 문서 쪽과 합의 필요 |
+| 통합 입고 체크리스트 | 입고 + 육안검사 값 저장은 연결 완료(5절). 화면 항목 조회 `get_incoming_inspection_form()` 은 문서 쪽 대기 |

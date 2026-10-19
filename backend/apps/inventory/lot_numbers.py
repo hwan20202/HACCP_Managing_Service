@@ -1,15 +1,18 @@
 """LOT number generation from lot_number_rules + lot_number_sequences.
 
-Default rules (BOM v4 mentor scheme, adopted 10/12 — see docs/inventory-decisions.md)
-    INCOMING (원료·포장재)   {short_code}{date:yyMMdd}{seq:-N}    AHN261005, AHN261005-2
-    PRODUCED (반제품, 기본)  {short_code}{date:yyMMdd}{seq:-N}    BNY261007
-    PRODUCED FINISHED        {date:yyMMdd}{shift}{seq:-N}         261011A  (완제품코드와 함께 읽음)
+Default rules (see docs/inventory-decisions.md)
+    INCOMING (원료·포장재)   {short_code}{date:yyMMdd}{seq:-N}   AHN261005, AHN261005-2
+                            원료의 날짜는 소비기한 있음이면 소비기한, 없음이면 입고일 (0007,
+                            expiration.incoming_number_date). 포장재는 입고일
+    INCOMING SEMI (구매)     {date:yyMMdd}{seq:A}                261014A  (가정, 10/14)
+    PRODUCED SEMI           {date:yyMMdd}{seq:A}                261013A  (생산 순번, v6.1)
+    PRODUCED FINISHED       {date:yyMMdd}{seq:A}                261014A  (근무조 폐지, 10/14)
+The PRODUCED date is the batch's manufacturing date = 생산 시작일 (10/14 PM 미팅).
 
 Pattern tokens
     {item_code}          items.item_code
     {short_code}         items.short_code (LOT 약어: A** 원료, B** 반제품, C** 포장재)
     {item_type}          items.item_type (RAW, PACKAGING, ...)
-    {shift}              근무조 A 주간 / B 야간 / C 오후 (passed by the caller)
     {date:FMT}           the base date: received date for INCOMING, manufacturing date for
                          PRODUCED. FMT tokens: yyyy, yy, MM, dd  e.g. {date:yyMMdd} -> 261009
     {received:FMT}       same as {date:FMT} (older name, kept for existing rules)
@@ -19,8 +22,8 @@ Pattern tokens
     {seq:000}            zero-padded number, width = number of zeros
 
 LOT numbers are unique per item (UNIQUE(item_id, lot_number)), so the sequence counts per
-item: the key is the item code plus the rendered pattern without {seq}. Two finished products
-made on the same day and shift both get 261011A; the same product twice gets 261011A-2.
+item: the key is the item code plus the rendered pattern without {seq}. Two products made on
+the same day both get 261014A; the same product twice gets 261014A, 261014B.
 A number that already exists for the item (entered by hand or migrated) is skipped.
 
 Call next_lot_number() inside the caller's transaction.atomic() block (BEGIN IMMEDIATE,
@@ -41,12 +44,9 @@ _DATE_PART = re.compile(r"yyyy|yy|MM|dd")
 _MAX_SKIPS = 1000
 
 
-SHIFTS = {"A": "주간", "B": "야간", "C": "오후"}
-
-
 class LotNumberError(InventoryError):
-    """No usable rule, an invalid pattern, missing input (LOT 약어, 근무조), or the call is
-    outside a transaction."""
+    """No usable rule, an invalid pattern, missing input (LOT 약어), or the call is outside a
+    transaction."""
 
 
 def seq_to_letters(number):
@@ -80,7 +80,7 @@ def _format_seq(number, fmt):
     raise LotNumberError(f"Unknown seq format '{fmt}'. Use {{seq:-N}}, {{seq:A}} or {{seq:000}}.")
 
 
-def render(pattern, *, item, base_date, seq=None, shift=None):
+def render(pattern, *, item, base_date, seq=None):
     """Render a pattern. With seq=None the {seq} token is dropped (gives the sequence key)."""
     seq_tokens = [m for m in _TOKEN.finditer(pattern) if m.group(1) == "seq"]
     if len(seq_tokens) != 1:
@@ -96,13 +96,6 @@ def render(pattern, *, item, base_date, seq=None, shift=None):
             return item.short_code
         if name == "item_type":
             return item.item_type_id
-        if name == "shift":
-            if shift not in SHIFTS:
-                raise LotNumberError(
-                    "근무조를 선택하세요 (A 주간 / B 야간 / C 오후)."
-                    + (f" (입력: {shift!r})" if shift else "")
-                )
-            return shift
         if name in {"date", "received"}:
             if not fmt:
                 raise LotNumberError("Date token needs a format, e.g. {date:yyMMdd}.")
@@ -146,20 +139,19 @@ def _next_seq(seq_key):
         return cursor.fetchone()[0]
 
 
-def next_lot_number(*, lot_kind, item, base_date, shift=None):
-    """Draw the next LOT number for the item and date (and shift, for patterns with {shift}).
-    Must run inside transaction.atomic()."""
+def next_lot_number(*, lot_kind, item, base_date, rule_date=None):
+    """Draw the next LOT number for the item and date. Must run inside transaction.atomic().
+
+    base_date is the date in the number ({date:...}); rule_date picks the rule in effect
+    (default base_date). A raw material numbered by its 소비기한 passes the received date as
+    rule_date, so a rule that starts in the future is not applied early."""
     if not connection.in_atomic_block:
         raise LotNumberError("next_lot_number() must run inside transaction.atomic().")
-    rule = find_rule(lot_kind=lot_kind, item=item, on_date=base_date)
-    seq_key = f"{item.item_code}:" + render(
-        rule.pattern, item=item, base_date=base_date, shift=shift
-    )
+    rule = find_rule(lot_kind=lot_kind, item=item, on_date=rule_date or base_date)
+    seq_key = f"{item.item_code}:" + render(rule.pattern, item=item, base_date=base_date)
     # A number can already exist if it was entered by hand or migrated. Skip it.
     for _ in range(_MAX_SKIPS):
-        lot_number = render(
-            rule.pattern, item=item, base_date=base_date, seq=_next_seq(seq_key), shift=shift
-        )
+        lot_number = render(rule.pattern, item=item, base_date=base_date, seq=_next_seq(seq_key))
         if not Lot.objects.filter(item=item, lot_number=lot_number).exists():
             return lot_number
     raise LotNumberError(f"Could not find a free LOT number for key {seq_key}.")

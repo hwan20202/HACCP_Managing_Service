@@ -94,15 +94,12 @@
           </svg>
           <span>선행요건 관리</span>
         </a>
-        <a href="#" class="nav-item" data-page="production-log" id="nav-production-log">
+        <a href="#" class="nav-item" data-page="production-batches" id="nav-production-batches">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-            <polyline points="14 2 14 8 20 8"/>
-            <line x1="16" y1="13" x2="8" y2="13"/>
-            <line x1="16" y1="17" x2="8" y2="17"/>
-            <polyline points="10 9 9 9 8 9"/>
+            <path d="M2 20h20"/>
+            <path d="M4 20V10l5 3V10l5 3V6l6 4v10"/>
           </svg>
-          <span>생산 일지</span>
+          <span>생산지시 · 실적</span>
         </a>
       </div>
 
@@ -208,6 +205,12 @@
 
   <!-- 메인 컨텐츠 -->
   <main class="main-content" id="mainContent">
+    {% if qa_site %}
+    <div id="qaSiteBanner" role="status" style="padding:12px 20px;background:#fff3cd;color:#664d03;border-bottom:1px solid #ffecb5;font-weight:600;">
+      QA 테스트 사이트 · 실제 운영 데이터가 아닙니다. 입고·생산·결재는 검증용 기록입니다.
+    </div>
+    <script>window.HACCP_SITE = {qa: true};</script>
+    {% endif %}
     <!-- 상단 헤더 -->
     <header class="top-header">
       <div class="header-left">
@@ -257,9 +260,12 @@
   <script src="{% static 'prototype/js/modules/auto-engine.js' %}"></script>
   <script src="{% static 'prototype/js/modules/dashboard.js' %}"></script>
   <script src="{% static 'prototype/js/modules/inventory.js' %}"></script>
+  <script src="{% static 'prototype/js/xlsx-writer.js' %}"></script>
+  <script src="{% static 'prototype/js/modules/inventory-api.js' %}"></script>
   <script src="{% static 'prototype/js/modules/ccp.js' %}"></script>
   <script src="{% static 'prototype/js/modules/prerequisite.js' %}"></script>
   <script src="{% static 'prototype/js/modules/production.js' %}"></script>
+  <script src="{% static 'prototype/js/modules/production-api.js' %}"></script>
   <script src="{% static 'prototype/js/modules/quality.js' %}"></script>
   <script src="{% static 'prototype/js/modules/reports.js' %}"></script>
   <script src="{% static 'prototype/js/modules/standards.js' %}"></script>

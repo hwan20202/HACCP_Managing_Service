@@ -1,5 +1,6 @@
 """API tests for /api/v1/inventory/ (A4-A6)."""
 
+import datetime
 import json
 from io import StringIO
 
@@ -7,7 +8,18 @@ from django.core.management import call_command
 from django.test import Client, TestCase
 
 from .fields import kst_now
-from .models import Item, Lot, Staff, Supplier
+from .models import (
+    Bom,
+    BomLine,
+    BomLineAlternative,
+    Item,
+    Lot,
+    ProductionBatch,
+    Staff,
+    StockMovement,
+    Supplier,
+)
+from .test_support import seed_document_forms
 
 BASE = "/api/v1/inventory"
 
@@ -15,6 +27,7 @@ BASE = "/api/v1/inventory"
 class ApiTestCase(TestCase):
     @classmethod
     def setUpTestData(cls):
+        seed_document_forms()
         call_command("seed_master", "--sample", stdout=StringIO())
         cls.staff = Staff.objects.get(staff_code="S001")
         cls.supplier = Supplier.objects.get(supplier_code="V001")
@@ -169,6 +182,7 @@ class ReceiptWithJudgmentApiTests(ApiTestCase):
             "received_date": self.today,
             "quantity": "10",
             "idempotency_key": "j1",
+            "expiration_status": "NONE",
             "judgment": "fail",
         }
         response = self.post("/receipts/", data)
@@ -179,6 +193,20 @@ class ReceiptWithJudgmentApiTests(ApiTestCase):
 
 
 class StockAndLedgerApiTests(ApiTestCase):
+    def test_search_code_name_lot_and_supplier_preserves_balances(self):
+        receipt = self.receive()
+        params = {"from": self.today, "to": self.today}
+        for query in (self.raw.item_code, self.raw.name, self.supplier.name):
+            with self.subTest(query=query):
+                stock = self.get("/stock/lots/", q=query).json()["results"]
+                self.assertEqual([r["lot_id"] for r in stock], [receipt["lot_id"]])
+                result = self.get("/ledger/", q=query, **params).json()["results"]
+                self.assertEqual(result[0]["closing"], "50")
+                csv = self.get("/ledger/export.csv", q=query, **params)
+                self.assertIn(self.raw.name, csv.content.decode("utf-8-sig"))
+        self.assertEqual(self.get("/ledger/", q="없는 검색어", **params).json()["results"], [])
+        self.assertEqual(self.get("/stock/lots/", q="없는 검색어").json()["results"], [])
+
     def setUp(self):
         self.receipt = self.receive()
         self.lot_id = self.receipt["lot_id"]
@@ -312,3 +340,287 @@ class JudgmentApiTests(ApiTestCase):
             ).status_code,
             404,
         )
+
+
+class ProductionApiTests(ApiTestCase):
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.finished = Item.objects.get(item_code="4000001")
+        cls.semi = Item.objects.create(
+            item_type_id="SEMI",
+            item_code="3000001",
+            short_code="BGH",
+            name="가상환(벌크)",
+            base_unit="개",
+            shelf_life_months=12,
+        )
+        cls.bom = Bom.objects.create(
+            item=cls.semi,
+            version=1,
+            base_quantity_e6=1000 * 1_000_000,
+            effective_from=datetime.date(2026, 1, 1),
+        )
+        cls.line = BomLine.objects.create(
+            bom=cls.bom, line_no=1, component_item=cls.raw, quantity_e6=4 * 1_000_000
+        )
+
+    def receive_pass(self, key, quantity):
+        response = self.post(
+            "/receipts/",
+            {
+                "item_id": self.raw.pk,
+                "supplier_id": self.supplier.pk,
+                "staff_id": self.staff.pk,
+                "received_date": self.today,
+                "quantity": quantity,
+                "idempotency_key": key,
+                "expiration_status": "NONE",
+                "judgment": "PASS",
+            },
+        )
+        self.assertEqual(response.status_code, 201, response.content.decode())
+        return response.json()["lot_id"]
+
+    def test_plan_preview_does_not_save_and_matches_created_readiness(self):
+        self.receive_pass("preview-receipt", "2")
+        before = (ProductionBatch.objects.count(), StockMovement.objects.count())
+        preview = self.get("/batches/preview/", item_id=self.semi.pk, quantity="1000")
+        self.assertEqual(preview.status_code, 200, preview.content)
+        self.assertEqual(preview.json()["lines"][0]["shortfall"], "2")
+        self.assertFalse(preview.json()["ready"])
+        self.assertEqual(before, (ProductionBatch.objects.count(), StockMovement.objects.count()))
+        created = self.post(
+            "/batches/",
+            {
+                "item_id": self.semi.pk,
+                "staff_id": self.staff.pk,
+                "planned_quantity": "1000",
+            },
+        )
+        self.assertEqual(created.json()["readiness"], preview.json())
+        self.assertEqual(
+            self.get("/batches/preview/", item_id=self.semi.pk, quantity="0").status_code, 400
+        )
+
+    def test_auto_allocation_uses_alternative_and_checks_target_total_atomically(self):
+        primary_lot = self.receive_pass("primary", "1")
+        alt = Item.objects.create(
+            item_type_id="RAW",
+            item_code="1000098",
+            short_code="ALT",
+            name="가상 대체원료",
+            base_unit="g",
+        )
+        BomLineAlternative.objects.create(bom_line=self.line, item=alt)
+        received = self.post(
+            "/receipts/",
+            {
+                "item_id": alt.pk,
+                "supplier_id": self.supplier.pk,
+                "staff_id": self.staff.pk,
+                "received_date": self.today,
+                "quantity": "3000",
+                "expiration_status": "NONE",
+                "judgment": "PASS",
+                "idempotency_key": "alternate",
+            },
+        )
+        self.assertEqual(received.status_code, 201, received.content)
+        batch = self.post(
+            "/batches/",
+            {
+                "item_id": self.semi.pk,
+                "staff_id": self.staff.pk,
+                "planned_quantity": "1000",
+            },
+        ).json()
+        url = f"/batches/{batch['id']}"
+        self.assertEqual(self.post(url + "/start/", {"staff_id": self.staff.pk}).status_code, 200)
+        before = StockMovement.objects.count()
+        allocation = self.get(url + "/allocation/", bom_line_id=self.line.pk, quantity="4")
+        self.assertEqual(allocation.status_code, 200, allocation.content)
+        result = allocation.json()
+        self.assertEqual(result["shortfall"], "0")
+        self.assertEqual(
+            [(r["lot_id"], r["quantity"]) for r in result["results"]],
+            [(primary_lot, "1"), (received.json()["lot_id"], "3000")],
+        )
+        self.assertEqual(StockMovement.objects.count(), before)
+        payload = {
+            "staff_id": self.staff.pk,
+            "idempotency_key": "ui-target",
+            "expected_bom_line_id": self.line.pk,
+            "expected_quantity": "3",
+            "entries": [
+                {"lot_id": r["lot_id"], "bom_line_id": self.line.pk, "quantity": r["quantity"]}
+                for r in result["results"]
+            ],
+        }
+        mismatch = self.post(url + "/usages/", payload)
+        self.assertEqual(mismatch.status_code, 400, mismatch.content)
+        self.assertEqual(StockMovement.objects.count(), before)
+        payload["expected_quantity"] = "4"
+        saved = self.post(url + "/usages/", payload)
+        self.assertEqual(saved.status_code, 201, saved.content)
+        self.assertEqual(saved.json()["bom_check"]["lines"][0]["actual"], "4")
+        self.assertEqual(self.post(url + "/usages/", payload).status_code, 201)
+        self.assertEqual(StockMovement.objects.count(), before + 2)
+        payload["expected_quantity"] = "5"
+        self.assertEqual(self.post(url + "/usages/", payload).status_code, 400)
+        self.assertEqual(
+            self.get(
+                url + "/allocation/",
+                bom_line_id=self.line.pk,
+                quantity="1",
+                item_id=self.finished.pk,
+            ).status_code,
+            400,
+        )
+
+    def test_batch_flow(self):
+        lot_id = self.receive_pass("r1", "50")
+        created = self.post(
+            "/batches/",
+            {
+                "item_id": self.semi.pk,
+                "process_type": "manufacture",
+                "staff_id": self.staff.pk,
+                "planned_quantity": "2000",
+            },
+        )
+        self.assertEqual(created.status_code, 201, created.content.decode())
+        batch = created.json()
+        self.assertEqual((batch["status"], batch["bom_id"]), ("PLANNED", self.bom.pk))
+        url = f"/batches/{batch['id']}"
+
+        started = self.post(f"{url}/start/", {"staff_id": self.staff.pk}).json()
+        self.assertEqual(started["status"], "IN_PROGRESS")
+
+        fefo = self.get("/batches/fefo/", item_id=self.raw.pk, quantity="60").json()
+        self.assertEqual((fefo["covered"], fefo["shortfall"]), ("50", "10"))
+        self.assertEqual(fefo["results"][0]["lot_id"], lot_id)
+
+        used = self.post(
+            f"{url}/usages/",
+            {
+                "lot_id": lot_id,
+                "quantity": "8",
+                "staff_id": self.staff.pk,
+                "idempotency_key": "u1",
+                "bom_line_id": self.line.pk,
+            },
+        )
+        self.assertEqual(used.status_code, 201, used.content.decode())
+        output = self.post(
+            f"{url}/outputs/",
+            {"quantity": "2000", "staff_id": self.staff.pk, "idempotency_key": "o1"},
+        ).json()
+        self.assertEqual(
+            output["outputs"][0]["lot_number"],
+            f"{self.today[2:4]}{self.today[5:7]}{self.today[8:10]}A",
+        )
+        self.assertEqual(output["outputs"][0]["lot_quantity"], "2000")
+        self.assertEqual(
+            (output["output_lot"]["lot_number"], output["output_lot"]["stock"]),
+            (output["outputs"][0]["lot_number"], "2000"),
+        )
+        self.assertEqual(
+            output["bom_check"],
+            {
+                "basis": "output",
+                "basis_quantity": "2000",
+                "lines": [
+                    {
+                        "line_no": 1,
+                        "item": {"id": self.raw.pk, "item_code": "1000001", "name": "가상원료A"},
+                        "unit": "kg",
+                        "standard": "8",
+                        "actual": "8",
+                        "stock_managed": True,
+                    }
+                ],
+            },
+        )
+        done = self.post(f"{url}/complete/", {"staff_id": self.staff.pk}).json()
+        self.assertEqual(done["status"], "COMPLETED")
+        self.assertEqual(self.get(f"{url}/").json()["usages"][0]["net_quantity"], "8")
+
+        listed = self.get("/batches/", status="COMPLETED", **{"from": self.today}).json()
+        self.assertEqual(listed["count"], 1)
+        self.assertEqual(
+            self.get("/boms/", item_id=self.semi.pk).json()["results"][0]["id"], self.bom.pk
+        )
+
+    def test_errors(self):
+        bad = self.post(
+            "/batches/",
+            {"item_id": self.raw.pk, "process_type": "MANUFACTURE", "staff_id": self.staff.pk},
+        )
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(self.get("/batches/999999/").status_code, 404)
+        # 포장배치·완제품 제조는 MVP 범위 밖 (10/15)
+        for body in (
+            {"item_id": self.semi.pk, "process_type": "PACKAGING"},
+            {"item_id": self.finished.pk},
+        ):
+            refused = self.post("/batches/", {**body, "staff_id": self.staff.pk})
+            self.assertEqual(refused.status_code, 400, body)
+        batch = self.post("/batches/", {"item_id": self.semi.pk, "staff_id": self.staff.pk}).json()
+        self.assertEqual(batch["process_type"], "MANUFACTURE")
+        # 계획 상태에서 제조일(생산 시작일) 없이 산출하면 거부 (10/14)
+        no_date = self.post(
+            f"/batches/{batch['id']}/outputs/",
+            {"quantity": "1", "staff_id": self.staff.pk, "idempotency_key": "o1"},
+        )
+        self.assertEqual(no_date.status_code, 400)
+        self.assertIn("생산을 시작", no_date.json()["error"]["message"])
+        missing = self.post(f"/batches/{batch['id']}/cancel/", {"staff_id": self.staff.pk})
+        self.assertEqual(missing.status_code, 400)
+        cancelled = self.post(
+            f"/batches/{batch['id']}/cancel/", {"staff_id": self.staff.pk, "reason": "잘못 등록"}
+        )
+        self.assertEqual(cancelled.json()["status"], "CANCELLED")
+        self.assertEqual(self.get("/batches/", status="NOPE").status_code, 400)
+        self.assertEqual(self.get("/batches/fefo/", item_id=self.raw.pk).status_code, 400)
+
+    def test_holds(self):
+        lot_id = self.receive_pass("r1", "10")
+        held = self.post(
+            "/holds/",
+            {
+                "lot_id": lot_id,
+                "source_type": "manual",
+                "reason": "이물 의심",
+                "staff_id": self.staff.pk,
+            },
+        )
+        self.assertEqual(held.status_code, 201, held.content.decode())
+        hold = held.json()
+        self.assertEqual((hold["target"], hold["is_open"]), ("lot", True))
+        stock = self.get("/stock/lots/", item_id=self.raw.pk).json()["results"][0]
+        self.assertEqual((stock["is_usable"], stock["active_hold_count"]), (False, 1))
+        both = self.post(
+            "/holds/",
+            {
+                "lot_id": lot_id,
+                "batch_id": 1,
+                "source_type": "MANUAL",
+                "reason": "x",
+                "staff_id": self.staff.pk,
+            },
+        )
+        self.assertEqual(both.status_code, 400)
+        ccp = self.post(
+            "/holds/",
+            {"lot_id": lot_id, "source_type": "CCP", "reason": "x", "staff_id": self.staff.pk},
+        )
+        self.assertEqual(ccp.status_code, 400)
+        self.assertEqual(self.get("/holds/", open=1).json()["count"], 1)
+        released = self.post(
+            f"/holds/{hold['id']}/release/",
+            {"disposition": "release", "reason": "이상 없음", "staff_id": self.staff.pk},
+        ).json()
+        self.assertEqual((released["is_open"], released["disposition"]), (False, "RELEASE"))
+        self.assertEqual(self.get("/holds/", open=1).json()["count"], 0)
+        self.assertEqual(self.get("/holds/999999/").status_code, 404)

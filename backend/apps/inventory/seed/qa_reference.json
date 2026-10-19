@@ -1,0 +1,436 @@
+{
+  "sources": [
+    {
+      "filename": "바이오닷_BOM_원료코드_v6_2.xlsx",
+      "sha256": "a61299c5b74c408fae30d71453e688b8f6af567a4564dcaa730271304e38edb4"
+    },
+    {
+      "filename": "바이오닷_BOM_원료코드_v7.xlsx",
+      "sha256": "bf499f0ee4a4861bf4b70353ef114d842693b75ed9761b29c40144f65aec2187"
+    }
+  ],
+  "reference_ledger": "https://docs.google.com/spreadsheets/d/1vNJGTuu8-YuCIVcVTez2zjuH3p69AyElT-VLxUAFM_M/edit",
+  "items": [
+    {
+      "item_code": "1000003",
+      "name": "사양벌꿀",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 7",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "ASH"
+    },
+    {
+      "item_code": "1000004",
+      "name": "녹용(뉴질랜드)",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 8",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "ANY"
+    },
+    {
+      "item_code": "1000005",
+      "name": "녹용(러시아)",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 9",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "ANR"
+    },
+    {
+      "item_code": "1000009",
+      "name": "산수유분말",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 13",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "ASP"
+    },
+    {
+      "item_code": "1000012",
+      "name": "참당귀뿌리",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 15",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "ADR"
+    },
+    {
+      "item_code": "1000014",
+      "name": "숙지황",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 17",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "AJH"
+    },
+    {
+      "item_code": "1000015",
+      "name": "홍삼분말",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 18",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "ARG"
+    },
+    {
+      "item_code": "1000017",
+      "name": "침향",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 19",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "ACH"
+    },
+    {
+      "item_code": "1000025",
+      "name": "건조효모",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 27",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "ADY"
+    },
+    {
+      "item_code": "1000027",
+      "name": "녹각분말",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 29",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "AKP"
+    },
+    {
+      "item_code": "1000028",
+      "name": "쇠무릅뿌리(우슬)",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 30",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "AUS"
+    },
+    {
+      "item_code": "1000029",
+      "name": "복령",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 31",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "ABR"
+    },
+    {
+      "item_code": "1000030",
+      "name": "천마분말",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 32",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "AMP"
+    },
+    {
+      "item_code": "1000032",
+      "name": "감초",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 34",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "AGC"
+    },
+    {
+      "item_code": "1000033",
+      "name": "율무쌀",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 35",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "AYL"
+    },
+    {
+      "item_code": "1000034",
+      "name": "대추",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 36",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "ADJ"
+    },
+    {
+      "item_code": "1000035",
+      "name": "원지뿌리",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 37",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "AWJ"
+    },
+    {
+      "item_code": "1000036",
+      "name": "비타민미네랄믹스",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 38",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "AVM"
+    },
+    {
+      "item_code": "1000037",
+      "name": "L-아르지닌",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 39",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "AAR"
+    },
+    {
+      "item_code": "1000040",
+      "name": "덱스트린",
+      "item_type": "RAW",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 원료_마스터 / row 41",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용"
+      ],
+      "short_code": "ADX"
+    },
+    {
+      "item_code": "3000011",
+      "name": "한동 효력환",
+      "item_type": "SEMI",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 반제품_마스터 / row 15",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용",
+        "소비기한 24개월: 공통 문구·회의 방향을 적용한 QA 계산값, 미확정 문구는 실제 마스터 확정이 아님"
+      ],
+      "short_code": null,
+      "shelf_life_months": 24
+    },
+    {
+      "item_code": "3000014",
+      "name": "녹용분말",
+      "item_type": "SEMI",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 반제품_마스터 / row 18",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용",
+        "소비기한 24개월: 공통 문구·회의 방향을 적용한 QA 계산값, 미확정 문구는 실제 마스터 확정이 아님"
+      ],
+      "short_code": null,
+      "shelf_life_months": 24
+    },
+    {
+      "item_code": "3000017",
+      "name": "녹용추출분말",
+      "item_type": "SEMI",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 반제품_마스터 / row 21",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용",
+        "소비기한 24개월: 공통 문구·회의 방향을 적용한 QA 계산값, 미확정 문구는 실제 마스터 확정이 아님"
+      ],
+      "short_code": null,
+      "shelf_life_months": 24
+    },
+    {
+      "item_code": "3000033",
+      "name": "녹용추출액(고형분1.5%)",
+      "item_type": "SEMI",
+      "base_unit": "kg",
+      "source": "바이오닷_BOM_원료코드_v6_2.xlsx / 반제품_마스터 / row 37",
+      "assumptions": [
+        "기준단위 kg: 질량 BOM·벌크 QA용",
+        "소비기한 24개월: 공통 문구·회의 방향을 적용한 QA 계산값, 미확정 문구는 실제 마스터 확정이 아님"
+      ],
+      "short_code": null,
+      "shelf_life_months": 24
+    }
+  ],
+  "boms": [
+    {
+      "item_code": "3000011",
+      "base_quantity": "1",
+      "unit": "kg",
+      "lines": [
+        {
+          "item_code": "1000003",
+          "quantity": "0.45",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A55:O55 (g → kg)"
+        },
+        {
+          "item_code": "1000025",
+          "quantity": "0.08",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A56:O56 (g → kg)"
+        },
+        {
+          "item_code": "1000009",
+          "quantity": "0.08",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A57:O57 (g → kg)"
+        },
+        {
+          "item_code": "1000012",
+          "quantity": "0.08",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A58:O58 (g → kg)"
+        },
+        {
+          "item_code": "3000014",
+          "quantity": "0.04",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A59:O59 (g → kg)"
+        },
+        {
+          "item_code": "1000027",
+          "quantity": "0.03",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A60:O60 (g → kg)"
+        },
+        {
+          "item_code": "1000015",
+          "quantity": "0.03",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A61:O61 (g → kg)"
+        },
+        {
+          "item_code": "1000028",
+          "quantity": "0.03",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A62:O62 (g → kg)"
+        },
+        {
+          "item_code": "1000014",
+          "quantity": "0.03",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A63:O63 (g → kg)"
+        },
+        {
+          "item_code": "1000029",
+          "quantity": "0.03",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A64:O64 (g → kg)"
+        },
+        {
+          "item_code": "1000030",
+          "quantity": "0.03",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A65:O65 (g → kg)"
+        },
+        {
+          "item_code": "1000032",
+          "quantity": "0.02",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A66:O66 (g → kg)"
+        },
+        {
+          "item_code": "1000033",
+          "quantity": "0.02",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A67:O67 (g → kg)"
+        },
+        {
+          "item_code": "1000034",
+          "quantity": "0.02",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A68:O68 (g → kg)"
+        },
+        {
+          "item_code": "1000035",
+          "quantity": "0.01",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A69:O69 (g → kg)"
+        },
+        {
+          "item_code": "1000017",
+          "quantity": "0.01",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A70:O70 (g → kg)"
+        },
+        {
+          "item_code": "1000036",
+          "quantity": "0.005",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A71:O71 (g → kg)"
+        },
+        {
+          "item_code": "1000037",
+          "quantity": "0.005",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A72:O72 (g → kg)"
+        }
+      ]
+    },
+    {
+      "item_code": "3000014",
+      "base_quantity": "1",
+      "unit": "kg",
+      "lines": [
+        {
+          "item_code": "1000004",
+          "quantity": "1",
+          "alternative": "1000005",
+          "source": "양쪽 반제품_BOM!A76:O76 (g → kg)"
+        }
+      ]
+    },
+    {
+      "item_code": "3000017",
+      "base_quantity": "1",
+      "unit": "kg",
+      "lines": [
+        {
+          "item_code": "3000033",
+          "quantity": "0.7353",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A91:O91 (g → kg)"
+        },
+        {
+          "item_code": "1000040",
+          "quantity": "0.2647",
+          "alternative": null,
+          "source": "양쪽 반제품_BOM!A92:O92 (g → kg)"
+        }
+      ]
+    }
+  ]
+}

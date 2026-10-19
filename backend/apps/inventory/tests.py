@@ -10,6 +10,7 @@ from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
 from django.test import SimpleTestCase, TestCase
 
+from .errors import InventoryError
 from .fields import KST, kst_now, parse_kst_text, to_kst_text
 from .lot_numbers import LotNumberError, next_lot_number, render, seq_to_letters
 from .master_import import MasterImportError, ensure_default_lot_rules, import_items
@@ -33,10 +34,12 @@ from .models import (
     StockMovementType,
     Supplier,
 )
+from .movements import correct_movement
 from .quantity import from_e6, to_e6
 from .receiving import ReceiptInput, ReceivingError, cancel_receipt, register_receipt
 from .shelf_life import add_months, expiration_for
 from .sql_runner import read_sql, split_statements
+from .test_support import seed_document_forms
 
 CORE_TABLES = {
     "item_types",
@@ -52,7 +55,7 @@ CORE_TABLES = {
     "stock_movements",
     "inventory",
     "incoming_receipts",
-    "lot_holds",
+    "holds",
     "audit_logs",
     # 0002_production.sql
     "boms",
@@ -186,6 +189,7 @@ class SchemaTests(TestCase):
 class StockFixtureMixin:
     @classmethod
     def setUpTestData(cls):
+        seed_document_forms()
         cls.staff = Staff.objects.create(staff_code="S001", name="홍길동")
         cls.item = Item.objects.create(
             item_type_id="RAW", item_code="1000019", name="테스트 원료", base_unit="kg"
@@ -389,6 +393,7 @@ class SeqLetterTests(SimpleTestCase):
 class LotNumberTests(TestCase):
     @classmethod
     def setUpTestData(cls):
+        seed_document_forms()
         ensure_default_lot_rules()
         cls.item = Item.objects.create(
             item_type_id="RAW",
@@ -399,10 +404,8 @@ class LotNumberTests(TestCase):
         )
         cls.day = datetime.date(2026, 10, 9)
 
-    def draw(self, item=None, day=None, kind=LotKind.INCOMING, shift=None):
-        return next_lot_number(
-            lot_kind=kind, item=item or self.item, base_date=day or self.day, shift=shift
-        )
+    def draw(self, item=None, day=None, kind=LotKind.INCOMING):
+        return next_lot_number(lot_kind=kind, item=item or self.item, base_date=day or self.day)
 
     def item_of(self, item_type, code, short_code=None):
         return Item.objects.create(
@@ -446,20 +449,27 @@ class LotNumberTests(TestCase):
 
     def test_semi_finished_lot_is_short_code_and_manufacturing_date(self):
         semi = self.item_of("SEMI", "3000019", "BTS")
-        self.assertEqual(self.draw(semi, kind=LotKind.PRODUCED), "BTS261009")
+        self.assertEqual(self.draw(semi, kind=LotKind.PRODUCED), "261009A")
 
-    def test_finished_lot_is_date_and_shift_per_product(self):
+    def test_finished_lot_is_date_and_sequence_per_product(self):
+        # 근무조 폐지 (10/14): 제조일 + 품목별 생산 순번
         first = self.item_of("FINISHED", "4000019")
         second = self.item_of("FINISHED", "4000020")
         produced = LotKind.PRODUCED
-        self.assertEqual(self.draw(first, kind=produced, shift="A"), "261009A")
-        # Another product on the same day and shift gets the same number (read with its code).
-        self.assertEqual(self.draw(second, kind=produced, shift="A"), "261009A")
-        self.assertEqual(self.draw(first, kind=produced, shift="A"), "261009A-2")
-        self.assertEqual(self.draw(first, kind=produced, shift="B"), "261009B")
-        for shift in [None, "D"]:
-            with self.subTest(shift=shift), self.assertRaises(LotNumberError):
-                self.draw(first, kind=produced, shift=shift)
+        self.assertEqual(self.draw(first, kind=produced), "261009A")
+        # Another product on the same day gets the same number (read with its code).
+        self.assertEqual(self.draw(second, kind=produced), "261009A")
+        self.assertEqual(self.draw(first, kind=produced), "261009B")
+
+    def test_purchased_semi_lot_is_date_and_sequence(self):
+        # 반제품 입고 (10/14 D2): 약어 없이 입고일 + 순번 (가정)
+        semi = self.item_of("SEMI", "3000020")
+        self.assertEqual(self.draw(semi), "261009A")
+        self.assertEqual(self.draw(semi), "261009B")
+
+    def test_shift_token_is_gone(self):
+        with self.assertRaises(LotNumberError):
+            render("{date:yyMMdd}{shift}{seq:-N}", item=self.item, base_date=self.day, seq=1)
 
     def test_missing_short_code_is_an_error(self):
         with self.assertRaises(LotNumberError):
@@ -494,11 +504,13 @@ class MasterImportTests(TestCase):
         call_command("seed_master", "--sample", stdout=out)
         self.assertIn("staff: created 3, updated 0", out.getvalue())
         self.assertIn("created default INCOMING rule", out.getvalue())
-        self.assertIn("created default PRODUCED rule", out.getvalue())
+        self.assertIn("created default INCOMING SEMI rule", out.getvalue())
+        self.assertIn("created default PRODUCED SEMI rule", out.getvalue())
         self.assertIn("created default PRODUCED FINISHED rule", out.getvalue())
         call_command("seed_master", "--sample", stdout=(out := StringIO()))
-        self.assertIn("items: created 0, updated 5", out.getvalue())
-        self.assertEqual(LotNumberRule.objects.count(), 3)
+        self.assertIn("items: created 0, updated 6", out.getvalue())
+        self.assertEqual(LotNumberRule.objects.count(), 4)
+        self.assertFalse(LotNumberRule.objects.filter(pattern__contains="{shift}").exists())
         self.assertEqual(Item.objects.get(item_code="1000002").minimum_stock_e6, to_e6("20.5"))
 
     def test_dry_run_saves_nothing(self):
@@ -552,6 +564,7 @@ class MasterImportTests(TestCase):
 class ReceivingTests(TestCase):
     @classmethod
     def setUpTestData(cls):
+        seed_document_forms()
         call_command("seed_master", "--sample", stdout=StringIO())
         cls.item = Item.objects.get(item_code="1000001")
         cls.supplier = Supplier.objects.get(supplier_code="V001")
@@ -577,7 +590,8 @@ class ReceivingTests(TestCase):
         receipt = self.receive()
         lot = receipt.lot
         self.assertEqual(lot.status, LotStatus.QUARANTINE)
-        self.assertEqual(lot.lot_number, f"AGA{self.today:%y%m%d}")
+        # 소비기한 있는 원료: 약어 + 소비기한 (2027-09-01) (0007)
+        self.assertEqual((lot.lot_number, lot.expiration_status), ("AGA270901", "KNOWN"))
         self.assertEqual(receipt.stock_movement.movement_type_id, "RECEIPT")
         self.assertEqual(Inventory.objects.get(lot=lot).quantity_e6, to_e6(50))
         self.assertEqual(AuditLog.objects.get(record_id=str(receipt.pk)).action, "INSERT")
@@ -634,8 +648,12 @@ class ReceivingTests(TestCase):
         )
 
     def test_second_receipt_same_day_gets_suffix(self):
+        # 소비기한 있는 원료는 소비기한으로 채번 (0007).
+        # 같은 소비기한이 또 들어오면 -2 (입고 1건 = LOT 1개)
         self.receive("k1")
-        self.assertEqual(self.receive("k2").lot.lot_number, f"AGA{self.today:%y%m%d}-2")
+        self.assertEqual(self.receive("k2").lot.lot_number, "AGA270901-2")
+        none = self.receive("k3", expiration_date=None, expiration_status="NONE").lot
+        self.assertEqual(none.lot_number, f"AGA{self.today:%y%m%d}")
 
     def test_late_entry_is_dated_at_start_of_received_day(self):
         day = self.today - datetime.timedelta(days=3)
@@ -680,7 +698,9 @@ class ReceivingTests(TestCase):
         self.assertEqual(IncomingReceipt.objects.count(), 0)
         with patch(target) as notify:
             receipt = self.receive()
-        notify.assert_called_once_with(lot_id=receipt.lot_id)
+        notify.assert_called_once_with(
+            lot_id=receipt.lot_id, staff_id=self.staff.pk, inspection=None
+        )
 
     def test_cancel_offsets_stock_and_marks_receipt(self):
         receipt = self.receive()
@@ -730,12 +750,80 @@ class ReceivingTests(TestCase):
         receipt.refresh_from_db()
         self.assertEqual(receipt.receipt_status, ReceiptStatus.COMPLETED)
 
+    def doc_quantities(self, lot):
+        return fetch_one(
+            "SELECT quantity_e6, net_quantity_e6, receipt_status FROM v_doc_incoming_lot "
+            "WHERE lot_id = %s",
+            [lot.pk],
+        )
+
+    def test_receipt_quantity_can_be_corrected_in_part(self):
+        # 과거 수불도 수정 가능해야 함 (10/14 D3): LOT 번호는 그대로, 원래 입고 시각으로 정정
+        receipt = self.receive()
+        lot = receipt.lot
+        correction = correct_movement(
+            movement_id=receipt.stock_movement_id,
+            quantity="5",
+            reason="수량 오입력 (45kg)",
+            staff_id=self.staff.pk,
+            idempotency_key="fix-1",
+        )
+        self.assertEqual(correction.movement_type_id, "CORRECTION_OUT")
+        self.assertEqual(correction.occurred_at, receipt.stock_movement.occurred_at)
+        self.assertEqual(Inventory.objects.get(lot=lot).quantity_e6, to_e6(45))
+        self.assertEqual(self.doc_quantities(lot), (to_e6(50), to_e6(45), "COMPLETED"))
+        with self.assertRaisesMessage(InventoryError, "입고 취소"):  # 0 이 되면 취소로
+            correct_movement(
+                movement_id=receipt.stock_movement_id,
+                quantity="45",
+                reason="x",
+                staff_id=self.staff.pk,
+                idempotency_key="fix-2",
+            )
+        # 취소는 정정 후 남은 수량을 뺀다
+        cancel_receipt(receipt_id=receipt.pk, staff_id=self.staff.pk, reason="오입력")
+        self.assertEqual(Inventory.objects.get(lot=lot).quantity_e6, 0)
+        self.assertEqual(self.doc_quantities(lot), (to_e6(50), 0, "CANCELLED"))
+        with self.assertRaises(InventoryError):
+            correct_movement(
+                movement_id=receipt.stock_movement_id,
+                quantity="1",
+                reason="x",
+                staff_id=self.staff.pk,
+                idempotency_key="fix-3",
+            )
+        self.assertEqual(fetch_all("SELECT * FROM v_inventory_mismatch"), [])
+
+    def test_semi_finished_goods_can_be_received(self):
+        # 반제품도 사 온다 (10/14 D2). 약어 없이 입고일 + 순번 (가정)
+        semi = Item.objects.create(
+            item_type_id="SEMI", item_code="3000099", name="구매 반제품", base_unit="kg"
+        )
+        first = self.receive(item_id=semi.pk).lot
+        second = self.receive("k2", item_id=semi.pk).lot
+        day = f"{self.today:%y%m%d}"
+        self.assertEqual((first.lot_number, second.lot_number), (f"{day}A", f"{day}B"))
+        self.assertEqual(first.lot_kind, LotKind.INCOMING)
+
+    def test_non_stock_items_are_not_received(self):
+        water = Item.objects.create(
+            item_type_id="RAW",
+            item_code="1000097",
+            name="정제수",
+            base_unit="kg",
+            is_stock_managed=False,
+        )
+        with self.assertRaisesMessage(InventoryError, "재고 관리 대상이 아닌"):
+            self.receive(item_id=water.pk)
+        self.assertEqual(Lot.objects.count(), 0)
+
 
 class ShelfLifeTests(SimpleTestCase):
     def test_months_keep_the_day_and_clamp_month_end(self):
         item = Item(shelf_life_months=24)
+        # 라벨은 하루 전 (10/14 PM 미팅 B3)
         self.assertEqual(
-            expiration_for(item, datetime.date(2026, 10, 13)), datetime.date(2028, 10, 13)
+            expiration_for(item, datetime.date(2026, 10, 13)), datetime.date(2028, 10, 12)
         )
         self.assertEqual(add_months(datetime.date(2026, 1, 31), 1), datetime.date(2026, 2, 28))
         self.assertEqual(add_months(datetime.date(2027, 2, 28), 12), datetime.date(2028, 2, 28))
@@ -743,7 +831,7 @@ class ShelfLifeTests(SimpleTestCase):
     def test_days_and_missing(self):
         made = datetime.date(2026, 10, 13)
         self.assertEqual(
-            expiration_for(Item(shelf_life_days=10), made), datetime.date(2026, 10, 23)
+            expiration_for(Item(shelf_life_days=10), made), datetime.date(2026, 10, 22)
         )
         self.assertIsNone(expiration_for(Item(), made))
         self.assertIsNone(expiration_for(Item(shelf_life_months=1), None))

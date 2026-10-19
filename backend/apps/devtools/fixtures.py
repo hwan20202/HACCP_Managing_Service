@@ -17,7 +17,7 @@ POST /api/dev/fixtures/d03 {
   received_date: YYYY-MM-DD      (P7, 기본 오늘. 미래 불가. LOT 번호는 수불 규칙 AYJ{yyMMdd}…),
   count: 1~10                    (P7, 기본 1),
   inspector: staff id | null     (P7, 기본 4. null이면 점검자 비움 — 작성중(draft)만)
-  lot_only: bool                 (P7 S5, 기본 false. 입고 LOT만 만들고 작성 요구를 부르지 않음 —
+  lot_only: bool                 (P7 S5, 기본 false. 문서 없는 입고 LOT(수불 훅 연결 전 LOT 흉내) —
                                   묶음 상세의 "문서 없음" 줄 확인용. 다른 옵션은 received_date만 씀)
 }
 → 201 {document_id, lot_id, lot_number, version, status}
@@ -138,7 +138,8 @@ def _approve(document_id):
     wf.decide(1, ids[2], "approved")
 
 
-def _new_lot(day):
+def _new_lot(day, documents=True):
+    """입고 LOT(수불 입고 훅이 D01·D02·D03을 만듦). documents=False면 문서 없는 예전 LOT 흉내."""
     items = inventory_dev.ensure_master()
     return inventory_dev.receive(
         item_id=items["유자"],
@@ -146,6 +147,8 @@ def _new_lot(day):
         received_date=day,
         quantity=100,
         staff_id=ACTOR,
+        expiration_status="NONE",  # 개발 시드: 날짜 없는 원료 LOT은 '소비기한 없음'으로(수불 0007)
+        documents=documents,
     )
 
 
@@ -205,7 +208,7 @@ def d03_fixture(request):
         if lot_only:
             day, _count, _inspector = _clean_p7(body, "draft")
             with transaction.atomic():
-                lot_id = _new_lot(day)
+                lot_id = _new_lot(day, documents=False)
             lot_number = inventory_dev.lot_number(lot_id)
             return json_response(
                 {"lot_id": lot_id, "lot_number": lot_number, "document_id": None}, status=201

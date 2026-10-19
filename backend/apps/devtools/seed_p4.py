@@ -4,6 +4,7 @@
   **수불 입고 서비스**로, 생산 배치 2개는 개발 전용 INSERT로 만든다.
   LOT 번호는 수불 규칙(AYJ{yyMMdd}…).
 - 작성 요구 문서는 P5부터 REQ F01·F02(require_for_lot·require_for_batch)로 만든다(REQ-S2-Q11).
+  입고 LOT의 F01은 수불 입고 훅(document_bridge)이 입고와 함께 부른다.
   REQ는 수불 뷰로 읽는다. 입고 LOT 5개 모두 D01·D02가 생긴다(REQ 규칙대로).
   결재 상태는 WF 함수로 만든다(문서·회차 상태 짝 유지).
 - 파일(D01·D02 첨부)은 스프린트 3(D-058)이라 만들지 않는다. D01·D02는 작성중으로 남는다.
@@ -41,12 +42,13 @@ ACTOR = 3
 def ensure_stock(today):
     """입고 LOT 5개·배치 2개. 다시 부르면 처음 만든 것을 그대로 쓴다(날짜가 달라도 — 수불 요청 키).
 
-    반환: (lot_id 목록, batch_id 목록)."""
+    반환: ([(lot_id, 입고 훅 문서 결과 | None)], batch_id 목록). 새 입고면 수불 입고 훅이 F01을
+    부른 결과, 이미 있던 입고(같은 요청 키)면 None."""
     items = inventory_dev.ensure_master()
     lots = []
     for n, (item, supplier, qty, days, back) in enumerate(LOTS, start=1):
         lots.append(
-            inventory_dev.receive(
+            inventory_dev.receive_lot(
                 item_id=items[item],
                 supplier_name=supplier,
                 received_date=today - timedelta(days=back),
@@ -185,9 +187,12 @@ def seed_p4(today=None):
         # 입고 LOT마다 F01: D01·D02·D03(LOT마다 1건, P6a). 오늘 3개, 전날 2개(DOC-PS-16·17·27).
         # 시드는 수불 자리라 호출 전에 자기 쓰기(LOT UPDATE)를 먼저 한다(REQ-S2-Q13).
         lot_out = []
-        for lot_id in lots:
-            inventory_dev.touch_lot(lot_id)
-            out = req.require_for_lot(actor, lot_id)
+        for lot_id, received in lots:
+            if received is not None:  # 이번에 입고 — 수불 입고 훅이 F01을 이미 불렀다
+                out = received
+            else:
+                inventory_dev.touch_lot(lot_id)
+                out = req.require_for_lot(actor, lot_id)
             _count(made, out["documents"])
             _assign(actor, out["documents"])
             lot_out.append(out)

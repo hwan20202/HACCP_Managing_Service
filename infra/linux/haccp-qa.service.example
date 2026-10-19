@@ -1,0 +1,20 @@
+# Example only: confirm product, paths, Python 3.14 and proxy before installing.
+[Unit]
+Description=BIODOT isolated QA application
+After=network.target
+
+[Service]
+Type=simple
+User=biodot-qa
+Group=biodot-qa
+WorkingDirectory=/opt/biodot-qa/current
+Environment=HACCP_ENV_FILE=/etc/biodot/qa.env
+ExecStart=/opt/biodot-qa/current/.venv/bin/python scripts/project.py --env-file /etc/biodot/qa.env --qa serve --port 8002
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

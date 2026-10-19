@@ -2,8 +2,10 @@
 
 개발 콘솔이 켜진 설정에서만 URL이 등록된다(devtools/urls.py).
 수불·생산이 할 일(입고 등록·생산 시작 + 작성 요구 호출)을 한 트랜잭션으로 흉내 낸다(C2, D-128).
-- 입고 LOT은 수불 입고 서비스(register_receipt)로 만든다 — LOT 번호·구분·단위·원산지는 수불(품목) 값
-- 생산 배치는 수불(main)에 서비스가 없어 개발 전용 INSERT(inventory_dev.make_batch)
+- 입고 LOT은 수불 입고 서비스(register_receipt)로 만든다 — LOT 번호·구분·단위·원산지는
+  수불(품목) 값. LOT 문서(F01)는 수불 입고 훅이 같은 트랜잭션에서 만든다
+- 생산 배치는 개발 전용 INSERT(inventory_dev.make_batch — 개발 품목이 완제품이라
+  수불 생산 서비스 밖)
 - 다시 호출(D06·D07)은 수불 행 자기 쓰기(UPDATE)를 먼저 한다(REQ-S2-Q13). 트랜잭션은 수불 설정대로
   IMMEDIATE로 시작한다(쓰기 잠금 먼저).
 - fail_after면 작성 요구 다음에 일부러 실패시켜 LOT·문서가 모두 롤백되는지 보여 준다(REQ-S1-Q2).
@@ -11,10 +13,7 @@
 
 import datetime
 
-from django.conf import settings
 from django.db import transaction
-from django.utils import timezone
-from django.utils.module_loading import import_string
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
@@ -40,6 +39,7 @@ LOT_KEYS = (
     "received_date",
     "quantity",
     "expiration_date",
+    "expiration_status",  # 수불 0007: 소비기한 유무 KNOWN·NONE. 원료는 날짜 또는 이 값을 직접 선택
     "fail_after",
     "inspection",  # P6 D-080: 입고 화면에서 육안검사까지(형식 검사는 REQ-LOT-00b)
 )
@@ -115,6 +115,10 @@ def _clean_lot(body):
         problems.append(_err("supplier_name", "invalid", "1~50자입니다."))
     data["received_date"] = _date(body, "received_date", problems)
     data["expiration_date"] = _date(body, "expiration_date", problems, required=False)
+    status = body.get("expiration_status")
+    if status not in (None, "KNOWN", "NONE", "UNKNOWN"):
+        problems.append(_err("expiration_status", "invalid", "KNOWN·NONE·UNKNOWN 중 하나입니다."))
+    data["expiration_status"] = status
     if not _number(body.get("quantity")) or body["quantity"] <= 0:
         problems.append(_err("quantity", "invalid", "0보다 큰 수입니다."))
     data["fail_after"] = _fail_after(body, problems)
@@ -213,27 +217,19 @@ def lot_collection(request):
         data = _clean_lot(parse_json_body(request))
     day = data["received_date"]
     with transaction.atomic():
-        with step("REQ-DEV-02", "API", "수불 입고 등록(register_receipt)"):
-            lot_id = inventory_dev.receive(
+        # 수불 입고 화면과 같음: 입고 훅이 F01(require_for_lot)을 부르고, inspection이 있으면
+        # 새 D03에 채운 뒤 수불이 그 최종판정을 입고 판정으로 반영한다(D-080, 수불 document_bridge)
+        with step("REQ-DEV-02", "API", "수불 입고 등록(register_receipt → 입고 훅 F01·판정)"):
+            lot_id, result = inventory_dev.receive_lot(
                 item_id=data["item_id"],
                 supplier_name=data["supplier_name"],
                 received_date=day,
                 quantity=data["quantity"],
                 staff_id=actor,
                 expiration_date=data["expiration_date"],
+                expiration_status=data["expiration_status"],
+                inspection=data["inspection"],
             )
-        result = req.require_for_lot(actor, lot_id, data["inspection"])
-        d03 = next(d for d in result["documents"] if d["type_code"] == "D03")
-        if d03.get("inspection_applied"):
-            # 수불 입고 화면 흉내: 입고와 같은 트랜잭션에서 수불이 판정을 직접 반영한다(D-080)
-            with step("REQ-DEV-02b", "API", "판정 반영(수불 입고 화면 흉내 — 수불 판정 함수)"):
-                import_string(settings.HACCP_INVENTORY_JUDGMENT)(
-                    lot_id=lot_id,
-                    result=data["inspection"]["verdict"],
-                    staff_id=actor,
-                    document_id=d03["document_id"],
-                    judged_at=timezone.now(),
-                )
         return _finish(
             data["fail_after"], lambda: {"lot": sources.incoming_lot(lot_id), "result": result}, 201
         )

@@ -61,6 +61,8 @@ const App = {
 
   navigate(page, updateNav = true) {
     if (!page) return;
+    if (page === 'production-log') page = 'production-batches';
+    if (page === 'inventory-overview') page = 'raw-materials'; // retired menu / old links
     this.currentPage = page;
 
     // 활성 nav 업데이트
@@ -80,6 +82,7 @@ const App = {
       'ccp-monitoring': 'CCP 모니터링',
       prerequisite: '선행요건 관리',
       'production-log': '생산 일지',
+      'production-batches': '생산지시 · 실적',
       'quality-check': '자가품질검사',
       sanitation: '위생 관리 일지',
       training: '교육 훈련 관리',
@@ -97,12 +100,15 @@ const App = {
     let html = '';
     switch(page) {
       case 'dashboard':      html = DashboardPage.render(); break;
-      case 'raw-materials':  html = InventoryPage.render('raw'); break;
-      case 'sub-materials':  html = InventoryPage.render('sub'); break;
-      case 'finished-goods': html = InventoryPage.render('finished'); break;
+      // 재고 메뉴는 API 연결 화면 (inventory-api.js). 기존 고정 데이터 화면(InventoryPage)은 보존
+      case 'raw-materials':  html = InventoryApiPage.render('raw'); break;
+      case 'sub-materials':  html = InventoryApiPage.render('sub'); break;
+      case 'finished-goods': html = InventoryApiPage.render('finished'); break;
       case 'ccp-monitoring': html = CCPPage.render(); break;
       case 'prerequisite':   html = PrerequisitePage.render(); break;
-      case 'production-log': html = ProductionPage.render(); break;
+      case 'production-log': html = ProductionApiPage.render(); break;
+      // 제조배치: 생산 API 연결 화면 (production-api.js). 생산 일지(ProductionPage, 고정 데이터)는 보존
+      case 'production-batches': html = ProductionApiPage.render(); break;
       case 'quality-check':  html = QualityPage.render(); break;
       case 'sanitation':     html = SanitationPage.render(); break;
       case 'training':       html = TrainingPage.render(); break;
@@ -216,6 +222,7 @@ const App = {
   showModal(title, bodyHtml, buttons = []) {
     const overlay = document.getElementById('modalOverlay');
     const container = document.getElementById('modalContainer');
+    container.classList.remove('inventory-detail-modal');
 
     const btnsHtml = buttons.map(b =>
       `<button class="btn ${b.class}" onclick="${b.action}">${b.text}</button>`
