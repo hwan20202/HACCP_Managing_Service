@@ -98,6 +98,46 @@ def _row_rank(row):
     return 2 if row["todo"] else 3
 
 
+def document_summaries(work_date, document_ids):
+    """P11 S5 r2(D-176): 문서마다 측정 요약 — 배치별 연결 문서(REQ-A02)의 CCP 줄에 붙인다.
+
+    대시보드와 같은 DOC N8(measurement_summary)을 그 작업일로 한 번 읽고 그 문서들만 고른다.
+    반환 {document_id: summary}. 이탈 행의 개선조치 상태는 _deviation_state와 같은 규칙.
+    """
+    wanted = set(document_ids)
+    if not wanted or not work_date:
+        return {}
+    found = doc.measurement_summary(str(work_date), ccp_types())
+    out = {}
+    for d in found["documents"]:
+        if d["document_id"] not in wanted:
+            continue
+        row = _batch_row(d)
+        states = {"none": 0, "pending": 0, "no_checker": 0, "checked": 0}
+        matched = set()
+        for bad in d["nonconforming"]:
+            items = [x for x in d["deviations"] if x["section_id"] == bad["section_id"]]
+            matched.update(x["deviation_id"] for x in items)
+            states[_deviation_state(items)["state"]] += 1
+        for x in d["deviations"]:
+            if x["deviation_id"] not in matched:
+                state = _deviation_state([x])["state"]
+                if state != "none":
+                    states[state] += 1
+        latest = row["latest"]
+        out[d["document_id"]] = {
+            "row_count": row["row_count"],
+            "latest": {k: latest.get(k) for k in ("at", "phase", "verdict")} if latest else None,
+            "nonconforming_count": row["nonconforming_count"],
+            "deviation_count": row["deviation_count"],
+            "no_action": states["none"],
+            "pending": states["pending"],
+            "no_checker": states["no_checker"],
+            "checked": states["checked"],
+        }
+    return out
+
+
 def ccp_dashboard(actor_id=None, base_date=None):
     """F11: CCP 현황(REQ-CCP). actor_id는 API가 확인만 한다(결과에 쓰지 않음)."""
     with step("REQ-CCP-02", "REQ", "기준일 확인"):

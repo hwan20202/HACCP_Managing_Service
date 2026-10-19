@@ -130,7 +130,13 @@
     const lotLink = (r) => `<a href="#" class="te-lot-link" data-lot="${r.lot_id}" title="이 LOT의 연결 문서">${esc(r.label || r.lot_id)}</a>`;
     const docLevel = refs.filter((r) => r.section_id === null);
     const parts = docLevel.map((r) => {
-      if (r.production_batch_id !== null) return esc(`배치 ${r.label || r.production_batch_id}${r.process_code ? ` · ${r.process_code}` : ''}`);
+      // P11 S5 r2: 배치 이름 = 생산지시·실적의 그 배치(생산 화면이 있을 때만 링크)
+      if (r.production_batch_id !== null) {
+        const name = T.productionPage()
+          ? `<a href="#" class="te-lot-link" data-prod-batch="${r.production_batch_id}" title="생산 기록(생산지시·실적)">${esc(r.label || r.production_batch_id)}</a>`
+          : esc(r.label || r.production_batch_id);
+        return `배치 ${name}${r.process_code ? ` · ${esc(r.process_code)}` : ''}`;
+      }
       if (r.lot_id !== null) return [`LOT ${lotLink(r)}`, ...lotInfo(d).map(esc)].join(' · ');
       return esc(r.label || r.process_code || '-');
     });
@@ -1623,6 +1629,10 @@
       $('#btnEffective')?.addEventListener('click', () => {
         if (window.TempEntryApproval) window.TempEntryApproval.showRequest(Number($('#btnEffective').dataset.request), { from: 'doc', documentId: d.document_id });
       });
+      this.root.querySelectorAll('#teTarget [data-prod-batch]').forEach((a) => a.addEventListener('click', (e) => {
+        e.preventDefault();
+        T.productionPage().openBatch(Number(a.dataset.prodBatch), 'documents');
+      }));
       this.root.querySelectorAll('#teTarget [data-lot]').forEach((a) => a.addEventListener('click', (e) => {
         e.preventDefault();
         T.open('temp-lot-docs', { lotId: Number(a.dataset.lot), back: { page: 'temp-doc', documentId: d.document_id } });

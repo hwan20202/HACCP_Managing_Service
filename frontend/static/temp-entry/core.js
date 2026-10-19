@@ -42,6 +42,10 @@
       this.intent = intent || null;
       App.navigate(pageOf(page));
     },
+    // P11 S5 r2: 생산지시·실적 화면(시제품 production-api.js — const라 window에 없음). 없으면 null
+    productionPage() {
+      return typeof ProductionApiPage !== 'undefined' ? ProductionApiPage : null;  // eslint-disable-line no-undef
+    },
     takeIntent() {
       const value = this.intent;
       this.intent = null;

@@ -336,3 +336,49 @@ class CcpFixtureTests(P11ReqTestCase):
         ):
             with self.subTest(body=body):
                 self.assertEqual(self.post(body).status_code, 400)
+
+
+class BatchDocumentSummaryTests(P11ReqTestCase):
+    """P11 S5 r2(D-176): 배치별 연결 문서(REQ-A02)에 CCP 측정 요약 — 생산 화면 [연결 문서]."""
+
+    def setUp(self):
+        super().setUp()
+        from django.db import connection
+
+        with connection.cursor() as c:  # 배치 생산일 = 문서 작업일(require_for_batch 규칙)
+            c.execute("UPDATE production_batches SET manufactured_date = %s WHERE id = 12", [TODAY])
+
+    def test_tc038_summary(self):
+        from apps.doc_requirements import services
+
+        d1, d2, d3 = (ccp_doc(code, 12) for code in ("CCP-1P", "CCP-2B", "CCP-3P"))
+        add_rows(d1, "rounds", [r1p("09:00"), r1p("10:00")])
+        rows = add_rows(d2, "rounds", [r2b("09:30", temp=73.5), r2b("10:30", temp=75.0)])
+        deviation(d2, rows[0], [4])
+        out = {d["document_id"]: d for d in services.docs_for_batch(12)["documents"]}
+        s1, s2, s3 = out[d1]["summary"], out[d2]["summary"], out[d3]["summary"]
+        self.assertEqual(
+            (s1["row_count"], s1["latest"]["at"], s1["latest"]["verdict"]), (2, at("10:00"), "적합")
+        )
+        self.assertEqual(s1["nonconforming_count"], 0)
+        self.assertEqual(
+            (s2["nonconforming_count"], s2["deviation_count"], s2["no_action"], s2["pending"]),
+            (2, 1, 1, 1),
+        )
+        self.assertEqual((s3["row_count"], s3["latest"]), (0, None))
+        self.assertEqual(out[d1]["status"], "draft")  # 기존 키 그대로
+
+    def test_tc038_flow_and_no_documents(self):
+        from apps.doc_requirements import services
+
+        self.assertEqual(services.docs_for_batch(12)["documents"], [])
+        ccp_doc("CCP-1P", 12)
+        from apps.core import trace as tracing
+
+        current, token = tracing.start()
+        try:
+            services.docs_for_batch(12)
+        finally:
+            tracing.stop(token)
+        steps = [s.step_id for s in current.steps]
+        self.assertTrue(flows.matches("REQ-FND-B", steps), steps)

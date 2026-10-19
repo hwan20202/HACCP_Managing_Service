@@ -309,3 +309,5 @@
 .te-dsh-namebox .te-dsh-name { min-width: 0; }
 .te-dsh-namebox .te-b { align-self: flex-start; margin: 0.1rem 0 0; }
 .te-dsh-prodinfo { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.1rem; white-space: nowrap; }
+.te-dsh-prodlink { float: right; padding: 0.1rem 0.5rem; font-size: 0.72rem; }
+.te-dsh-focus { box-shadow: 0 0 0 2px var(--brand-primary, #2563eb); }

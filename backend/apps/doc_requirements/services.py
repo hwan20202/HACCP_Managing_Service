@@ -14,7 +14,7 @@ from apps.core.trace import step
 from apps.documents import services as doc
 from apps.staff import services as staff_services
 
-from . import errors, rules, sources
+from . import ccp, errors, rules, sources
 
 # ---------------------------------------------------------------- 공통 확인
 
@@ -296,6 +296,16 @@ def docs_for_batch(batch_id):
                     "version": ref["version"],
                 }
             )
+    with step("REQ-FND-B03", "REQ", "CCP 측정 요약(DOC N8, P11 S5 r2)") as s:
+        # 생산 화면 [연결 문서]의 줄마다 최근 측정·이탈·개선조치 상태(D-176). 문서 없으면 건너뜀
+        if documents:
+            summaries = ccp.document_summaries(
+                _text(batch["manufactured_date"]), [d["document_id"] for d in documents]
+            )
+            for d in documents:
+                d["summary"] = summaries.get(d["document_id"])
+        else:
+            s.skip("연결 문서 없음")
         return {
             "production_batch_id": batch_id,
             "batch": {

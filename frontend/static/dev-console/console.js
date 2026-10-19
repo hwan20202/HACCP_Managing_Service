@@ -984,7 +984,7 @@
       prepare: async () => ({ func: 'reqLot', body: J(await lotBody(await freeDay(), { fail_after: true })) }) },
     { id: 'REQ-PS-07', label: '생산 시작(제조)', expect: '201 · REQ-DEV-BAT 도식 일치(REQ-BAT-03 ×3) · production_batches +1(개발 전용 INSERT), document +3(CCP-1P·2B·3P), document_ref(배치 + 공정) +3',
       prepare: async () => ({ func: 'reqBatch', body: J({ item_id: await itemId('유자차'), process_type: 'MANUFACTURE', manufactured_date: localDay(0), quantity_kg: 900 }) }) },
-    { id: 'REQ-PS-08', label: '같은 배치 다시 호출 / 포장 배치', expect: '[호출 1] 200 · 이미 있음 ×3 · ④ production_batches ~1(updated_at만) [호출 2] 201 · REQ-BAT-03 건너뜀(공정 없음) · ④ production_batches +1, 문서 변화 없음',
+    { id: 'REQ-PS-08', label: '같은 배치 다시 호출 / 포장 배치 거부', expect: '[호출 1] 200 · 이미 있음 ×3 · ④ production_batches ~1(updated_at만) [호출 2] 400 INVENTORY_REJECTED(포장배치는 MVP 범위 밖 — 수불 0006, ISS-048) · REQ-DEV-02에서 중단 · ④ 변화 없음',
       prepare: async () => {
         const batch = (await reqList('batches')).find((b) => b.process_type === 'MANUFACTURE' && b.status !== 'CANCELLED' && b.documents.length);
         if (!batch) throw new Error(`CCP 문서가 있는 제조 배치가 없습니다. ${REQ_HINT}.`);

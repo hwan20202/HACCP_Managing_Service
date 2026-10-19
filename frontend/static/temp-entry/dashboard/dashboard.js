@@ -101,6 +101,7 @@
     else if (code === 'NOT_CHECKER') T.toast('확인자로 지정되지 않았습니다', 'error');
     else if (code === 'DEVIATION_NOT_FOUND') T.toast('삭제된 개선조치입니다', 'error');
     else T.toast(T.errorText(r), 'error');
+    T.refreshBadges();  // ISS-047: 실패(그사이 다른 처리)도 사이드바 숫자를 다시 셈 — 배지는 성공한 쓰기 뒤에만 자동으로 셈
     return { ok: false, code };
   }
 
@@ -128,6 +129,9 @@
       this.opened = {};
       this.panelOpened = {};
       this.notesClosed = {};
+      // P11 S5 r2: 생산 화면 [CCP 대시보드에서 보기]로 들어오면 그 배치 영역을 펼쳐서 보여 줌
+      this.focus = (intent && intent.focusBatch) || null;
+      if (this.focus) this.opened[this.focus] = true;
       this.board = null;
       this.pending = null;
       this.render();
@@ -238,6 +242,7 @@
         b.prod = info.status || null;
         b.qty = { planned: info.planned_qty, output: info.output_qty, unit: info.unit || '' };
         b.startedAt = info.started_at || '';
+        b.batchId = info.batch_id || null;  // P11 S5 r2: [생산 기록] 링크
         b.prodRank = PROD_RANK[b.prod] ?? 3;
       });
       list.sort((a, b) => a.prodRank - b.prodRank
@@ -289,6 +294,12 @@
         this.opened[label] = !this.isOpen(b);
         this.renderBoard();
       }));
+      box.querySelectorAll('[data-prod-batch]').forEach((el) => el.addEventListener('click', () => T.productionPage().openBatch(Number(el.dataset.prodBatch), 'work')));
+      if (this.focus) {  // 생산 화면에서 들어온 배치: 그 영역으로 스크롤·잠깐 강조(한 번만)
+        const el = [...box.querySelectorAll('.te-dsh-area')].find((x) => x.dataset.batch === this.focus);
+        if (el) { el.classList.add('te-dsh-focus'); el.scrollIntoView({ block: 'center' }); }
+        this.focus = null;
+      }
       box.querySelectorAll('[data-panel]').forEach((el) => el.addEventListener('click', () => {
         const label = el.dataset.panel;
         const b = B.list.find((x) => x.label === label);
@@ -366,7 +377,7 @@
       const cards = b.order.map((p) => this.procCardHtml(b, p)).join('');
       return `<div class="card te-dsh-area" data-batch="${esc(b.label)}">
           <div class="te-dsh-row te-dsh-area-head" data-toggle="${esc(b.label)}" title="눌러서 접기"><span class="te-dsh-caret">▾</span>${this.rowCells(b)}</div>
-          <div class="te-dsh-area-badges">${this.badges(b.counts) || '<span class="te-b te-b-green">이상 없음</span>'}</div>
+          <div class="te-dsh-area-badges">${this.badges(b.counts) || '<span class="te-b te-b-green">이상 없음</span>'}${b.batchId && T.productionPage() ? `<button class="btn btn-secondary btn-sm te-dsh-prodlink" data-prod-batch="${b.batchId}" title="생산지시·실적의 이 배치">생산 기록 ↗</button>` : ''}</div>
           <div class="te-dsh-procs">${cards}</div>
           ${this.panelHtml(b)}
           ${this.notesHtml(b)}
