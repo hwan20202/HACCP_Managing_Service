@@ -34,7 +34,10 @@ urlpatterns = [
         api.deviation_collection,
         name="api-deviation-collection",
     ),
+    # P11 확인 대기·확인 (DOC-A22·A23) — 고정 경로를 정수 경로보다 먼저
+    path("deviations/pending", api.deviations_pending, name="api-deviations-pending"),
     path("deviations/<int:deviation_id>", api.deviation_item, name="api-deviation-item"),
+    path("deviations/<int:deviation_id>/check", api.deviation_check, name="api-deviation-check"),
     # 스프린트 3 파일 (DOC-A11~A14)
     path("documents/<int:document_id>/files", api.document_files, name="api-document-files"),
     path(

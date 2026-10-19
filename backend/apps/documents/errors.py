@@ -140,3 +140,13 @@ class DocumentNotSkippable(DocumentError):
         "DOCUMENT_NOT_SKIPPABLE",
         "작성 안 함으로 바꿀 수 없는 문서입니다(주기 작성 요구 문서만).",
     )
+
+
+class AlreadyChecked(DocumentError):
+    # P11 F31: 다른 확인자가 먼저 확인(p11-s2-spec 3.3). details에 checked_by·checked_at
+    status, code, message = 409, "ALREADY_CHECKED", "이미 확인된 개선조치입니다."
+
+
+class NotChecker(DocumentError):
+    # P11 F31: 현재 사용자가 이 개선조치의 확인자가 아님
+    status, code, message = 403, "NOT_CHECKER", "확인자로 지정되지 않았습니다."

@@ -40,6 +40,8 @@ FLOWS = {
     "REQ-PRL": ["REQ-PRL-01", "REQ-PRL-02"],
     # P10 작성 필요 목록(document-workflow/p10-s2-spec.md 5장) — 04 안에 DOC N7(DOC-RQD)
     "REQ-TDO": [f"REQ-TDO-0{n}" for n in range(1, 7)],
+    # P11 CCP 현황(dashboard/p11-s2-spec.md 5장) — 04 안에 DOC N8(DOC-MSM)
+    "REQ-CCP": [f"REQ-CCP-0{n}" for n in range(1, 6)],
 }
 
 
