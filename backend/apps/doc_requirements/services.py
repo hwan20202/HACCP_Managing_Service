@@ -63,9 +63,12 @@ def _item(type_code, document, result, **extra):
 # ---------------------------------------------------------------- F01 require_for_lot
 
 
-def _incoming(lot_id):
+def _incoming(lot_id, allow_cancelled=False):
     lot = sources.incoming_lot(lot_id)
     if lot is None:
+        raise errors.LotNotFound()
+    # D-178: 입고가 취소된(소프트 딜리트) LOT은 없는 LOT과 같게 — F01·F03. F12(연쇄 삭제)만 허용
+    if not allow_cancelled and lot.get("receipt_status") == rules.RECEIPT_CANCELLED:
         raise errors.LotNotFound()
     if lot["lot_kind"] != rules.INCOMING:
         raise errors.LotNotIncoming()
@@ -270,6 +273,59 @@ def docs_for_lot(lot_id):
             },
             "documents": documents,
         }
+
+
+# ---------------------------------------------------------------- F12 delete_lot_documents (D-178)
+
+
+def delete_lot_documents(actor_id, lot_id):
+    """F12: 입고 취소 때 그 LOT의 입고 서류(D01·D02·D03)를 함께 소프트 딜리트(REQ-DEL).
+
+    수불 훅 incoming_receipt_cancelled가 수불 트랜잭션 안에서 부른다(D-178 Q3 — 연결은 수불 쪽).
+    "상신 이력 있으면 삭제 불가"(D-017·D-021)·"작성 요구 문서 삭제 불가"(C-3)의 예외(D-178):
+    결재 중·승인·정정 중 문서도 지운다 — 진행 중 결재 회차는 닫고(APR A13) 열린 정정도 닫는다
+    (DOC N10). 결재 회차·승인 기록·스냅샷은 남긴다. LOT 입고 상태는 보지 않는다(Q2 b).
+    이미 지운 문서는 건너뛴다 — 두 번 불러도 결과가 같다.
+    """
+    with step("REQ-DEL-00", "REQ", "트랜잭션·입력 확인"):
+        _require_transaction()
+        _check_id("lot_id", lot_id)
+        _check_actor(actor_id)
+    with step("REQ-DEL-01", "REQ", "입고 뷰로 LOT 확인(취소 LOT 포함)"):
+        lot = _incoming(lot_id, allow_cancelled=True)
+    with step("REQ-DEL-02", "REQ", "연결 문서(N3)") as s:
+        refs = doc.find_documents_by_ref(lot_id=lot_id)
+        found = {}
+        for ref in refs:
+            found.setdefault(ref["document_id"], ref)
+        ids = list(found)
+        s.note(f"문서 {len(ids)}건")
+    with step("REQ-DEL-03", "REQ", "진행 중 결재 회차 닫기(APR A13)") as s:
+        closed_requests = apr.close_open_requests(ids) if ids else 0
+        if not ids:
+            s.skip("문서 없음")
+    with step("REQ-DEL-04", "REQ", "문서 소프트 딜리트(DOC N10)") as s:
+        removed = {"deleted": [], "closed_corrections": 0}
+        if ids:
+            removed = doc.delete_source_documents(actor_id, ids)
+        else:
+            s.skip("문서 없음")
+    deleted = set(removed["deleted"])
+    return {
+        "lot_id": lot_id,
+        "lot": {"lot_number": lot["lot_number"], "receipt_status": lot.get("receipt_status")},
+        "documents": [
+            {
+                "document_id": i,
+                "type_code": found[i]["type_code"],
+                "status": found[i]["status"],  # 지우기 전 상태
+                "result": "deleted" if i in deleted else "already_deleted",
+            }
+            for i in ids
+        ],
+        "closed_requests": closed_requests,
+        "closed_corrections": removed["closed_corrections"],
+    }
 
 
 # ---------------------------------------------------------------- F04 docs_for_batch

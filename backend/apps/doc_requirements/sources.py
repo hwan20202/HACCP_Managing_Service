@@ -33,6 +33,8 @@ LOT_SELECT = (
     ("unit", "base_unit"),
     ("expiration_date", "expiration_date"),
     ("origin", "origin_country"),
+    # D-178: 입고 취소(소프트 딜리트) 여부 — COMPLETED / CANCELLED, 입고 건 없으면 NULL
+    ("receipt_status", "receipt_status"),
 )
 BATCH_SELECT = (
     ("production_batch_id", "production_batch_id"),
@@ -80,7 +82,8 @@ def incoming_lots_on(day):
     return _select(
         LOT_VIEW,
         LOT_SELECT,
-        " WHERE received_date = %s AND lot_kind = 'INCOMING'",
+        " WHERE received_date = %s AND lot_kind = 'INCOMING'"
+        " AND (receipt_status IS NULL OR receipt_status <> 'CANCELLED')",  # D-178 취소 입고 제외
         [day],
         " ORDER BY lot_number",
     )

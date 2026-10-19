@@ -12,6 +12,7 @@ FLOWS = {
     "REQ-LOT": LOT,
     "REQ-BAT": BAT,
     "REQ-FND": [f"REQ-FND-0{n}" for n in range(1, 5)],
+    "REQ-DEL": [f"REQ-DEL-0{n}" for n in range(0, 5)],  # D-178 F12 입고 취소 연쇄 삭제
     "REQ-FND-B": ["REQ-FND-B01", "REQ-FND-B02", "REQ-FND-B03"],  # B03 P11 S5 r2 CCP 측정 요약
     "REQ-DEV-LOT": ["REQ-DEV-01", "REQ-DEV-02", *LOT, "REQ-DEV-04"],
     "REQ-DEV-BAT": ["REQ-DEV-01", "REQ-DEV-02", *BAT, "REQ-DEV-04"],

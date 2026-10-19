@@ -434,6 +434,40 @@ def cancel_request(request_id, actor_id):
         return _request_dict(req, slots, with_snapshot=False)
 
 
+def close_open_requests(document_ids):
+    """A13(D-178): 입고 취소로 문서를 지울 때 그 문서들의 진행 중 회차를 시스템이 닫는다.
+
+    상신자 확인 없음(A7 cancel_request와 다름). 받은 승인·반려 칸은 그대로, 대기 칸만 skipped.
+    회차·스냅샷 행은 남긴다. 호출자(REQ F12) 트랜잭션 안에서만. 반환: 닫은 회차 수.
+    """
+    with step("APR-SYS-00", "APR", "트랜잭션 확인"):
+        _require_transaction()
+    ids = list(dict.fromkeys(document_ids))
+    now = timezone.now()
+    with step("APR-SYS-01", "APR", "진행 중 회차 닫기(cancelled)") as s:
+        open_ids = list(
+            ApprovalRequest.objects.filter(document_id__in=ids, status="in_progress").values_list(
+                "pk", flat=True
+            )
+        )
+        closed = 0
+        if open_ids:
+            closed = ApprovalRequest.objects.filter(pk__in=open_ids, status="in_progress").update(
+                status="cancelled", closed_at=now
+            )
+        s.note(f"닫은 회차 {closed}")
+    with step("APR-SYS-02", "APR", "대기 칸 건너뜀") as s:
+        skipped = 0
+        if open_ids:
+            skipped = Approval.objects.filter(request_id__in=open_ids, state="pending").update(
+                state="skipped", decided_at=now
+            )
+        else:
+            s.skip("진행 중 회차 없음")
+        s.note(f"skipped {skipped}")
+    return closed
+
+
 # ---------------------------------------------------------------- F04·F05 조회
 
 

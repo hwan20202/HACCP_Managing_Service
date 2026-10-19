@@ -1298,6 +1298,54 @@ def delete_document(actor_id, document_id):
         return None
 
 
+def delete_source_documents(actor_id, document_ids):
+    """N10(D-178): 원천 기록(입고)이 취소되어 그 문서들을 함께 소프트 딜리트한다(REQ F12 전용).
+
+    사용자 삭제(F08 delete_document)의 조건 — 작성중·상신 이력 없음·작성 요구 문서 아님 — 을
+    보지 않는다(D-017·D-021·C-3의 예외). 열린 정정은 닫는다(outcome cancelled).
+    결재 회차는 APR이 닫는다(DOC → APR 의존 없음). 이미 지운 문서는 건너뜀.
+    개선조치·파일 연결 행은 그대로(문서가 지워져 목록·확인 대기에서 빠짐).
+    반환 {deleted: [id…], closed_corrections: n}.
+    """
+    with step("DOC-SDL-00", "DOC", "트랜잭션·입력 확인"):
+        _require_transaction()
+        ids = list(dict.fromkeys(document_ids))
+        if not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+            raise errors.ValidationFailed(
+                details=[validation.error("document_ids", "invalid", "정수 목록입니다.")]
+            )
+    now = timezone.now()
+    with step("DOC-SDL-01", "DOC", "삭제 대상(지우지 않은 문서)") as s:
+        targets = list(
+            Document.objects.filter(pk__in=ids, deleted_at__isnull=True)
+            .order_by("document_id")
+            .values_list("pk", flat=True)
+        )
+        s.note(f"{len(targets)}건")
+    with step("DOC-SDL-02", "DOC", "열린 정정 닫기") as s:
+        closed = 0
+        if targets:
+            closed = DocumentCorrection.objects.filter(
+                document_id__in=targets, closed_at__isnull=True
+            ).update(closed_at=now, outcome="cancelled")
+        else:
+            s.skip("대상 없음")
+        s.note(f"닫은 정정 {closed}")
+    with step("DOC-SDL-03", "DOC", "삭제 표시(조건부 UPDATE)") as s:
+        marked = 0
+        if targets:
+            marked = Document.objects.filter(pk__in=targets, deleted_at__isnull=True).update(
+                deleted_at=now,
+                deleted_by_id=actor_id,
+                updated_at=now,
+                version=F("version") + 1,
+            )
+        else:
+            s.skip("대상 없음")
+        s.note(f"영향 행 {marked}")
+    return {"deleted": targets, "closed_corrections": closed}
+
+
 # ---------------------------------------------------------------- F09~F11 생명주기 (WF 전용)
 
 
