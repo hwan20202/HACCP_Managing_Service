@@ -9,11 +9,19 @@
 from apps.core.trace import step
 from apps.documents import services as doc
 
-from . import errors, periodic, rules
+from . import errors, periodic, rules, sources
 
 TODO_STATUSES = doc.TODO_STATUSES  # P10 REQ-F10 "작성 필요"와 같은 집합(S1a-Q4 a)
 # 측정 섹션 밖에서 배치 줄에 합계로 보여 줄 값(B6): 양식 → (반복 섹션, 필드)
 SUMMARY_TOTALS = {"CCP-3P": ("summary", "detected_qty")}
+# P11 S5 r1 특이사항 칸(배치 영역 특이사항 표): 양식 → {반복 섹션: 필드}. 값이 있는 행만
+NOTE_FIELDS = {
+    "CCP-1P": {"rounds": "note"},
+    "CCP-2B": {"rounds": "note"},
+    "CCP-3P": {"checks": "note", "summary": "note"},
+}
+# 이탈 줄·다른 개선조치 줄에 그대로 내려 주는 개선조치 내용(DOC N8 deviations)
+ACTION_KEYS = ("version", "description", "action_result", "actor_id")
 
 
 def _bad(path, message):
@@ -44,6 +52,7 @@ def _deviation_state(items):
     else:
         state, rep = "checked", items[0]
     out = {"state": state, "deviation_id": rep["deviation_id"], "checker_ids": rep["checker_ids"]}
+    out.update({k: rep.get(k) for k in ACTION_KEYS})  # P11 S5 r1: 대표 개선조치 내용
     if state == "checked":
         out.update(checked_by=rep["checked_by"], checked_at=rep["checked_at"])
     return out
@@ -105,12 +114,14 @@ def ccp_dashboard(actor_id=None, base_date=None):
         codes = ccp_types()
         s.note(", ".join(codes))
     with step("REQ-CCP-04", "REQ", "작업일 측정 요약(DOC N8)"):
-        found = doc.measurement_summary(base.isoformat(), codes)
+        found = doc.measurement_summary(
+            base.isoformat(), codes, {c: NOTE_FIELDS[c] for c in codes if c in NOTE_FIELDS}
+        )
     with step("REQ-CCP-05", "REQ", "카드·줄 정렬·이탈 줄"):
         by_type = {code: [] for code in codes}
         for document in found["documents"]:
             by_type.setdefault(document["type_code"], []).append(document)
-        cards, deviations = [], []
+        cards, deviations, others, notes = [], [], [], []
         for code in codes:
             documents = by_type[code]
             rows = [_batch_row(d) for d in documents]
@@ -131,8 +142,10 @@ def ccp_dashboard(actor_id=None, base_date=None):
                 }
             )
             for d in documents:
+                matched = set()
                 for bad in d["nonconforming"]:
                     items = [x for x in d["deviations"] if x["section_id"] == bad["section_id"]]
+                    matched.update(x["deviation_id"] for x in items)
                     deviations.append(
                         {
                             "document_id": d["document_id"],
@@ -148,14 +161,66 @@ def ccp_dashboard(actor_id=None, base_date=None):
                             "doc_deviation_count": len(d["deviations"]),
                         }
                     )
+                # P11 S5 r1: 이탈 행에 걸리지 않은 개선조치(관련 행 없음·적합 행에 씀)
+                for x in d["deviations"]:
+                    if x["deviation_id"] in matched:
+                        continue
+                    others.append(
+                        {
+                            "document_id": d["document_id"],
+                            "type_code": code,
+                            "label": d["label"],
+                            "section_id": x["section_id"],
+                            "deviation": _deviation_state([x]),
+                        }
+                    )
+                for n in d["notes"]:
+                    head = {"document_id": d["document_id"], "type_code": code}
+                    notes.append({**head, "label": d["label"], **n})
         deviations.sort(
             key=lambda x: (x["at"] is None, x["at"] or "", x["document_id"], x["row_no"])
         )
+        others.sort(key=lambda x: (x["document_id"], x["deviation"]["deviation_id"]))
+        # P11 S5 r1: 배치마다 적용 CCP 공정과 순서(품목 예외 → 공정 유형 기본, 규칙 상수 순서)
+        made = {
+            b["production_batch_id"]: b
+            for b in sources.batches_by_ids(
+                d["batch_id"] for d in found["documents"] if d.get("batch_id") is not None
+            )
+        }
+        batches = {}
+        for d in found["documents"]:
+            if d["label"] in batches:
+                continue
+            b = made.get(d.get("batch_id"))
+            order = (
+                [rules.ccp_type(p) for p in rules.processes_for(b["item_id"], b["process_type"])]
+                if b
+                else []
+            )
+            batches[d["label"]] = {
+                "label": d["label"],
+                "batch_id": d.get("batch_id"),
+                "item_id": b["item_id"] if b else None,
+                "item_name": (b["item_name"] if b else None) or d["item_name"],
+                "processes": order,
+                "status": b["status"] if b else None,  # D-171 정렬: PLANNED·IN_PROGRESS·COMPLETED
+                "started_at": b["started_at"] if b else None,
+                "completed_at": b["completed_at"] if b else None,
+                # D-172 생산 수량(기준 단위): 계획, 산출(생산 실적 LOT 합 — 없으면 0)
+                "planned_qty": b["planned_qty"] if b else None,
+                "output_qty": b["output_qty"] if b else None,
+                "unit": b["unit"] if b else None,
+            }
+        notes.sort(key=lambda x: (x["at"] is None, x["at"] or "", x["document_id"], x["row_no"]))
         from django.utils import timezone
 
         return {
             "base_date": base.isoformat(),
             "cards": cards,
             "deviations": deviations,
+            "other_deviations": others,
+            "batches": list(batches.values()),
+            "notes": notes,
             "generated_at": timezone.now().isoformat(),
         }

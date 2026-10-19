@@ -2938,11 +2938,13 @@ def _reasons(section, values):
     return reasons
 
 
-def measurement_summary(work_date, type_codes):
+def measurement_summary(work_date, type_codes, note_fields=None):
     """N8(P11, REQ-F11용): 작업일 문서의 측정 요약·이탈 행·개선조치. 쓰기 없음.
 
     SQL 6: 문서·양식 1 · 행 1 · 참조 1 · 개선조치 1 · 확인자 1 · 양식 이름 1(문서 없는 양식 카드).
     반환 {documents: [...], templates: {type_code: name}}.
+    note_fields(P11 S5 r1): {type_code: {section_def: field}} — 부르는 쪽이 정한 "특이사항" 칸.
+    값이 있는 행을 문서마다 notes로 돌려준다(DOC는 어느 칸이 특이사항인지 모름).
     """
     with step("DOC-MSM-01", "DOC", "입력 확인"):
         day = _as_day(work_date)
@@ -2963,16 +2965,19 @@ def measurement_summary(work_date, type_codes):
         s.note(f"{len(documents)}건")
     ids = [d.document_id for d in documents]
     rows, labels, deviations, checkers = {i: [] for i in ids}, {}, {i: [] for i in ids}, {}
+    batch_ids = {}
     with step("DOC-MSM-03", "DOC", "행·참조·개선조치·확인자") as s:
         if ids:
             for row in DocSection.objects.filter(document_id__in=ids).order_by(
                 "document_id", "section_def", "row_no"
             ):
                 rows[row.document_id].append(row)
-            for document_id, label in DocumentRef.objects.filter(
+            for document_id, label, batch_id in DocumentRef.objects.filter(
                 document_id__in=ids, section_id__isnull=True
-            ).values_list("document_id", "label"):
+            ).values_list("document_id", "label", "production_batch_id"):
                 labels.setdefault(document_id, label)
+                if batch_id is not None:
+                    batch_ids.setdefault(document_id, batch_id)
             for d in DeviationAction.objects.filter(
                 document_id__in=ids, deleted_at__isnull=True
             ).order_by("deviation_id"):
@@ -2992,7 +2997,8 @@ def measurement_summary(work_date, type_codes):
         for d in documents:
             sections = validation.sections_of(d.template.schema_json)
             by_section, latest, nonconforming, info = {}, None, [], {}
-            repeat_values = {}
+            repeat_values, notes = {}, []
+            wanted = ((note_fields or {}).get(d.template.type_code)) or {}
             for row in rows[d.document_id]:
                 section = sections.get(row.section_def)
                 if section is None:
@@ -3019,6 +3025,21 @@ def measurement_summary(work_date, type_codes):
                         }
                 else:
                     repeat_values.setdefault(row.section_def, []).append(values)
+                note_key = wanted.get(row.section_def)
+                text = values.get(note_key) if note_key else None
+                if isinstance(text, str) and text.strip():
+                    field = next((f for f in section["fields"] if f["key"] == note_key), {})
+                    notes.append(
+                        {
+                            "section_id": row.section_id,
+                            "section_def": row.section_def,
+                            "section_label": section.get("label", row.section_def),
+                            "field_label": field.get("label", note_key),
+                            "row_no": row.row_no,
+                            "at": at,
+                            "text": text.strip(),
+                        }
+                    )
                 if validation.is_nonconforming(section, values):
                     nonconforming.append(
                         {
@@ -3044,11 +3065,13 @@ def measurement_summary(work_date, type_codes):
                     "status": d.status,
                     "version": d.version,
                     "label": labels.get(d.document_id) or d.subject,
+                    "batch_id": batch_ids.get(d.document_id),  # P11 S5 r1: 배치별 공정 순서용
                     "item_name": info.get("item_name"),
                     "rows_by_section": by_section,
                     "latest": latest,
                     "nonconforming": nonconforming,
                     "repeat_values": repeat_values,
+                    "notes": notes,
                     "deviations": [
                         {
                             "deviation_id": x.deviation_id,
@@ -3056,6 +3079,11 @@ def measurement_summary(work_date, type_codes):
                             "checked_by": x.checked_by_id,
                             "checked_at": _iso(x.checked_at),
                             "checker_ids": checkers.get(x.deviation_id, []),
+                            # P11 S5 r1: 배치 영역 이탈 표(개선조치 내용·[확인]용 version)
+                            "version": x.version,
+                            "description": x.description,
+                            "action_result": x.action_result,
+                            "actor_id": x.actor_id,
                         }
                         for x in deviations[d.document_id]
                     ],

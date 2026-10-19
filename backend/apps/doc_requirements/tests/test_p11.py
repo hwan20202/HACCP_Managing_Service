@@ -146,6 +146,141 @@ class CcpDashboardTests(P11ReqTestCase):
         self.assertIn("DOC-MSM-04", steps)
 
 
+class CcpBatchAreaTests(P11ReqTestCase):
+    """P11 S5 r1(D-167): 배치 영역 — 개선조치 내용·다른 개선조치·특이사항(p11-s5-r1-lines 3장)."""
+
+    def test_tc032_action_content(self):
+        d = ccp_doc("CCP-2B", 12)
+        (row,) = add_rows(d, "rounds", [r2b("10:00", temp=73.5)])
+        made = doc.create_deviation(
+            4,
+            d,
+            {
+                "section_id": row,
+                "description": "온도 초과",
+                "action_result": "재건조",
+                "actor_id": 2,
+                "checker_ids": [3],
+            },
+        )
+        (bad,) = ccp.ccp_dashboard(3, TODAY)["deviations"]
+        dv = bad["deviation"]
+        self.assertEqual(dv["state"], "pending")
+        self.assertEqual(
+            (
+                dv["deviation_id"],
+                dv["version"],
+                dv["description"],
+                dv["action_result"],
+                dv["actor_id"],
+            ),
+            (made["deviation_id"], made["version"], "온도 초과", "재건조", 2),
+        )
+
+    def test_tc033_other_deviations(self):
+        d = ccp_doc("CCP-1P", 12)
+        ok_row, bad_row = add_rows(d, "rounds", [r1p("09:00"), r1p("10:00", gauss=9000)])
+        on_bad = deviation(d, bad_row)
+        whole = deviation(d, None, checkers=())
+        on_ok = deviation(d, ok_row)
+        out = ccp.ccp_dashboard(3, TODAY)
+        self.assertEqual(
+            [x["deviation"]["deviation_id"] for x in out["deviations"]], [on_bad["deviation_id"]]
+        )
+        others = out["other_deviations"]
+        self.assertEqual(
+            [
+                (x["deviation"]["deviation_id"], x["section_id"], x["deviation"]["state"])
+                for x in others
+            ],
+            [
+                (whole["deviation_id"], None, "no_checker"),
+                (on_ok["deviation_id"], ok_row, "pending"),
+            ],
+        )
+        self.assertEqual({x["label"] for x in others}, {"PB-12"})
+        self.assertEqual(others[0]["deviation"]["description"], "이탈")
+
+    def test_tc034_notes(self):
+        d1, d3 = ccp_doc("CCP-1P", 12), ccp_doc("CCP-3P", 12)
+        add_rows(
+            d1,
+            "rounds",
+            [
+                {**r1p("10:00"), "note": " 자석봉 교체 "},
+                r1p("09:00"),
+                {**r1p("11:00"), "note": "  "},
+            ],
+        )
+        add_rows(d3, "checks", [{**r3p("09:30"), "note": "제품 변경"}])
+        add_rows(d3, "summary", [{**summary(0), "note": "재점검"}])
+        notes = ccp.ccp_dashboard(3, TODAY)["notes"]
+        self.assertEqual(
+            [(n["type_code"], n["section_def"], n["at"], n["text"]) for n in notes],
+            [
+                ("CCP-3P", "checks", at("09:30"), "제품 변경"),
+                ("CCP-1P", "rounds", at("10:00"), "자석봉 교체"),
+                ("CCP-3P", "summary", None, "재점검"),
+            ],
+        )
+        self.assertEqual((notes[0]["field_label"], notes[2]["field_label"]), ("비고", "특이사항"))
+        self.assertEqual(notes[2]["section_label"], "제품 통과 요약")
+        self.assertEqual(notes[1]["label"], "PB-12")
+
+
+class CcpProcessOrderTests(P11ReqTestCase):
+    """P11 S5 r1(D-168): 배치마다 적용 CCP 공정과 순서 — 규칙 상수(품목 예외 → 공정 유형 기본)."""
+
+    def test_tc035_default_order(self):
+        for code in ("CCP-3P", "CCP-1P", "CCP-2B"):
+            ccp_doc(code, 12)
+        (b,) = ccp.ccp_dashboard(3, TODAY)["batches"]
+        self.assertEqual((b["label"], b["batch_id"], b["item_id"]), ("PB-12", 12, 2))
+        self.assertEqual(b["processes"], ["CCP-1P", "CCP-2B", "CCP-3P"])
+
+    def test_tc035_item_exception_order(self):
+        from unittest import mock
+
+        ccp_doc("CCP-1P", 15)
+        ccp_doc("CCP-2B", 15)
+        with mock.patch.dict(ccp.rules.CCP_BY_ITEM, {2: ["2B", "1P"]}):
+            (b,) = ccp.ccp_dashboard(3, TODAY)["batches"]
+        self.assertEqual(b["processes"], ["CCP-2B", "CCP-1P"])
+
+
+class CcpBatchStatusTests(P11ReqTestCase):
+    """D-171: 배치 생산 상태·시작/종료 일시(화면 정렬용)."""
+
+    def test_tc036_batch_status(self):
+        from django.db import connection
+
+        with connection.cursor() as c:
+            c.execute(
+                "UPDATE production_batches SET status = 'COMPLETED', started_at = %s,"
+                " completed_at = %s, manufactured_date = %s WHERE id = 15",
+                ["2026-10-13 08:10:00", "2026-10-13 15:00:00", TODAY],
+            )
+        ccp_doc("CCP-1P", 12)
+        ccp_doc("CCP-1P", 15)
+        out = {b["batch_id"]: b for b in ccp.ccp_dashboard(3, TODAY)["batches"]}
+        self.assertEqual((out[12]["status"], out[12]["started_at"]), ("IN_PROGRESS", None))
+        self.assertEqual(out[15]["status"], "COMPLETED")
+        self.assertTrue(str(out[15]["started_at"]).startswith("2026-10-13"))
+        self.assertTrue(str(out[15]["completed_at"]).startswith("2026-10-13"))
+
+    def test_tc037_batch_quantity(self):
+        from django.db import connection
+
+        with connection.cursor() as c:
+            c.execute(
+                "UPDATE production_batches SET planned_quantity_e6 = 1200000000 WHERE id = 12"
+            )
+        ccp_doc("CCP-1P", 12)
+        (b,) = ccp.ccp_dashboard(3, TODAY)["batches"]
+        self.assertEqual((b["planned_qty"], b["output_qty"]), (1200.0, 0))
+        self.assertIn("unit", b)
+
+
 class CcpApiTests(P11ReqTestCase):
     def test_tc005b_header_optional(self):
         self.assertEqual(self.client.get("/api/v1/ccp-dashboard").status_code, 200)
