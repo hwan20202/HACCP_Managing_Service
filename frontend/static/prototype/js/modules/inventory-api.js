@@ -114,10 +114,11 @@ const InventoryApiPage = {
       <div class="page-header">
         <div class="page-title-group">
           <h1 class="page-title">${cfg.title}</h1>
-          <p class="page-desc">품목명을 누르면 재고 상세를, 입고 #번호를 누르면 입고 내역과 취소 기능을 볼 수 있습니다.</p>
+          <p class="page-desc">수불 내역과 현재고를 조회합니다. 입고 등록·취소는 오른쪽 버튼에서 진행합니다.</p>
         </div>
         <div class="page-actions">
           <button id="qaReceiptOpen" class="btn btn-primary" onclick="InventoryApiPage.openQaReceipt()">입고 등록</button>
+          <button id="receiptCancelPickerOpen" class="btn btn-danger" onclick="InventoryApiPage.openReceiptPicker()">입고 취소</button>
           <button class="btn btn-secondary" onclick="InventoryApiPage.load()">새로고침</button>
           <button class="btn btn-secondary" id="invExport" onclick="InventoryApiPage.exportExcel()">엑셀 다운로드</button>
         </div>
@@ -654,7 +655,62 @@ const InventoryApiPage = {
     window.TempEntry.open('temp-lot-docs',{lotId});
   },
 
-  async openReceipt(id) {
+  async openReceiptPicker() {
+    const context = this.receiptPicker = {offset: 0, limit: 20};
+    App.showModal('입고 취소 · 입고 선택', '<p>입고 목록을 준비하는 중…</p>');
+    document.getElementById('modalContainer').classList.add('inventory-detail-modal');
+    const modal = document.querySelector('#modalContainer .modal-body');
+    try {
+      const items = await this.getJson('/items/');
+      if (context !== this.receiptPicker || modal !== document.querySelector('#modalContainer .modal-body')) return;
+      modal.innerHTML = `<p>취소할 입고의 품목·LOT·수량을 확인하고 <strong>선택</strong>을 누르세요. 취소 사유 입력 후 최종 확인할 수 있습니다.</p>
+        <form id="receiptPickerFilters" style="display:flex;flex-wrap:wrap;gap:0.75rem;align-items:flex-end;margin-bottom:1rem;">
+          ${this.field('품목', `<select name="item_id" class="form-control"><option value="">전체 품목</option>${items.results.filter(i => i.is_stock_managed && ['RAW', 'PACKAGING', 'SEMI'].includes(i.item_type)).map(i => `<option value="${i.id}">${this.esc(i.item_code)} · ${this.esc(i.name)}</option>`).join('')}</select>`)}
+          ${this.field('입고일 시작', `<input name="from" type="date" class="form-control" value="${this.state().from}">`)}
+          ${this.field('입고일 종료', `<input name="to" type="date" class="form-control" value="${this.state().to}">`)}
+          <button type="submit" class="btn btn-secondary">조회</button>
+        </form>
+        <p>미취소 입고를 표시합니다. 재고·결재 상태에 따른 취소 가능 여부는 취소 실행 시 검사합니다.</p>
+        <div id="receiptPickerResults"></div>`;
+      document.getElementById('receiptPickerFilters').addEventListener('submit', e => { e.preventDefault(); this.loadReceiptPicker(); });
+      await this.loadReceiptPicker();
+    } catch (error) {
+      if (context === this.receiptPicker && modal === document.querySelector('#modalContainer .modal-body')) modal.innerHTML = `<p role="alert">${this.esc(error.message)}</p>`;
+    }
+  },
+
+  async loadReceiptPicker(offset = 0) {
+    const host = document.getElementById('receiptPickerResults');
+    const form = document.getElementById('receiptPickerFilters');
+    if (!host || !form) return;
+    const context = this.receiptPicker;
+    const serial = this.pickerSerial = (this.pickerSerial || 0) + 1;
+    const params = Object.fromEntries(new FormData(form));
+    if (params.from && params.to && params.from > params.to) { host.innerHTML = '<p role="alert">입고일 시작은 종료일 이전이어야 합니다.</p>'; return; }
+    host.innerHTML = '<p>입고 목록을 불러오는 중…</p>';
+    try {
+      const data = await this.getJson('/receipts/', {...params, status: 'COMPLETED', limit: context.limit, offset});
+      if (serial !== this.pickerSerial || context !== this.receiptPicker || host !== document.getElementById('receiptPickerResults')) return;
+      context.offset = offset;
+      host.innerHTML = this.renderReceiptPicker(data, context);
+    } catch (error) {
+      if (serial === this.pickerSerial && host === document.getElementById('receiptPickerResults')) host.innerHTML = `<p role="alert">${this.esc(error.message)}</p>`;
+    }
+  },
+
+  renderReceiptPicker(data, {offset, limit}) {
+    if (!data.results.length) return '<p>조회 조건에 맞는 미취소 입고가 없습니다. 품목 또는 입고일을 변경해 주세요.</p>';
+    return `<p>미취소 입고 ${data.count}건 · ${offset + 1}–${offset + data.results.length}번째</p>
+      <div class="table-wrapper" style="max-height:45vh;overflow:auto;"><table class="data-table"><thead><tr><th>입고</th><th>입고일</th><th>품목</th><th>LOT</th><th>입고량</th><th>공급처</th><th>작업</th></tr></thead>
+        <tbody>${data.results.map(r => `<tr><td>#${r.id}</td><td>${this.esc(r.received_date)}</td><td>${this.esc(r.item.item_code)} · ${this.esc(r.item.name)}</td><td>${this.esc(r.lot_number)}</td><td>${this.esc(r.quantity)} ${this.esc(r.unit)}</td><td>${this.esc(r.supplier.name)}</td><td><button class="btn btn-danger btn-sm" data-cancel-receipt="${r.id}" onclick="InventoryApiPage.openReceipt(${r.id}, true)">선택</button></td></tr>`).join('')}</tbody>
+      </table></div>
+      <div style="display:flex;gap:0.75rem;margin-top:1rem;">
+        <button class="btn btn-secondary" ${offset === 0 ? 'disabled' : ''} onclick="InventoryApiPage.loadReceiptPicker(${Math.max(0, offset - limit)})">이전</button>
+        <button class="btn btn-secondary" ${offset + data.results.length >= data.count ? 'disabled' : ''} onclick="InventoryApiPage.loadReceiptPicker(${offset + limit})">다음</button>
+      </div>`;
+  },
+
+  async openReceipt(id, cancel = false) {
     const serial=this.receiptSerial=(this.receiptSerial||0)+1;
     App.showModal('입고 기록','<p>불러오는 중…</p>');
     const modal=document.querySelector('#modalContainer .modal-body');
@@ -663,6 +719,7 @@ const InventoryApiPage = {
       if(serial!==this.receiptSerial || modal!==document.querySelector('#modalContainer .modal-body') || !document.getElementById('modalContainer').classList.contains('active')) return;
       this.receiptDetail = r;
       modal.innerHTML = this.renderReceipt(r);
+      if (cancel) await this.openReceiptCancel(id);
     } catch(error) { if(serial===this.receiptSerial && modal===document.querySelector('#modalContainer .modal-body')) modal.innerHTML=`<p role="alert">${this.esc(error.message)}</p>`; }
   },
 

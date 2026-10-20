@@ -43,7 +43,15 @@ page.load = () => {refreshes++;};
 
 (async () => {
   // Entry is visible without QA flags or developer tools.
-  for (const type of ['raw', 'sub', 'finished']) assert.match(page.render(type), /id="qaReceiptOpen"[^>]*>입고 등록/);
+  for (const type of ['raw', 'sub', 'finished']) {
+    const screen = page.render(type);
+    assert.match(screen, /id="qaReceiptOpen"[^>]*>입고 등록/);
+    assert.match(screen, /id="receiptCancelPickerOpen"[^>]*>입고 취소/);
+  }
+  const picker = page.renderReceiptPicker({count: 21, results: [receipt]}, {offset: 0, limit: 20});
+  assert.match(picker, /data-cancel-receipt="7"/);
+  assert.match(picker, /TEST-LOT/);
+  assert.match(page.renderReceiptPicker({count: 0, results: []}, {offset: 0, limit: 20}), /미취소 입고가 없습니다/);
   assert.match(page.renderReceipt(receipt), /id="receiptCancelOpen"/);
   const cancelled = {...receipt, receipt_status: 'CANCELLED', cancel_reason: '<오입력>', cancelled_at: '2026-10-20T12:00:00+09:00'};
   const html = page.renderReceipt(cancelled);
