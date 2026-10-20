@@ -333,7 +333,7 @@ class DevLotListTests(LotCancelTestCase):
 
 
 class RealInventoryCancelTests(TestCase):
-    """실제 수불 입고·입고 취소 서비스와 함께(수불 코드 안 고침, 훅 연결은 테스트에서만 흉내)."""
+    """실제 수불 입고·입고 취소 서비스와 문서 삭제 훅의 통합 동작."""
 
     @classmethod
     def setUpTestData(cls):
@@ -368,15 +368,6 @@ class RealInventoryCancelTests(TestCase):
             )
         )
 
-    def wired(self):
-        """D-178 Q3: 수불 훅이 F12를 부르는 1줄 — 연결 뒤 모양을 테스트 안에서만 흉내."""
-        from unittest import mock
-
-        def hook(*, lot_id, reason, staff_id):
-            return services.delete_lot_documents(staff_id, lot_id)
-
-        return mock.patch("apps.inventory.document_bridge.incoming_receipt_cancelled", hook)
-
     def cancel(self, receipt):
         from apps.inventory.receiving import cancel_receipt
 
@@ -391,8 +382,7 @@ class RealInventoryCancelTests(TestCase):
 
     def test_tc020_cancel_deletes_documents(self):
         receipt = self.receive("lc-1")
-        with self.wired():
-            self.cancel(receipt)
+        self.cancel(receipt)
         receipt.refresh_from_db()
         self.assertEqual(receipt.receipt_status, "CANCELLED")
         rows = self.docs(receipt.lot_id)
@@ -408,8 +398,7 @@ class RealInventoryCancelTests(TestCase):
         out = submit(d01)["request"]
         with transaction.atomic():
             wf.decide(3, out["slots"][0]["approval_id"], "rejected", "다시")
-        with self.wired():
-            self.cancel(receipt)
+        self.cancel(receipt)
         self.assertIsNotNone(Document.objects.get(pk=d01).deleted_at)
         self.assertEqual(ApprovalRequest.objects.get(pk=out["request_id"]).status, "rejected")
 
@@ -421,7 +410,7 @@ class RealInventoryCancelTests(TestCase):
         receipt = self.receive("lc-3")
         d01 = next(i for k, i in self._ids(receipt) if k.startswith("D01"))
         submit(d01)
-        with self.wired(), self.assertRaises(ReceivingError):
+        with self.assertRaises(ReceivingError):
             self.cancel(receipt)
         receipt.refresh_from_db()
         self.assertEqual(receipt.receipt_status, "COMPLETED")
@@ -434,12 +423,13 @@ class RealInventoryCancelTests(TestCase):
         from apps.core.http import ApiError
 
         receipt = self.receive("lc-4")
+        delete_lot_documents = services.delete_lot_documents
 
-        def failing(*, lot_id, reason, staff_id):
-            services.delete_lot_documents(staff_id, lot_id)
+        def failing(actor_id, lot_id):
+            delete_lot_documents(actor_id, lot_id)
             raise ApiError("시험 실패")
 
-        with mock.patch("apps.inventory.document_bridge.incoming_receipt_cancelled", failing):
+        with mock.patch.object(services, "delete_lot_documents", failing):
             with self.assertRaises(ApiError):
                 self.cancel(receipt)
         receipt.refresh_from_db()

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 function page(file, name, document = {}) {
-  const context = vm.createContext({console, document, URLSearchParams, clearTimeout: () => {}, setTimeout: () => {}, window: {}, crypto: {randomUUID: () => 'test-key'}});
+  const context = vm.createContext({console, document, App: {}, URLSearchParams, clearTimeout: () => {}, setTimeout: () => {}, window: {}, crypto: {randomUUID: () => 'test-key'}});
   vm.runInContext(fs.readFileSync(file, 'utf8') + `\nthis.page = ${name};`, context);
   return context.page;
 }
@@ -96,3 +96,28 @@ assert.match(production.renderBulkUse(),/기등록량/);
 assert.match(production.renderBulkUse(),/선택 1 \/ 2개 원료/);
 assert.match(production.renderBulkUse(),/원료 LOT 다시 자동 배분/);
 console.log('UI logic checks passed: BOM choices, expiry transitions, exact totals, cancelled default.');
+
+// Display filters hide the entire cancelled receipt history without changing balances.
+inventory.state().direction='';
+const auditLedger={results:[{item:{id:1,item_code:'A',name:'원료'},unit:'kg',lots:[
+  {lot_id:1,lot_number:'CANCELLED',lines:[
+    {movement_id:1,occurred_at:'2026-10-01',quantity:'5',balance:'5',source:{receipt_status:'CANCELLED'}},
+    {movement_id:2,occurred_at:'2026-10-02',quantity:'-5',balance:'0',source:{receipt_status:'CANCELLED'}},
+  ]},
+  {lot_id:2,lot_number:'ACTIVE',lines:[{movement_id:3,occurred_at:'2026-10-03',quantity:'2',balance:'2',source:{receipt_status:'COMPLETED'}}]},
+]}]};
+const original=JSON.stringify(auditLedger);
+inventory.state().receiptVisibility='hide';
+assert.deepEqual(Array.from(inventory.ledgerLines(auditLedger), r=>r.line.movement_id),[3]);
+inventory.state().receiptVisibility='only';
+inventory.state().ledgerSortOrder='asc';
+assert.deepEqual(Array.from(inventory.ledgerLines(auditLedger), r=>r.line.movement_id),[1,2]);
+assert.equal(inventory.ledgerLines(auditLedger)[1].line.balance,'0');
+assert.equal(JSON.stringify(auditLedger),original);
+inventory.state().receiptVisibility='all';
+inventory.state().ledgerSortOrder='desc';
+assert.deepEqual(Array.from(inventory.ledgerLines(auditLedger), r=>r.line.movement_id),[3,2,1]);
+inventory.state().stockSortBy='total'; inventory.state().stockSortOrder='desc';
+const stock=[{item:{id:1,item_code:'A'},total:'9007199254740992.000001'},{item:{id:2,item_code:'B'},total:'9007199254740992.000002'}];
+assert.equal(inventory.sortStockTotals(stock)[0].item.id,2,'Stock sorting must preserve exact decimal precision.');
+console.log('Inventory sort/cancellation display checks passed; original balances are unchanged.');

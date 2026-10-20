@@ -51,6 +51,8 @@ const InventoryApiPage = {
         lotNumber: '',
         expirationStatus: '',
         includeEmpty: false,
+        ledgerSortBy: 'occurred_at', ledgerSortOrder: 'desc',
+        stockSortBy: 'item_code', stockSortOrder: 'asc', receiptVisibility: 'all',
         usableOnly: false,
         madeFrom: '',
         madeTo: '',
@@ -100,6 +102,14 @@ const InventoryApiPage = {
       #invApiPage .inv-panel-head p { font-size:0.76rem;color:var(--text-muted);margin:0; }
       #invApiPage .inv-item-group td { background:var(--bg-elevated,#eef2f6);font-weight:700; }
       #invApiPage .inv-selected { background:var(--bg-elevated,#eef3ff);outline:2px solid var(--brand-primary);outline-offset:-2px; }
+      #invApiPage .tabs .tab-btn.active { background:var(--brand-primary,#007bff);color:#fff;box-shadow:var(--shadow-sm); }
+      #invApiPage .tabs .tab-btn:focus-visible { outline:2px solid var(--brand-primary,#007bff);outline-offset:2px; }
+      #invApiPage { display:flex;flex-direction:column;gap:0;min-height:420px; }
+      #invApiPage > .page-header, #invApiPage > .tabs, #invApiPage > .card { flex-shrink:0; }
+      #invApiContent { flex:1;min-height:0;display:flex;flex-direction:column; }
+      #invApiContent > .card { flex:1;min-height:0;display:flex;flex-direction:column; }
+      #invApiContent > .table-wrapper, #invApiContent > .card > .table-wrapper { flex:1;min-height:0;max-height:none !important;overflow:auto; }
+      #invApiContent thead th { position:sticky;top:0;z-index:1;background:var(--bg-elevated,#eef2f6); }
       .inv-item-link { border:0;background:none;color:var(--brand-primary);padding:0.25rem 0;font:inherit;text-align:left;cursor:pointer; }
       .inv-item-link:hover, .inv-item-link:focus-visible { text-decoration:underline; }
       .inventory-detail-modal .inv-summary { display:flex;flex-wrap:wrap;gap:1rem;padding:1rem;background:var(--bg-elevated);margin-bottom:1rem; }
@@ -112,16 +122,17 @@ const InventoryApiPage = {
       <div class="page-header">
         <div class="page-title-group">
           <h1 class="page-title">${cfg.title}</h1>
-          <p class="page-desc">수불 내역과 현재고를 조회합니다. 품목명을 누르면 재고 요약·전체 LOT·선택 기간 수불을 함께 확인합니다.</p>
+          <p class="page-desc">수불 내역과 현재고를 조회합니다. 입고 등록·취소는 오른쪽 버튼에서 진행합니다.</p>
         </div>
         <div class="page-actions">
-          ${window.HACCP_SITE?.qa ? '<button id="qaReceiptOpen" class="btn btn-primary" onclick="InventoryApiPage.openQaReceipt()">QA 입고 등록</button>' : ''}
+          <button id="qaReceiptOpen" class="btn btn-primary" onclick="InventoryApiPage.openQaReceipt()">입고 등록</button>
+          <button id="receiptCancelPickerOpen" class="btn btn-danger" onclick="InventoryApiPage.openReceiptPicker()">입고 취소</button>
           <button class="btn btn-secondary" onclick="InventoryApiPage.load()">새로고침</button>
           <button class="btn btn-secondary" id="invExport" onclick="InventoryApiPage.exportExcel()">엑셀 다운로드</button>
         </div>
       </div>
       <div class="tabs" style="margin-bottom:0.75rem;">
-        ${[['ledger','수불 내역'],['stock','현재고']].map(([v,l]) => `<button data-inventory-tab="${v}" class="tab-btn ${this.state().tab === v ? 'active' : ''}" onclick="InventoryApiPage.set('tab','${v}')">${l}</button>`).join('')}
+        ${[['ledger','수불 내역'],['stock','현재고']].map(([v,l]) => `<button data-inventory-tab="${v}" aria-pressed="${this.state().tab === v}" class="tab-btn ${this.state().tab === v ? 'active' : ''}" onclick="InventoryApiPage.set('tab','${v}')">${l}</button>`).join('')}
       </div>
       <div class="card" style="padding:0.75rem;margin-bottom:0.75rem;">
         <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:flex-end;">${this.renderFilters()}</div>
@@ -135,10 +146,25 @@ const InventoryApiPage = {
     return `<label style="display:flex;flex-direction:column;gap:0.2rem;font-size:0.72rem;color:var(--text-muted);font-weight:600;">${label}${html}</label>`;
   },
 
+  fitViewport() {
+    const page = document.getElementById('invApiPage');
+    if (!page) return;
+    const padding = parseFloat(getComputedStyle(document.getElementById('pageContainer')).paddingBottom) || 0;
+    page.style.height = `${Math.max(420, window.innerHeight - page.getBoundingClientRect().top - padding)}px`;
+  },
+
+  sortControls() {
+    const s = this.state(), ledger = s.tab === 'ledger';
+    const key = ledger ? 'ledgerSortBy' : 'stockSortBy', order = ledger ? 'ledgerSortOrder' : 'stockSortOrder';
+    const options = ledger ? [['occurred_at','수불일자'],['item_code','품목코드'],['item_name','품목명'],['lot_number','LOT 번호']] : [['item_code','품목코드'],['item_name','품목명'],['total','총재고']];
+    return this.field('정렬 기준', `<select id="invSortBy" class="form-control" onchange="InventoryApiPage.set('${key}',this.value)">${options.map(([v,l]) => `<option value="${v}" ${s[key]===v?'selected':''}>${l}</option>`).join('')}</select>`) +
+      this.field('정렬 방향', `<select id="invSortOrder" class="form-control" onchange="InventoryApiPage.set('${order}',this.value)">${[['asc','오름차순'],['desc','내림차순']].map(([v,l]) => `<option value="${v}" ${s[order]===v?'selected':''}>${l}</option>`).join('')}</select>`);
+  },
+
   renderFilters() {
     const s = this.state();
     const search = this.field('검색', `<input id="invSearch" type="search" class="form-control" style="min-width:260px" value="${this.esc(s.q)}" placeholder="품목코드 · 품목명 · 공급처 · LOT" oninput="InventoryApiPage.search(this.value)">`);
-    if (s.tab === 'stock') return `${search}
+    if (s.tab === 'stock') return `${search}${this.sortControls()}
       <label><input type="checkbox" ${s.lowOnly ? 'checked' : ''} onchange="InventoryApiPage.set('lowOnly',this.checked)"> 부족 품목만</label>
       <label><input id="invIncludeEmpty" type="checkbox" ${s.includeEmpty ? 'checked' : ''} onchange="InventoryApiPage.set('includeEmpty',this.checked)"> 소진 LOT 포함</label>
       ${this.field('소비기한', `<select class="form-control" onchange="InventoryApiPage.set('expiryDays',this.value)">${[['','전체'],['7','경과·7일 이내'],['30','경과·30일 이내'],['90','경과·90일 이내']].map(([v,l])=>`<option value="${v}" ${s.expiryDays===v?'selected':''}>${l}</option>`).join('')}</select>`)}
@@ -147,7 +173,8 @@ const InventoryApiPage = {
       <div style="display:flex;gap:0.3rem;flex-wrap:wrap">${[['','전체'],['IN','입고'],['OUT','출고']].map(([v,l])=>`<button data-direction="${v}" aria-pressed="${s.direction===v && (v!=='' || !(s.selectedLot || s.itemId || s.lotNumber))}" class="btn ${s.direction===v && (v!=='' || !(s.selectedLot || s.itemId || s.lotNumber))?'btn-primary':'btn-secondary'} btn-sm" onclick="InventoryApiPage.set('direction','${v}')">${l}</button>`).join('')}</div>
       <div style="display:flex;gap:0.3rem;flex-wrap:wrap">${[['today','오늘'],['month','이번 달'],['3month','3개월'],['6month','6개월'],['year','1년']].map(([v,l])=>`<button data-period="${v}" aria-pressed="${s.period===v}" class="btn ${s.period===v?'btn-primary':'btn-secondary'} btn-sm" onclick="InventoryApiPage.setPeriod('${v}')">${l}</button>`).join('')}</div>
       ${this.field('조회 기간', `<span style="display:flex;gap:0.3rem"><input id="invFrom" type="date" class="form-control" value="${s.from}" onchange="InventoryApiPage.set('from',this.value)"> ~ <input id="invTo" type="date" class="form-control" value="${s.to}" onchange="InventoryApiPage.set('to',this.value)"></span>`)}
-      <details><summary style="cursor:pointer">상세 조건</summary><label>LOT 번호 <input class="form-control" value="${this.esc(s.lotNumber)}" onchange="InventoryApiPage.set('lotNumber',this.value)"></label></details>`;
+      ${this.sortControls()}
+      ${this.field('취소 입고 이력', `<select id="invReceiptVisibility" class="form-control" onchange="InventoryApiPage.set('receiptVisibility',this.value)">${[['all','포함'],['hide','제외'],['only','취소 건만']].map(([v,l]) => `<option value="${v}" ${s.receiptVisibility===v?'selected':''}>${l}</option>`).join('')}</select>`)}`;
   },
 
   search(value) {
@@ -158,7 +185,7 @@ const InventoryApiPage = {
     this.loadSerial = (this.loadSerial || 0) + 1;
     this.cache = null;
     clearTimeout(this.searchTimer);
-    this.searchTimer = setTimeout(() => this.load(), 250);
+    this.searchTimer = setTimeout(() => { App.recordHistory?.(); this.load(); }, 250);
   },
 
   setPeriod(period) {
@@ -200,12 +227,14 @@ const InventoryApiPage = {
   rerender() {
     const container = document.getElementById('pageContainer');
     if (container) container.innerHTML = this.render(this.type);
+    App.recordHistory?.();
   },
 
   // ---------- 데이터 ----------
   async load() {
     const host = document.getElementById('invApiPage');
     if (!host) return;
+    this.fitViewport();
     const serial = this.loadSerial = (this.loadSerial || 0) + 1;
     const current = () => serial === this.loadSerial && host === document.getElementById('invApiPage');
     this.cache = null;
@@ -223,8 +252,9 @@ const InventoryApiPage = {
         const query=s.q.trim().toLowerCase();
         const filtered = totals.results.filter(r=>(!query || `${r.item.item_code} ${r.item.name}`.toLowerCase().includes(query) || matches.has(r.item.id)) && (!s.expiryDays || matches.has(r.item.id)) && (!s.lowOnly || r.below_minimum));
         this.stockRows = stock.results;
-        this.cache = {tab:'stock', data:{results:filtered}, stock};
-        document.getElementById('invApiContent').innerHTML = this.renderTotals({results:filtered});
+        const sorted = this.sortStockTotals(filtered);
+        this.cache = {tab:'stock', data:{results:sorted}, stock};
+        document.getElementById('invApiContent').innerHTML = this.renderTotals({results:sorted});
       }
     } catch(error) {
       if (!current()) return;
@@ -245,6 +275,7 @@ const InventoryApiPage = {
     const s=this.state();
     this.detailContext={id:Number(id),from:s.from,to:s.to,direction:s.direction,lotId:null};
     App.showModal('품목 상세', '<p>불러오는 중…</p>');
+    App.trackInventoryModal?.({kind:'item', id:Number(id)});
     document.getElementById('modalContainer').classList.add('inventory-detail-modal');
     await this.loadItemDetail();
   },
@@ -311,12 +342,14 @@ const InventoryApiPage = {
     if(id && !this.detailCache.stock.results.some(r=>r.lot_id===id)) return;
     this.detailContext.lotId=id;
     this.renderItemDetail();
+    App.recordHistory?.();
   },
 
   setDetailDirection(value) {
     this.detailContext.direction=value;
     if(!value) this.detailContext.lotId=null;
     this.renderItemDetail();
+    App.recordHistory?.();
   },
 
   async applyItemPeriod() {
@@ -339,7 +372,7 @@ const InventoryApiPage = {
     this.state().from=d.from;this.state().to=d.to;
     if(d.lotId) {
       const row=this.detailCache.stock.results.find(r=>r.lot_id===d.lotId);
-      App.closeModal();this.selectLot(row.lot_id,row.lot_number,row.item);
+      App.closeModal(false);this.selectLot(row.lot_id,row.lot_number,row.item);
     } else this.viewItemLedger(d.id);
   },
 
@@ -349,7 +382,7 @@ const InventoryApiPage = {
   },
 
   viewItemLedger(id) {
-    App.closeModal();
+    App.closeModal(false);
     const s=this.state();
     const item=this.itemDetail?.id===id?this.itemDetail:this.cache?.data.results.find(r=>r.item.id===id)?.item;
     s.itemId=String(id); s.selectedItem=item || null; s.tab='ledger'; s.selectedLot=null; s.q=''; s.lotNumber='';
@@ -389,7 +422,7 @@ const InventoryApiPage = {
     return this.getJson('/ledger/', this.ledgerParams());
   },
 
-  // Hosted QA uses the business API with DEBUG=false; no /api/dev/ dependency.
+  // Normal receipt entry uses the business API in local, QA and production environments.
   async openQaReceipt() {
     try {
       const [items, suppliers, staff] = await Promise.all([
@@ -399,8 +432,8 @@ const InventoryApiPage = {
       this.qaReceiptKey = crypto.randomUUID();
       this.receiptItems = items.results.filter(i=>i.is_stock_managed && ['RAW','PACKAGING','SEMI'].includes(i.item_type));
       this.receiptType = this.type === 'sub' ? 'PACKAGING' : this.type === 'finished' ? 'SEMI' : 'RAW';
-      App.showModal('QA 입고 등록', `<form id="qaReceiptForm">
-        <p>검증용 입고입니다. 저장하면 수불·재고와 입고 문서 3종이 연결됩니다.</p>
+      App.showModal('입고 등록', `<form id="qaReceiptForm">
+        <p>저장하면 수불·재고와 입고 문서 3종이 연결됩니다.</p>
         ${this.field('품목 유형', `<select class="form-control" onchange="InventoryApiPage.receiptType=this.value;InventoryApiPage.filterReceiptItems()">${[['RAW','원료'],['PACKAGING','포장재'],['SEMI','반제품'],['','전체 유형']].map(([v,l])=>`<option value="${v}" ${this.receiptType===v?'selected':''}>${l}</option>`).join('')}</select>`)}
         ${this.field('품목명·코드 검색', `<input id="qaReceiptSearch" type="search" class="form-control" oninput="InventoryApiPage.filterReceiptItems()" placeholder="이름 또는 코드">`)}
         ${this.field('품목', '<select id="qaReceiptItem" name="item_id" class="form-control" size="4" style="height:auto" required onchange="InventoryApiPage.receiptUnit()"></select>')}
@@ -413,8 +446,9 @@ const InventoryApiPage = {
         ${this.field('소비기한 (있음 선택 시 필수)', '<input name="expiration_date" type="date" class="form-control" disabled>')}
         ${this.field('입고 검사 판정', '<select name="judgment" class="form-control"><option value="">미판정 — 문서함에서 육안검사 작성</option><option value="PASS">적합</option><option value="FAIL">부적합</option></select>')}
         <p id="qaReceiptError" role="alert" style="color:var(--color-danger);"></p>
-        <button type="submit" id="qaReceiptSave" class="btn btn-primary">QA 입고 저장</button>
+        <button type="submit" id="qaReceiptSave" class="btn btn-primary">입고 저장</button>
       </form>`);
+      App.trackInventoryModal?.({kind:'entry'});
       this.filterReceiptItems();
       document.getElementById('qaReceiptForm').addEventListener('submit', (e) => { e.preventDefault(); this.saveQaReceipt(); });
     } catch (error) { App.showToast('error', '입고 준비 실패', error.message); }
@@ -458,10 +492,28 @@ const InventoryApiPage = {
       </tbody></table></div><p style="padding:0 0.85rem;font-size:0.78rem;color:var(--text-muted)">사용 불가에는 검사대기·부적합·보류·소비기한 경과 재고가 포함됩니다. 품목명을 누르면 현재 재고 요약·전체 LOT·선택 기간 수불을 확인할 수 있습니다.</p>`;
   },
 
+  sortStockTotals(rows) {
+    const s = this.state(), sign = s.stockSortOrder === 'desc' ? -1 : 1;
+    return [...rows].sort((a, b) => {
+      if (s.stockSortBy === 'total') {
+        const scaled = value => { const [n, f = ''] = String(value).split('.'); return BigInt(n) * 1000000n + BigInt(f.padEnd(6, '0')); };
+        const x = scaled(a.total), y = scaled(b.total);
+        return sign * (x < y ? -1 : x > y ? 1 : 0) || a.item.item_code.localeCompare(b.item.item_code);
+      }
+      const key = s.stockSortBy === 'item_name' ? 'name' : 'item_code';
+      return sign * a.item[key].localeCompare(b.item[key], 'ko', {numeric:true}) || a.item.id - b.item.id;
+    });
+  },
+
   ledgerLines(data, direction=this.state().direction) {
     return data.results.flatMap(item=>item.lots.flatMap(lot=>lot.lines.map(line=>({item,lot,line}))))
       .filter(r=>!direction || (direction==='OUT')===String(r.line.quantity).startsWith('-'))
-      .sort((a,b)=>b.line.occurred_at.localeCompare(a.line.occurred_at) || b.line.movement_id-a.line.movement_id);
+      .filter(({line}) => this.state().receiptVisibility === 'hide' ? line.source?.receipt_status !== 'CANCELLED' : this.state().receiptVisibility === 'only' ? line.source?.receipt_status === 'CANCELLED' : true)
+      .sort((a,b) => {
+        const s = this.state(), sign = s.ledgerSortOrder === 'asc' ? 1 : -1;
+        const value = r => s.ledgerSortBy === 'item_code' ? r.item.item.item_code : s.ledgerSortBy === 'item_name' ? r.item.item.name : s.ledgerSortBy === 'lot_number' ? r.lot.lot_number : r.line.occurred_at;
+        return sign * String(value(a)).localeCompare(String(value(b)), 'ko', {numeric:true}) || sign * (a.line.movement_id-b.line.movement_id);
+      });
   },
 
   filePart(value) { return String(value||'').replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').slice(0,60); },
@@ -543,8 +595,9 @@ const InventoryApiPage = {
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error?.message || `요청 실패 (${response.status})`);
-      App.closeModal();
-      App.showToast('success', 'QA 입고 완료', '수불·재고·문서가 연결되었습니다. 문서함에서 입고 문서를 확인하세요.');
+      App.closeModal(false);
+      App.recordHistory?.(true);
+      App.showToast('success', '입고 완료', '수불·재고·문서가 연결되었습니다. 문서함에서 입고 문서를 확인하세요.');
       this.load();
     } catch (error) {
       const target = document.getElementById('qaReceiptError');
@@ -616,20 +669,19 @@ const InventoryApiPage = {
 
   renderLedger(data, direction=this.state().direction) {
     const lines = this.ledgerLines(data,direction);
-    lines.sort((a, b) => b.line.occurred_at.localeCompare(a.line.occurred_at) || b.line.movement_id - a.line.movement_id);
     const rows = lines.map(({ item, lot, line }) => {
       const negative = String(line.quantity).startsWith('-');
       return `<tr data-ledger-lot="${lot.lot_id}" data-movement="${line.movement_id}">
         <td class="no-wrap">${this.esc(String(line.occurred_at).replace('T', ' ').slice(0, 19))}</td>
         <td>${this.esc(item.item.item_code)}</td><td><button type="button" class="inv-item-link" onclick="InventoryApiPage.openItem(${item.item.id})">${this.esc(item.item.name)}</button></td>
-        <td class="no-wrap">${this.esc(lot.lot_number)}</td><td>${this.esc(line.movement_name)}</td>
+        <td class="no-wrap">${this.esc(lot.lot_number)}</td><td>${this.esc(line.movement_name)}${line.source?.receipt_status==='CANCELLED'?'<br><span class="badge badge-neutral">취소된 입고</span>':''}</td>
         <td style="text-align:right;">${negative ? '' : this.esc(line.quantity)}</td>
         <td style="text-align:right;">${negative ? this.esc(String(line.quantity).slice(1)) : ''}</td>
         <td style="text-align:right;">${this.esc(line.balance)}</td><td>${this.esc(item.unit)}</td>
         <td>${this.esc(line.staff_name)}</td><td>${this.esc(line.reason || '')}</td><td>${this.renderSourceLinks(line,lot.lot_id)}</td></tr>`;
     }).join('');
     return `<div class="card" style="padding:0;">
-      <div style="padding:0.6rem 1rem;color:var(--text-muted);font-size:0.78rem;">${this.esc(data.from)} ~ ${this.esc(data.to)} · 개별 수불 ${lines.length}건 · 잔량은 각 수불 발생 직후의 LOT 잔량</div>
+      <div style="padding:0.6rem 1rem;color:var(--text-muted);font-size:0.78rem;">${this.esc(data.from)} ~ ${this.esc(data.to)} · 개별 수불 ${lines.length}건 · 잔량은 각 수불 발생 직후의 LOT 잔량 · 취소 표시·정렬은 실제 잔량에 영향을 주지 않습니다.</div>
       <div class="table-wrapper" style="max-height:420px;overflow:auto;"><table class="data-table" id="invLedgerTable">
         <thead><tr><th>수불일자</th><th>품목코드</th><th>품목명</th><th>LOT 번호</th><th>구분</th><th>입고(+)</th><th>출고(-)</th><th>거래 직후 LOT 잔량</th><th>단위</th><th>처리자</th><th>사유</th><th>관련 기록</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="12" style="text-align:center;padding:2rem;">선택한 기간 안에 수불 이력이 없습니다. 현재 재고에는 이월 재고가 포함될 수 있습니다.</td></tr>'}</tbody>
@@ -638,29 +690,170 @@ const InventoryApiPage = {
 
   renderSourceLinks(line,lotId) {
     const source=line.source||{};
-    return `${source.receipt_id?`<button class="inv-item-link" data-source-receipt="${source.receipt_id}" onclick="InventoryApiPage.openReceipt(${source.receipt_id})">입고 #${source.receipt_id}</button><br>`:''}${source.batch?`<button class="inv-item-link" data-source-batch="${source.batch.id}" onclick="InventoryApiPage.openBatch(${source.batch.id})">${this.esc(source.batch.number)}</button><br>`:''}<button class="inv-item-link" data-source-docs="${lotId}" onclick="InventoryApiPage.openLinkedDocs(${lotId},${source.batch?.id||'null'})">연결 문서</button>`;
+    return `${source.receipt_id?`<button class="inv-item-link" data-source-receipt="${source.receipt_id}" onclick="InventoryApiPage.openReceipt(${source.receipt_id})">입고 #${source.receipt_id}</button><br>`:''}${source.batch?`<button class="inv-item-link" data-source-batch="${source.batch.id}" onclick="InventoryApiPage.openBatch(${source.batch.id})">${this.esc(source.batch.number)}</button><br>`:''}${source.receipt_status==='CANCELLED'?'':`<button class="inv-item-link" data-source-docs="${lotId}" onclick="InventoryApiPage.openLinkedDocs(${lotId},${source.batch?.id||'null'})">연결 문서</button>`}`;
   },
 
   openBatch(id, tab='work') {
-    App.closeModal();ProductionApiPage.s.batchId=id;ProductionApiPage.s.creating=false;ProductionApiPage.s.detailTab=tab;App.navigate('production-batches');
+    App.closeModal(false);ProductionApiPage.s.batchId=id;ProductionApiPage.s.creating=false;ProductionApiPage.s.detailTab=tab;App.navigate('production-batches');
   },
 
   openLinkedDocs(lotId,batchId) {
     if(batchId) return this.openBatch(batchId,'documents');
     if(!window.TempEntry) return App.showToast('info','문서함','문서함에서 관련 LOT·배치를 확인하세요.');
-    App.closeModal();
+    App.closeModal(false);
     window.TempEntry.open('temp-lot-docs',{lotId});
   },
 
-  async openReceipt(id) {
+  async openReceiptPicker(options = {}) {
+    const context = this.receiptPicker = {offset: 0, limit: 20};
+    const filters = {from: options.from ?? this.state().from, to: options.to ?? this.state().to, item_id: options.item_id || ''};
+    App.showModal('입고 취소 · 입고 선택', '<p>입고 목록을 준비하는 중…</p>');
+    App.trackInventoryModal?.({kind:'picker', ...filters, offset:options.offset || 0});
+    document.getElementById('modalContainer').classList.add('inventory-detail-modal');
+    const modal = document.querySelector('#modalContainer .modal-body');
+    try {
+      const items = await this.getJson('/items/');
+      if (context !== this.receiptPicker || modal !== document.querySelector('#modalContainer .modal-body')) return;
+      modal.innerHTML = `<p>취소할 입고의 품목·LOT·수량을 확인하고 <strong>선택</strong>을 누르세요. 취소 사유 입력 후 최종 확인할 수 있습니다.</p>
+        <form id="receiptPickerFilters" style="display:flex;flex-wrap:wrap;gap:0.75rem;align-items:flex-end;margin-bottom:1rem;">
+          ${this.field('품목', `<select name="item_id" class="form-control"><option value="">전체 품목</option>${items.results.filter(i => i.is_stock_managed && ['RAW', 'PACKAGING', 'SEMI'].includes(i.item_type)).map(i => `<option value="${i.id}" ${String(i.id)===filters.item_id?'selected':''}>${this.esc(i.item_code)} · ${this.esc(i.name)}</option>`).join('')}</select>`)}
+          ${this.field('입고일 시작', `<input name="from" type="date" class="form-control" value="${this.esc(filters.from)}">`)}
+          ${this.field('입고일 종료', `<input name="to" type="date" class="form-control" value="${this.esc(filters.to)}">`)}
+          <button type="submit" class="btn btn-secondary">조회</button>
+        </form>
+        <p>미취소 입고를 표시합니다. 재고·결재 상태에 따른 취소 가능 여부는 취소 실행 시 검사합니다.</p>
+        <div id="receiptPickerResults"></div>`;
+      document.getElementById('receiptPickerFilters').addEventListener('submit', e => { e.preventDefault(); this.loadReceiptPicker(); });
+      await this.loadReceiptPicker(options.offset || 0);
+    } catch (error) {
+      if (context === this.receiptPicker && modal === document.querySelector('#modalContainer .modal-body')) modal.innerHTML = `<p role="alert">${this.esc(error.message)}</p>`;
+    }
+  },
+
+  async loadReceiptPicker(offset = 0) {
+    const host = document.getElementById('receiptPickerResults');
+    const form = document.getElementById('receiptPickerFilters');
+    if (!host || !form) return;
+    const context = this.receiptPicker;
+    const serial = this.pickerSerial = (this.pickerSerial || 0) + 1;
+    const params = Object.fromEntries(new FormData(form));
+    if (params.from && params.to && params.from > params.to) { host.innerHTML = '<p role="alert">입고일 시작은 종료일 이전이어야 합니다.</p>'; return; }
+    host.innerHTML = '<p>입고 목록을 불러오는 중…</p>';
+    try {
+      const data = await this.getJson('/receipts/', {...params, status: 'COMPLETED', limit: context.limit, offset});
+      if (serial !== this.pickerSerial || context !== this.receiptPicker || host !== document.getElementById('receiptPickerResults')) return;
+      context.offset = offset;
+      host.innerHTML = this.renderReceiptPicker(data, context);
+      App.trackInventoryModal?.({kind:'picker', ...params, offset});
+    } catch (error) {
+      if (serial === this.pickerSerial && host === document.getElementById('receiptPickerResults')) host.innerHTML = `<p role="alert">${this.esc(error.message)}</p>`;
+    }
+  },
+
+  renderReceiptPicker(data, {offset, limit}) {
+    if (!data.results.length) return '<p>조회 조건에 맞는 미취소 입고가 없습니다. 품목 또는 입고일을 변경해 주세요.</p>';
+    return `<p>미취소 입고 ${data.count}건 · ${offset + 1}–${offset + data.results.length}번째</p>
+      <div class="table-wrapper" style="max-height:45vh;overflow:auto;"><table class="data-table"><thead><tr><th>입고</th><th>입고일</th><th>품목</th><th>LOT</th><th>입고량</th><th>공급처</th><th>작업</th></tr></thead>
+        <tbody>${data.results.map(r => `<tr><td>#${r.id}</td><td>${this.esc(r.received_date)}</td><td>${this.esc(r.item.item_code)} · ${this.esc(r.item.name)}</td><td>${this.esc(r.lot_number)}</td><td>${this.esc(r.quantity)} ${this.esc(r.unit)}</td><td>${this.esc(r.supplier.name)}</td><td><button class="btn btn-danger btn-sm" data-cancel-receipt="${r.id}" onclick="InventoryApiPage.openReceipt(${r.id}, true)">선택</button></td></tr>`).join('')}</tbody>
+      </table></div>
+      <div style="display:flex;gap:0.75rem;margin-top:1rem;">
+        <button class="btn btn-secondary" ${offset === 0 ? 'disabled' : ''} onclick="InventoryApiPage.loadReceiptPicker(${Math.max(0, offset - limit)})">이전</button>
+        <button class="btn btn-secondary" ${offset + data.results.length >= data.count ? 'disabled' : ''} onclick="InventoryApiPage.loadReceiptPicker(${offset + limit})">다음</button>
+      </div>`;
+  },
+
+  async openReceipt(id, cancel = false) {
     const serial=this.receiptSerial=(this.receiptSerial||0)+1;
     App.showModal('입고 기록','<p>불러오는 중…</p>');
+    App.trackInventoryModal?.({kind:'receipt', id:Number(id), cancel});
     const modal=document.querySelector('#modalContainer .modal-body');
     try {
       const r=await this.getJson(`/receipts/${id}/`);
       if(serial!==this.receiptSerial || modal!==document.querySelector('#modalContainer .modal-body') || !document.getElementById('modalContainer').classList.contains('active')) return;
-      modal.innerHTML=`<h3>${this.esc(r.item.name)} · 입고 #${r.id}</h3><p>LOT ${this.esc(r.lot_number)} · 입고일 ${this.esc(r.received_date)}</p><p>입고량 ${this.esc(r.quantity)} ${this.esc(r.unit)} · 공급처 ${this.esc(r.supplier.name)} · 처리자 ${this.esc(r.staff.name)}</p><p>상태 ${this.esc(r.receipt_status)} · ${this.esc(r.cancel_reason||'')}</p><button class="btn btn-secondary" onclick="InventoryApiPage.openItem(${r.item.id})">품목 상세</button><button class="btn btn-secondary" onclick="InventoryApiPage.openLinkedDocs(${r.lot_id},null)">입고 연결 문서</button>`;
+      this.receiptDetail = r;
+      modal.innerHTML = this.renderReceipt(r);
+      if (cancel) await this.openReceiptCancel(id);
     } catch(error) { if(serial===this.receiptSerial && modal===document.querySelector('#modalContainer .modal-body')) modal.innerHTML=`<p role="alert">${this.esc(error.message)}</p>`; }
+  },
+
+  renderReceipt(r) {
+    const cancelled = r.receipt_status === 'CANCELLED';
+    return `<h3>${this.esc(r.item.name)} · 입고 #${r.id}</h3>
+      <p>LOT ${this.esc(r.lot_number)} · 입고일 ${this.esc(r.received_date)}</p>
+      <p>입고량 ${this.esc(r.quantity)} ${this.esc(r.unit)} · 공급처 ${this.esc(r.supplier.name)} · 처리자 ${this.esc(r.staff.name)}</p>
+      <p>상태: ${cancelled ? '취소됨' : '입고 완료'}${cancelled ? ` · 취소 사유: ${this.esc(r.cancel_reason)}` : ''}</p>
+      ${cancelled ? `<p>취소 시각: ${this.esc(r.cancelled_at || '')}</p><p>취소된 입고의 연결 문서는 일반 조회에서 제외됩니다. 입고와 수불의 취소 이력은 유지됩니다.</p>` : ''}
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+        <button class="btn btn-secondary" onclick="InventoryApiPage.openItem(${r.item.id})">품목 상세</button>
+        ${!cancelled ? `<button class="btn btn-secondary" onclick="InventoryApiPage.openLinkedDocs(${r.lot_id},null)">입고 연결 문서</button>
+        <button id="receiptCancelOpen" class="btn btn-danger" onclick="InventoryApiPage.openReceiptCancel(${r.id})">입고 취소</button>` : ''}
+      </div>
+      <div id="receiptCancelPanel"></div>`;
+  },
+
+  async openReceiptCancel(id) {
+    if (this.receiptDetail?.id !== id || this.receiptDetail.receipt_status === 'CANCELLED') return;
+    const panel = document.getElementById('receiptCancelPanel');
+    if (!panel || this.receiptCancelling) return;
+    App.trackInventoryModal?.({kind:'receipt', id:Number(id), cancel:true});
+    const serial = this.receiptSerial;
+    panel.innerHTML = '<p>담당자를 불러오는 중…</p>';
+    try {
+      const staff = await this.getJson('/staff/');
+      if (serial !== this.receiptSerial || panel !== document.getElementById('receiptCancelPanel')) return;
+      panel.innerHTML = `<form id="receiptCancelForm" style="margin-top:1rem;display:grid;gap:0.75rem;">
+        <p>입고를 취소하면 잔여 입고 수량이 차감되고 관련 입고 서류도 함께 삭제됩니다. 입고·수불 이력은 유지됩니다.</p>
+        <p>이미 사용·조정된 LOT 또는 결재 중·승인·정정 중인 문서가 있으면 취소할 수 없습니다.</p>
+        ${this.field('취소 담당자', `<select name="staff_id" class="form-control" required><option value="">담당자를 선택하세요</option>${staff.results.map(s => `<option value="${s.id}">${this.esc(s.name)}</option>`).join('')}</select>`)}
+        ${this.field('취소 사유', '<textarea name="reason" class="form-control" rows="3" required placeholder="취소 사유를 입력하세요"></textarea>')}
+        <p id="receiptCancelError" role="alert" style="color:var(--color-danger);"></p>
+        <div><button id="receiptCancelSave" type="submit" class="btn btn-danger">입고 취소 확인</button></div>
+      </form>`;
+      document.getElementById('receiptCancelForm').addEventListener('submit', e => { e.preventDefault(); this.cancelReceipt(id); });
+      document.getElementById('receiptCancelOpen').disabled = true;
+    } catch (error) {
+      if (serial === this.receiptSerial && panel === document.getElementById('receiptCancelPanel')) panel.innerHTML = `<p role="alert">${this.esc(error.message)}</p>`;
+    }
+  },
+
+  async cancelReceipt(id) {
+    const form = document.getElementById('receiptCancelForm');
+    const button = document.getElementById('receiptCancelSave');
+    const errorBox = document.getElementById('receiptCancelError');
+    const receipt = this.receiptDetail;
+    if (!form || !button || this.receiptCancelling || receipt?.id !== id || !form.reportValidity()) return;
+    const values = Object.fromEntries(new FormData(form));
+    const reason = values.reason.trim();
+    if (!reason) { errorBox.textContent = '취소 사유를 입력하세요.'; return; }
+    if (!window.confirm(`${receipt.item.name} · LOT ${receipt.lot_number}\n입고량 ${receipt.quantity} ${receipt.unit}\n\n입고를 취소하고 관련 입고 서류도 함께 삭제하시겠습니까?`)) return;
+    this.receiptCancelling = true;
+    button.disabled = true;
+    errorBox.textContent = '';
+    const serial = this.receiptSerial;
+    const token = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/)?.[1] || '';
+    try {
+      const response = await fetch(`${this.API}/receipts/${id}/cancel/`, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': decodeURIComponent(token) },
+        body: JSON.stringify({ staff_id: Number(values.staff_id), reason }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error?.message || `요청 실패 (${response.status})`);
+      App.showToast('success', '입고 취소 완료', '수불·재고에 취소를 반영하고 관련 입고 서류를 삭제했습니다.');
+      this.load();
+      const modal = document.querySelector('#modalContainer .modal-body');
+      if (serial === this.receiptSerial && form === document.getElementById('receiptCancelForm') && modal) {
+        this.receiptDetail = result;
+        modal.innerHTML = this.renderReceipt(result);
+        App.trackInventoryModal?.({kind:'receipt', id:Number(id), cancel:false});
+      }
+      window.TempEntry?.refreshBadges?.();
+    } catch (error) {
+      if (form === document.getElementById('receiptCancelForm')) errorBox.textContent = error.message;
+    } finally {
+      this.receiptCancelling = false;
+      button.disabled = false;
+    }
   },
 
 };
