@@ -123,6 +123,24 @@ class DocMenuPlacementTests(SimpleTestCase):
         self.assertLess(html.index('id="nav-approval-box"'), html.index('id="nav-ccp-monitoring"'))
         self.assertIn('docMenu: "haccp"', html)
 
+    def test_ccp_dashboard_menu_follows_box_menus(self):
+        """P11-TC-030: [CCP 대시보드]는 결재함 아래, 문서함·결재함과 같은 자리에 한 번."""
+        for value in ("dev", "haccp"):
+            with self.subTest(value=value):
+                html = self.html(HACCP_TEMP_ENTRY=True, HACCP_DOC_MENU=value)
+                self.assertEqual(html.count('data-page="ccp-dashboard"'), 1)
+                self.assertLess(
+                    html.index('id="nav-approval-box"'), html.index('id="nav-ccp-dashboard"')
+                )
+                self.assertIn('id="badge-ccp-dashboard"', html)
+                self.assertIn("temp-entry/dashboard/dashboard.js", html)
+                if value == "haccp":
+                    self.assertLess(
+                        html.index('id="nav-ccp-dashboard"'), html.index('id="nav-ccp-monitoring"')
+                    )
+                else:
+                    self.assertLess(html.index("개발 검증"), html.index('id="nav-ccp-dashboard"'))
+
     def test_haccp_menu_without_temp_entry(self):
         html = self.html(HACCP_TEMP_ENTRY=False, HACCP_DOC_MENU="haccp")
         self.assertIn('id="nav-doc-box"', html)
@@ -132,4 +150,5 @@ class DocMenuPlacementTests(SimpleTestCase):
     def test_dev_menu_hidden_without_temp_entry(self):
         html = self.html(HACCP_TEMP_ENTRY=False, HACCP_DOC_MENU="dev")
         self.assertNotIn('id="nav-doc-box"', html)
+        self.assertNotIn('id="nav-ccp-dashboard"', html)
         self.assertNotIn("temp-entry/core.js", html)

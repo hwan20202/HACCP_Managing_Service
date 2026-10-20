@@ -28,6 +28,13 @@ def actor_from_header(value):
     return staff_id
 
 
+def optional_actor_from_header(value):
+    """헤더가 선택인 조회(P11 B2): 없으면 None, 있으면 actor_from_header와 같이 확인한다."""
+    if value is None or str(value).strip() == "":
+        return None
+    return actor_from_header(value)
+
+
 def existing_ids(ids):
     wanted = {i for i in ids if isinstance(i, int) and not isinstance(i, bool)}
     if not wanted:

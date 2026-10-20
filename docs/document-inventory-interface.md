@@ -94,8 +94,13 @@ docs_for_lot(lot_id)
 ```python
 docs_for_batch(batch_id)
 # -> {"production_batch_id": ..., "documents": [
-#      {"document_id", "type_code", "process_code", "status", "version"}]}
+#      {"document_id", "type_code", "process_code", "status", "version",
+#       "summary": {"row_count", "latest": {"at", "phase", "verdict"} | None,
+#                   "nonconforming_count", "deviation_count",
+#                   "no_action", "pending", "no_checker", "checked"} | None}]}
 ```
+
+`summary`(P11 — 생산 화면 [연결 문서]): CCP 일지마다 측정 행 수·최근 측정·이탈 행 수·개선조치 상태(이탈 행 중 개선조치 없음, 확인 대기, 확인자 없음, 확인됨). 기존 키는 그대로이고 키만 더함. 판정·상태 규칙은 CCP 대시보드와 같음.
 
 ### 2.6 `get_source_document(document_id)` — HOLD 근거 문서
 

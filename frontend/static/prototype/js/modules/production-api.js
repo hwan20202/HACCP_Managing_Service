@@ -101,6 +101,13 @@ const ProductionApiPage = {
     if (!this.s.staffId) {
       try { this.s.staffId = sessionStorage.getItem('prodApi.staffId') || ''; } catch (e) { /* storage off */ }
     }
+    // 문서 쪽 화면에서 이 배치로 들어올 때(P11 S5 r2): TempEntry.open('production-batches', {productionBatchId, tab})
+    const intent = window.TempEntry && TempEntry.intent && TempEntry.intent.productionBatchId ? TempEntry.takeIntent() : null;
+    if (intent) {
+      this.s.creating = false;
+      this.s.batchId = Number(intent.productionBatchId);
+      this.s.detailTab = intent.tab || 'work';
+    }
     setTimeout(() => this.init(), 0);
     return `
     <style>
@@ -395,20 +402,61 @@ const ProductionApiPage = {
     } else {
       verdict = '<span class="badge badge-danger" id="prodCcpMissing">CCP 일지 없음</span> <span style="font-size:0.8rem;">시작된 배치인데 연결된 CCP 일지가 없습니다. 문서 담당자에게 확인하세요.</span>';
     }
-    const rows = docs.map((d) => `<tr>
+    const docLinks = !!window.TempEntry;  // 문서 화면(temp-entry)이 실린 설정에서만 [열기]·[CCP 대시보드]
+    const rows = docs.map((d) => `<tr data-ccp-doc="${this.esc(d.document_id)}">
         <td class="no-wrap">${this.esc(d.type_code)}</td><td>${this.esc(d.process_code || '-')}</td>
         <td>${this.badge(this.DOC_STATUS[d.status] || [d.status, 'badge-neutral'])}</td>
-        <td style="text-align:right;">v${this.esc(d.version)}</td><td style="text-align:right;">#${this.esc(d.document_id)}</td></tr>`).join('');
+        <td>${this.ccpMeasure(d.summary)}</td><td>${this.ccpDeviation(d.summary)}</td>
+        <td style="text-align:right;" class="no-wrap">#${this.esc(d.document_id)}
+          ${docLinks ? `<button class="btn btn-secondary btn-sm" data-open-doc="${this.esc(d.document_id)}" onclick="ProductionApiPage.openDoc(${Number(d.document_id)})">열기</button>` : ''}</td></tr>`).join('');
     return `
       <div class="card" style="margin-bottom:0.75rem;" id="prodCcp">
         <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
           <div class="card-title">CCP 일지</div>
-          <button class="btn btn-secondary btn-sm" onclick="ProductionApiPage.recheckDocs()">다시 확인</button>
+          <span style="display:flex;gap:0.4rem;">
+            ${docs.length && window.TempEntry ? `<button class="btn btn-secondary btn-sm" id="prodCcpDash" onclick="ProductionApiPage.openDashboard()">CCP 대시보드에서 보기</button>` : ''}
+            <button class="btn btn-secondary btn-sm" onclick="ProductionApiPage.recheckDocs()">다시 확인</button>
+          </span>
         </div>
         <div style="margin-bottom:0.5rem;">${verdict}</div>
-        ${docs.length ? `<div class="table-wrapper"><table class="data-table"><thead><tr><th>문서</th><th>공정</th><th>상태</th><th style="text-align:right;">버전</th><th style="text-align:right;">문서 id</th></tr></thead><tbody>${rows}</tbody></table></div>` : ''}
+        ${docs.length ? `<div class="table-wrapper"><table class="data-table"><thead><tr><th>문서</th><th>공정</th><th>상태</th><th>최근 측정</th><th>이탈 · 개선조치</th><th style="text-align:right;">문서</th></tr></thead><tbody>${rows}</tbody></table></div>` : ''}
         <p style="font-size:0.72rem;color:var(--text-muted);margin:0.4rem 0 0;">생산 시작 시 필요한 CCP 일지가 함께 생성됩니다.</p>
       </div>`;
+  },
+
+  // P11 S5 r2: 연결 문서 줄의 측정 요약(문서 앱 REQ-A02 summary — 없으면 '-')
+  ccpMeasure(m) {
+    if (!m) return '<span style="color:var(--text-muted);">-</span>';
+    if (!m.row_count) return '<span class="badge badge-warning">▲ 측정 없음</span>';
+    const l = m.latest;
+    const at = l && l.at ? String(l.at).replace('T', ' ').slice(5, 16) : '시각 없음';
+    const v = l && l.verdict ? ` · ${l.verdict === '부적합' ? '<b style="color:var(--danger,#c0392b);">부적합</b>' : this.esc(l.verdict)}` : '';
+    return `${this.esc(at)}${l && l.phase ? ` ${this.esc(l.phase)}` : ''}${v} <span style="color:var(--text-muted);">(측정 ${this.esc(m.row_count)})</span>`;
+  },
+  ccpDeviation(m) {
+    if (!m) return '<span style="color:var(--text-muted);">-</span>';
+    const parts = [];
+    if (m.nonconforming_count) parts.push(`<span class="badge badge-danger">⚠ 이탈 ${this.esc(m.nonconforming_count)}</span>`);
+    if (m.no_action) parts.push(`<span class="badge badge-danger">개선조치 없음 ${this.esc(m.no_action)}</span>`);
+    if (m.pending) parts.push(`<span class="badge badge-warning">● 확인 대기 ${this.esc(m.pending)}</span>`);
+    if (m.checked) parts.push(`<span class="badge badge-success">확인됨 ${this.esc(m.checked)}</span>`);
+    return parts.join(' ') || '<span class="badge badge-success">이상 없음</span>';
+  },
+  // 문서 상세로(문서 앱 화면). [뒤로] = 이 배치의 [연결 문서] 탭
+  openDoc(documentId) {
+    if (!window.TempEntry) return;
+    TempEntry.open('doc-box', { documentId, back: { page: 'production-batches', intent: { productionBatchId: this.detail.id, tab: 'documents' } } });
+  },
+  // CCP 대시보드(문서 앱) — 제조일을 기준일로, 이 배치 영역을 펼쳐서
+  openDashboard() {
+    if (!window.TempEntry || !this.detail) return;
+    TempEntry.open('ccp-dashboard', { date: this.detail.manufactured_date, focusBatch: this.detail.batch_number });
+  },
+  // 다른 화면에서 배치 열기(문서 앱이 부름): tab = 'work' | 'documents'
+  openBatch(batchId, tab) {
+    if (window.TempEntry) { TempEntry.open('production-batches', { productionBatchId: batchId, tab: tab || 'work' }); return; }
+    Object.assign(this.s, { creating: false, batchId: Number(batchId), detailTab: tab || 'work' });
+    App.navigate('production-batches');
   },
 
   async recheckDocs() {

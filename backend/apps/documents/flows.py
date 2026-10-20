@@ -61,6 +61,12 @@ FLOWS = {
     "DOC-USK": ["DOC-USK-01", "DOC-USK-02", "DOC-USK-03"],
     "DOC-RCV": ["DOC-RCV-01", "DOC-RCV-02"],
     "DOC-DAT": ["DOC-DAT-01"],
+    # P11 (dev-notes/dashboard/p11-s2-spec.md 2.2·3장) — MSM은 REQ-CCP 안에서
+    "DOC-MSM": [f"DOC-MSM-0{n}" for n in range(1, 6)],
+    "DOC-PND": [f"DOC-PND-0{n}" for n in range(0, 6)],
+    "DOC-PND-SUM": ["DOC-PND-00", "DOC-PND-01", "DOC-PND-02"],
+    "DOC-PND-ANON": [f"DOC-PND-0{n}" for n in range(0, 5)],  # 헤더 없음: 05(내 것) 없음
+    "DOC-DVK": ["DOC-DVK-00", "DOC-DVK-01", "DOC-DVK-02"],
 }
 
 # P7 S5: 개발 콘솔의 항목별 비교(WF BATCH와 같은 모양: 머리 → 항목 × n → 꼬리).

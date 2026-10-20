@@ -17,7 +17,7 @@ from apps.core.http import (
     reject_unknown_keys,
 )
 from apps.core.trace import step
-from apps.staff.services import actor_from_header
+from apps.staff.services import actor_from_header, optional_actor_from_header
 
 from . import errors, files, services
 
@@ -400,3 +400,33 @@ def file_item(request, file_id):
     response = FileResponse(open(path, "rb"), content_type=mime, filename=name)
     response["Cache-Control"] = "private, no-store"
     return response
+
+
+# ------------------------------------------------------- P11 개선조치 확인 (p11-s2-spec 3장)
+
+
+@require_http_methods(["GET"])
+@_api
+def deviations_pending(request):
+    """DOC-A22 확인 대기 ?date=YYYY-MM-DD&mine=0|1&summary=0|1 (X-Staff-Id 선택 — B2)."""
+    with step("DOC-PND-00", "API", "현재 사용자(선택)"):
+        actor = optional_actor_from_header(request.headers.get("X-Staff-Id"))
+    return json_response(
+        services.pending_deviations(
+            actor, request.GET.get("date"), request.GET.get("mine"), request.GET.get("summary")
+        )
+    )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@_api
+def deviation_check(request, deviation_id):
+    """DOC-A23 개선조치 확인 {expected_version} (X-Staff-Id 필수)."""
+    with step("DOC-DVK-00", "API", "요청 형식·사용자 확인"):
+        body = parse_json_body(request)
+        reject_unknown_keys(body, ("expected_version",))
+        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+    return json_response(
+        services.check_deviation(actor, deviation_id, body.get("expected_version"))
+    )

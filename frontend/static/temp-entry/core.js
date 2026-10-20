@@ -18,7 +18,7 @@
 
   // P10(p10-s1-screens 2장): 문서함·결재함의 화면 id. 예전 temp-doc·temp-approval(북마크·콘솔 링크)도 같은 화면으로
   const PAGE_ALIAS = { 'temp-doc': 'doc-box', 'temp-approval': 'approval-box' };
-  const BOX_PAGES = ['doc-box', 'approval-box'];
+  const BOX_PAGES = ['doc-box', 'approval-box', 'ccp-dashboard'];  // P11: CCP 대시보드도 같은 자리(p11-s2-spec 4장)
   const pageOf = (page) => PAGE_ALIAS[page] || page;
 
   const TempEntry = {
@@ -41,6 +41,10 @@
     open(page, intent) {
       this.intent = intent || null;
       App.navigate(pageOf(page));
+    },
+    // P11 S5 r2: 생산지시·실적 화면(시제품 production-api.js — const라 window에 없음). 없으면 null
+    productionPage() {
+      return typeof ProductionApiPage !== 'undefined' ? ProductionApiPage : null;  // eslint-disable-line no-undef
     },
     takeIntent() {
       const value = this.intent;
@@ -116,21 +120,25 @@
     // ---------- P10 사이드바 숫자 배지(p10-s1-screens 2장, S1-Q4 — 폴링 없음) ----------
     // 문서함 = 작성 필요 전체(A08 mine=0 counts 합 — 상신 대기·30일 넘은 미완료 제외), 결재함 = 내 차례(대기 total).
     // 화면을 열 때·사용자를 바꿀 때·내가 저장·작성완료·상신·결재·상신 취소·작성 안 함 한 뒤(api 쓰기 호출 성공) 다시 센다.
+    // P11: CCP 대시보드 = 내 확인 대기(DOC-A22 summary=1 my_total, 날짜 무관 — p11-s1-screens 2장). 확인·개선조치 저장/삭제 뒤에도(쓰기 호출)
     badgeSeq: 0,
     async refreshBadges() {
       const doc = document.getElementById('badge-doc-box');
       const apr = document.getElementById('badge-approval-box');
-      if (!doc && !apr) return;
+      const ccp = document.getElementById('badge-ccp-dashboard');
+      if (!doc && !apr && !ccp) return;
       const seq = ++this.badgeSeq;
       const set = (el, n) => { if (!el) return; el.textContent = n ? String(n) : ''; el.hidden = !n; };
-      if (!HaccpApi.staffId) { set(doc, 0); set(apr, 0); return; }
-      const [todo, inbox] = await Promise.all([
+      if (!HaccpApi.staffId) { set(doc, 0); set(apr, 0); set(ccp, 0); return; }
+      const [todo, inbox, pending] = await Promise.all([
         doc ? HaccpApi.get('todo') : null,
         apr ? HaccpApi.get('approval-inbox?box=pending&page=1') : null,
+        ccp ? HaccpApi.get('deviations/pending?summary=1') : null,
       ]);
       if (seq !== this.badgeSeq) return;  // 그사이 더 새로 셈
       set(doc, todo && todo.ok ? Object.values(todo.data.counts).reduce((a, b) => a + b, 0) : 0);
       set(apr, inbox && inbox.ok ? inbox.data.total : 0);
+      set(ccp, pending && pending.ok ? pending.data.my_total : 0);
     },
 
     statusBadge(status) {

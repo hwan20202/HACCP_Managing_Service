@@ -130,7 +130,13 @@
     const lotLink = (r) => `<a href="#" class="te-lot-link" data-lot="${r.lot_id}" title="이 LOT의 연결 문서">${esc(r.label || r.lot_id)}</a>`;
     const docLevel = refs.filter((r) => r.section_id === null);
     const parts = docLevel.map((r) => {
-      if (r.production_batch_id !== null) return esc(`배치 ${r.label || r.production_batch_id}${r.process_code ? ` · ${r.process_code}` : ''}`);
+      // P11 S5 r2: 배치 이름 = 생산지시·실적의 그 배치(생산 화면이 있을 때만 링크)
+      if (r.production_batch_id !== null) {
+        const name = T.productionPage()
+          ? `<a href="#" class="te-lot-link" data-prod-batch="${r.production_batch_id}" title="생산 기록(생산지시·실적)">${esc(r.label || r.production_batch_id)}</a>`
+          : esc(r.label || r.production_batch_id);
+        return `배치 ${name}${r.process_code ? ` · ${esc(r.process_code)}` : ''}`;
+      }
       if (r.lot_id !== null) return [`LOT ${lotLink(r)}`, ...lotInfo(d).map(esc)].join(' · ');
       return esc(r.label || r.process_code || '-');
     });
@@ -217,6 +223,9 @@
       this.root = root;
       const intent = T.takeIntent();
       this.detailBack = null;
+      // P11(p11-s2-spec 4장): CCP 대시보드에서 열면 [뒤로]는 대시보드(그 기준일), 이탈 줄 [열기]는 개선조치 영역으로
+      this.openFocus = intent && intent.documentId ? { deviationNew: intent.deviationNew ?? null, focus: intent.focus || null } : null;
+      if (intent && intent.documentId && intent.back && intent.back.page) this.detailBack = { page: intent.back.page, intent: intent.back.intent };
       if (intent && intent.bundleDay) this.showBundle(intent.bundleDay, intent.origin || { page: 'list' });
       else if (intent && intent.documentId) this.showDetail(intent.documentId);
       else this.showList();
@@ -499,7 +508,8 @@
     // 문서 상세 [뒤로/목록]: 묶음 상세에서 열었으면 그 묶음으로(P6a S6a-4 규칙 — 연 곳으로)
     goBack() {
       const back = this.detailBack;
-      if (back && back.bundleDay) this.showBundle(back.bundleDay, back.origin);
+      if (back && back.page) T.open(back.page, back.intent);
+      else if (back && back.bundleDay) this.showBundle(back.bundleDay, back.origin);
       else if (back && back.week) this.showWeek(back.week.type, back.week.start, back.week.origin);
       else this.showList();
     },
@@ -1619,6 +1629,10 @@
       $('#btnEffective')?.addEventListener('click', () => {
         if (window.TempEntryApproval) window.TempEntryApproval.showRequest(Number($('#btnEffective').dataset.request), { from: 'doc', documentId: d.document_id });
       });
+      this.root.querySelectorAll('#teTarget [data-prod-batch]').forEach((a) => a.addEventListener('click', (e) => {
+        e.preventDefault();
+        T.productionPage().openBatch(Number(a.dataset.prodBatch), 'documents');
+      }));
       this.root.querySelectorAll('#teTarget [data-lot]').forEach((a) => a.addEventListener('click', (e) => {
         e.preventDefault();
         T.open('temp-lot-docs', { lotId: Number(a.dataset.lot), back: { page: 'temp-doc', documentId: d.document_id } });
@@ -1632,6 +1646,7 @@
       if (skipped) {
         if ((d.deviations || []).length) $('#teDeviationArea').innerHTML = this.deviationsHtml(schema, d);
       } else this.renderDeviations(d, schema);
+      this.applyOpenFocus(d, schema, skipped);
       if (schema.files) this.renderFiles(d, schema);
       if (WEEK_TYPES.includes(d.template.type_code)) this.renderWeekStrip(d);
       // P3 결재 영역 (WF-SC-01) — temp-entry/approval/approval.js
@@ -1903,8 +1918,17 @@
       }));
       const staffOpts = (sel) => ['<option value="">-</option>'].concat((T.staff || []).map((sid) => `<option value="${sid}" ${String(sel) === String(sid) ? 'selected' : ''}>staff ${sid}</option>`)).join('');
       const rowSelect = (sel) => ['<option value="">– 없음</option>'].concat(rowOptions.map((o) => `<option value="${o.id}" ${String(sel) === String(o.id) ? 'selected' : ''}>${esc(o.label)}</option>`)).join('');
-      // 확인 슬롯 1개에 여러 명(D-054). 1명이 확인하면 끝(확인 기능은 ISS-008)
+      // 확인 슬롯 1개에 여러 명(D-054). 1명이 확인하면 끝(P11 확인 — DSH-SC-02, 되돌릴 수 없음)
       const checkerSelect = (ids) => `<span class="te-checkers">${(T.staff || []).map((sid) => `<label class="te-check"><input type="checkbox" data-checker value="${sid}" ${ids.includes(sid) ? 'checked' : ''}>${sid}</label>`).join('')}</span>`;
+      // P11 DOC-SC-04 확인 칸: 확인됨 → staff·시각 / 미확인 + 내가 확인자 → [확인] / 미확인 + 다른 사람 → 대기 / 확인자 없음 → –
+      // 문서 상태와 무관하게 확인할 수 있음(노출 조건은 대시보드 목록에만 — S2-Q3 a). 새 행(저장 전)은 확인 없음
+      const checkCell = (x, key) => {
+        if (!x.deviation_id) return '<span class="te-hint">새 행</span>';
+        if (x.checked_at) return `<span class="te-judge-ok">확인</span> staff ${esc(x.checked_by)} · ${esc(String(x.checked_at).slice(5, 16).replace('T', ' '))}`;
+        if (!(x.checker_ids || []).length) return '–';
+        if (api.staffId && x.checker_ids.includes(Number(api.staffId))) return `<button class="btn btn-primary btn-sm" data-dev-check="${key}">확인</button>`;
+        return '대기';
+      };
       const line = (x, key) => `
         <tr data-dev="${key}">
           ${hasRows ? `<td><select class="form-control" data-k="section_id">${rowSelect(x.section_id)}</select></td>` : ''}
@@ -1912,7 +1936,7 @@
           <td><select class="form-control" data-k="actor_id">${staffOpts(x.actor_id)}</select></td>
           <td><input class="form-control" data-k="action_result" maxlength="1000" value="${esc(x.action_result || '')}"></td>
           <td>${checkerSelect(x.checker_ids || [])}</td>
-          <td class="te-nowrap">${x.deviation_id ? ((x.checker_ids || []).length ? (x.checked_at ? '확인' : '대기') : '–') : '<span class="te-hint">새 행</span>'}</td>
+          <td class="te-nowrap">${checkCell(x, key)}</td>
           <td class="te-nowrap"><button class="btn btn-primary btn-sm" data-dev-save="${key}" ${api.staffId ? '' : 'disabled'}>저장</button>
             <button class="btn btn-secondary btn-sm" data-dev-del="${key}" ${api.staffId ? '' : 'disabled'}>${x.deviation_id ? '삭제' : '취소'}</button></td>
         </tr>`;
@@ -1922,7 +1946,7 @@
       const hasRows = schema.sections.some((s) => s.repeat);
       el.innerHTML = `
         <div class="te-section te-deviation" id="teDeviation">
-          <div class="te-section-head"><span class="te-section-title">한계기준 이탈·개선조치 <span class="te-hint">문서 상태와 상관없이 언제든 수정할 수 있습니다 · 확인 기능은 다음 스프린트</span></span>
+          <div class="te-section-head"><span class="te-section-title">한계기준 이탈·개선조치 <span class="te-hint">문서 상태와 상관없이 언제든 수정·확인할 수 있습니다</span></span>
             <button class="btn btn-secondary btn-sm" id="devAdd" ${api.staffId ? '' : 'disabled'}>+ 추가</button></div>
           ${nonconforming && !saved.length ? '<div class="te-error-text">부적합 항목이 있어 작성완료하려면 이탈·개선조치를 1건 이상 적어야 합니다.</div>' : ''}
           <div class="te-table-wrap"><table class="data-table te-rows">
@@ -1961,6 +1985,20 @@
         if (res.data && res.data.code === 'VERSION_CONFLICT') { T.toast('다른 사용자가 먼저 이 개선조치를 수정했습니다. 최신 내용으로 다시 불러옵니다.', 'error'); reload(); return; }
         const details = (res.data && res.data.details) || [];
         T.toast(`${T.errorText(res)}${details.length ? ` — ${details.map((x) => x.message).join(' / ')}` : ''}`, 'error');
+      }));
+      el.querySelectorAll('[data-dev-check]').forEach((b) => b.addEventListener('click', async () => {
+        const key = b.dataset.devCheck;
+        const cur = saved.find((x) => `s${x.deviation_id}` === key);
+        const body = read(el.querySelector(`tr[data-dev="${key}"]`));
+        // 편집 중인 값이 있으면 저장 먼저(S1b 5장 — 확인 창에는 저장된 내용이 보여야 함)
+        const changed = Object.entries(body).some(([k, val]) => JSON.stringify(val) !== JSON.stringify(cur[k] ?? (k === 'checker_ids' ? [] : null)));
+        if (changed) { T.toast('바뀐 내용을 먼저 저장하세요. 확인은 저장된 내용으로 합니다.', 'error'); return; }
+        if (!window.TempEntryDashboard) return;
+        const result = await window.TempEntryDashboard.confirmCheck({
+          deviation_id: cur.deviation_id, version: cur.version, title: `${d.template.name} — 문서 #${d.document_id} (${d.work_date})`,
+          description: cur.description, action_result: cur.action_result, actor_id: cur.actor_id,
+        });
+        if (!result.cancelled) reload();
       }));
       el.querySelectorAll('[data-dev-del]').forEach((b) => b.addEventListener('click', async () => {
         const key = b.dataset.devDel;
@@ -2085,6 +2123,26 @@
         });
         note.focus();
       });
+    },
+
+    // P11: 대시보드 이탈 줄 [열기] — 개선조치가 없으면 그 행을 관련 행으로 채운 추가 줄을 연 채로(S1-Q2 a, "개선조치 추가"와 같은 문구),
+    // 있으면 이탈·개선조치 영역으로 스크롤. 한 번만(다시 그릴 때는 하지 않음)
+    applyOpenFocus(d, schema, skipped) {
+      const want = this.openFocus;
+      this.openFocus = null;
+      if (!want || (!want.deviationNew && !want.focus)) return;
+      if (want.deviationNew && !skipped && api.staffId && !this.devDrafts.some((x) => x.section_id === want.deviationNew)) {
+        let text = '';
+        schema.sections.filter((s) => s.repeat).forEach((s) => d.sections.filter((x) => x.section_def === s.key).forEach((x, i) => {
+          if (x.section_id === want.deviationNew) text = `${s.label} ${x.values.lot_number || `${i + 1}행`} 부적합`;
+        }));
+        this.devDrafts.push({ section_id: want.deviationNew, description: text });
+        this.renderDeviations(d, schema);
+      }
+      const area = this.root.querySelector('#teDeviation') || this.root.querySelector('#teDeviationArea');
+      if (!area) return;
+      area.scrollIntoView({ block: 'center' });
+      if (want.deviationNew) area.querySelector("tr[data-dev^='n'] [data-k=description]")?.focus({ preventScroll: true });
     },
 
     // 개선조치 입력 위치로 이동: 첫 부적합 행을 관련 행으로 한 새 입력 행을 연다
