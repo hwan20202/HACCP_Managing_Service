@@ -74,6 +74,28 @@ class ConfigTests(RolesFileMixin, TestCase):
         self.assertIn(("R-W2", "DEV-002"), found)
         self.assertIsNone(roles.config_error())  # 경고일 뿐 — 나머지는 그대로 쓴다
 
+    def test_tc41_writers_file(self):
+        """ROLE-TC-41(r11, DR-20): writers — 형식 검사, 없는 코드 경고, 후보 아님, R01만."""
+        data = default_roles()
+        data["forms"]["CCP_MONITORING"]["writers"] = ["DEV-004", "DEV-098"]
+        self.use_roles(data)
+        self.assertEqual(roles.writers("CCP_MONITORING"), {4})
+        self.assertEqual(roles.writers("D03"), set())  # 키 없음 = 0명(정상)
+        found = {(w["code"], w.get("staff_code"), w.get("where")) for w in roles.load().warnings}
+        self.assertIn(("R-W1", "DEV-098", "forms.CCP_MONITORING.writers"), found)
+        self.assertTrue(roles.can_submit(4, "CCP_MONITORING"))
+        self.assertEqual(roles.require_submitter(4, "CCP_MONITORING"), "writer")
+        self.assertFalse(roles.can_submit(4, "HYGIENE_CHECK"))
+        with self.assertRaises(roles.RoleRequired):  # 정정 시작(R04)은 담당자·팀장만
+            roles.require_owner_or_leader(4, "CCP_MONITORING")
+        line = roles.approval_line("CCP_MONITORING")
+        self.assertNotIn(4, [sid for slot in line["slots"] for sid in slot["candidate_ids"]])
+        for bad in ("DEV-004", ["DEV-004", "DEV-004"], [1]):
+            with self.subTest(bad=bad):
+                data["forms"]["CCP_MONITORING"]["writers"] = bad
+                self.use_roles(data)
+                self.assertIn("writers", roles.config_error() or "")
+
     def test_tc04_no_leaders(self):
         data = default_roles()
         data["haccp_leaders"] = []
@@ -176,12 +198,39 @@ class ApiTests(RolesFileMixin, TestCase):
         me = self.client.get("/api/v1/roles", HTTP_X_STAFF_ID="1").json()["me"]
         self.assertEqual(me["is_leader"], True)
         self.assertIn("CCP_MONITORING", me["owner_of"])
+        # ROLE-TC-41(r11): 작성 권한자 — 개발 기본 파일은 D01·D02에 DEV-004
+        # (이 테스트의 활성 양식 밖)
+        self.assertEqual(forms["HYGIENE_CHECK"]["writers"], [])
+        me4 = self.client.get("/api/v1/roles", HTTP_X_STAFF_ID="4").json()["me"]
+        self.assertEqual(
+            (me4["is_leader"], me4["owner_of"], me4["writer_of"]), (False, [], ["D01", "D02"])
+        )
+
+    def test_roles_flow(self):
+        """P14 S5: 역할 보기 trace가 DOC-ROL 도식과 같다(개발 콘솔 ROLE-PS-01)."""
+        from apps.core import trace
+        from apps.documents import flows
+        from apps.documents import services as doc
+
+        record, token = trace.start("TEST", "roles")
+        try:
+            doc.roles_summary(1)
+        finally:
+            trace.stop(token)
+        self.assertTrue(flows.matches("DOC-ROL", [s.step_id for s in record.steps]))
 
     def test_tc07_staff(self):
         Staff.objects.filter(pk=4).update(is_active=False)
         items = self.client.get("/api/v1/staff").json()["items"]
         self.assertEqual([i["id"] for i in items], [1, 2, 3, 5])  # 활성만
         self.assertEqual(set(items[0]), {"id", "staff_code", "name"})
+        # S5 r1(Q1 b): 비활성 포함 — 지난 기록의 사람 표시용
+        every = self.client.get("/api/v1/staff?include_inactive=1").json()["items"]
+        self.assertEqual(
+            [(i["id"], i["is_active"]) for i in every],
+            [(1, True), (2, True), (3, True), (4, False), (5, True)],
+        )
+        self.assertEqual(self.client.get("/api/v1/staff?include_inactive=yes").status_code, 400)
 
 
 class BoundaryTests(TestCase):

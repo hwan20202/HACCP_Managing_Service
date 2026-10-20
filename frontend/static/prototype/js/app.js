@@ -11,6 +11,7 @@ const App = {
     setInterval(() => this.updateDateTime(), 60000);
     this.navigate('dashboard');
     this.setupEvents();
+    this.setupHistory();
   },
 
   setupSidebar() {
@@ -40,6 +41,7 @@ const App = {
   },
 
   setupEvents() {
+    window.addEventListener('resize', () => { if (typeof InventoryApiPage !== 'undefined') InventoryApiPage.fitViewport(); });
     // 네비게이션 클릭
     document.querySelectorAll('.nav-item[data-page]').forEach(item => {
       item.addEventListener('click', (e) => {
@@ -59,11 +61,74 @@ const App = {
     });
   },
 
-  navigate(page, updateNav = true) {
+  setupHistory() {
+    const saved = history.state;
+    this.historyEnabled = true;
+    window.addEventListener('popstate', event => {
+      if (event.state?.haccp) this.restoreHistory(event.state);
+    });
+    if (saved?.haccp) this.restoreHistory(saved);
+    else this.recordHistory(true);
+  },
+
+  historySnapshot() {
+    return {
+      haccp: true, page: this.currentPage,
+      inventory: typeof InventoryApiPage !== 'undefined' ? JSON.parse(JSON.stringify(InventoryApiPage.states)) : {},
+      detail: typeof InventoryApiPage !== 'undefined' ? InventoryApiPage.detailContext || null : null,
+      modal: this.inventoryModal || null,
+      intent: this.navigationIntent || null,
+    };
+  },
+
+  recordHistory(replace = false) {
+    if (!this.historyEnabled || this.restoringHistory) return;
+    const state = this.historySnapshot();
+    const signature = value => JSON.stringify(value, (key, v) => v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
+    if (!replace && signature(history.state) === signature(state)) return;
+    history[replace ? 'replaceState' : 'pushState'](state, '', '#' + encodeURIComponent(this.currentPage));
+  },
+
+  trackInventoryModal(route) {
+    this.inventoryModal = route;
+    this.recordHistory();
+  },
+
+  async restoreHistory(state) {
+    const serial = this.restoreSerial = (this.restoreSerial || 0) + 1;
+    this.restoringHistory = true;
+    try {
+      this.closeModal(false);
+      if (typeof InventoryApiPage !== 'undefined') {
+        InventoryApiPage.states = JSON.parse(JSON.stringify(state.inventory || {}));
+        InventoryApiPage.detailContext = state.detail;
+      }
+      if (window.TempEntry) TempEntry.intent = state.intent;
+      this.navigate(state.page, true, true);
+      const route = state.modal;
+      if (route && typeof InventoryApiPage !== 'undefined') {
+        if (route.kind === 'item') {
+          await InventoryApiPage.openItem(route.id);
+          if (serial !== this.restoreSerial) return;
+          if (state.detail) { InventoryApiPage.detailContext = {...state.detail}; await InventoryApiPage.loadItemDetail(); }
+        }
+        if (route.kind === 'receipt') await InventoryApiPage.openReceipt(route.id, route.cancel);
+        if (route.kind === 'entry') await InventoryApiPage.openQaReceipt();
+        if (route.kind === 'picker') await InventoryApiPage.openReceiptPicker(route);
+      }
+    } finally { if (serial === this.restoreSerial) this.restoringHistory = false; }
+  },
+
+  navigate(page, updateNav = true, fromHistory = false) {
     if (!page) return;
     if (page === 'production-log') page = 'production-batches';
     if (page === 'inventory-overview') page = 'raw-materials'; // retired menu / old links
+    if (!fromHistory) { this.restoreSerial = (this.restoreSerial || 0) + 1; this.restoringHistory = false; }
+    this.closeModal(false);
+    this.navigationIntent = window.TempEntry?.intent || null;
     this.currentPage = page;
+    this.recordHistory();
 
     // 활성 nav 업데이트
     if (updateNav) {
@@ -94,7 +159,8 @@ const App = {
     document.getElementById('breadcrumb').textContent = breadcrumbs[page] || page;
     // [임시 진입점 T3] 개발 검증 탭은 temp-entry 모듈이 그린다 (dev-notes/common/temp-entry.md).
     // P10: 문서함·결재함(doc-box·approval-box)도 같은 모듈 — 예전 temp-doc·temp-approval은 TempEntry가 바꿔 엶
-    if ((page.startsWith('temp-') || page === 'doc-box' || page === 'approval-box') && window.TempEntry) { TempEntry.mount(page, container); return; }
+    // P11: CCP 대시보드(ccp-dashboard)도 같은 모듈 — 시제품 'CCP 모니터링'(ccp-monitoring)과는 다른 화면 · P14: 역할 보기(role-view)
+    if ((page.startsWith('temp-') || page === 'doc-box' || page === 'approval-box' || page === 'ccp-dashboard' || page === 'role-view') && window.TempEntry) { TempEntry.mount(page, container); return; }
 
 
     let html = '';
@@ -220,6 +286,7 @@ const App = {
 
   // ===== 모달 =====
   showModal(title, bodyHtml, buttons = []) {
+    this.inventoryModal = null;
     const overlay = document.getElementById('modalOverlay');
     const container = document.getElementById('modalContainer');
     container.classList.remove('inventory-detail-modal');
@@ -243,7 +310,9 @@ const App = {
     document.body.style.overflow = 'hidden';
   },
 
-  closeModal() {
+  closeModal(useHistory = true) {
+    if (useHistory && this.inventoryModal && this.historyEnabled && !this.restoringHistory) { history.back(); return; }
+    this.inventoryModal = null;
     document.getElementById('modalOverlay')?.classList.remove('active');
     document.getElementById('modalContainer')?.classList.remove('active');
     document.body.style.overflow = '';

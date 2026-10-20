@@ -1,6 +1,7 @@
 """문서 결정 규칙 상수(s2-spec 2.4, D-050 Q2, D-065 Q6). 실제 목록을 받으면 상수만 바꾼다."""
 
 INCOMING = "INCOMING"
+RECEIPT_CANCELLED = "CANCELLED"  # D-178: 수불 입고 취소(incoming_receipts.receipt_status)
 CANCELLED = "CANCELLED"  # 생산 쪽 실제 상태 이름 확인 요청(requests-p5 X2, REQ-S2-Q9)
 LOT_DOCUMENTS = ("D01", "D02", "D03")  # 모든 입고 LOT(REQ-S2-Q3). D03도 LOT마다 1건(P6a, D-084)
 D03 = "D03"

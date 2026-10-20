@@ -12,6 +12,16 @@ from apps.staff import services as staff_services
 from apps.staff.tests.base import RolesFileMixin, default_roles
 
 
+def perms(submit=False, start_correction=False, write=False, assign_inspector=False):
+    """문서 상세 permissions(10.4 — r13 write·assign_inspector). CCP는 점검자 일괄 대상 아님."""
+    return {
+        "submit": submit,
+        "start_correction": start_correction,
+        "write": write,
+        "assign_inspector": assign_inspector,
+    }
+
+
 class DetailPermissionTests(RolesFileMixin, TestCase):
     """ROLE-TC-27: 헤더 없음·담당자·역할 없음·결재선 없음."""
 
@@ -34,11 +44,9 @@ class DetailPermissionTests(RolesFileMixin, TestCase):
         anonymous = self.detail()
         self.assertEqual(anonymous["owner_ids"], [1, 3])
         self.assertTrue(anonymous["approval_line"]["ok"])
-        self.assertEqual(anonymous["permissions"], {"submit": False, "start_correction": False})
-        self.assertEqual(self.detail(3)["permissions"], {"submit": True, "start_correction": False})
-        self.assertEqual(
-            self.detail(4)["permissions"], {"submit": False, "start_correction": False}
-        )
+        self.assertEqual(anonymous["permissions"], perms())
+        self.assertEqual(self.detail(3)["permissions"], perms(submit=True, write=True))
+        self.assertEqual(self.detail(4)["permissions"], perms())
         data = default_roles()
         data["haccp_leaders"] = []
         self.use_roles(data)
@@ -49,10 +57,20 @@ class DetailPermissionTests(RolesFileMixin, TestCase):
         )
         self.assertFalse(no_line["permissions"]["submit"])
 
+    def test_tc41_writer_permissions(self):
+        """ROLE-TC-41(r11, DR-20): 작성 권한자는 submit만 true, 정정 시작은 false."""
+        data = default_roles()
+        data["forms"]["CCP_MONITORING"]["writers"] = ["DEV-004"]
+        self.use_roles(data)
+        self.assertEqual(self.detail(4)["permissions"], perms(submit=True, write=True))  # r13
+        document, _ = make_document(self.t["ccp"], status="approved")
+        self.document_id = document.document_id
+        self.assertEqual(self.detail(4)["permissions"], perms(write=True))
+
     def test_tc27_approved_correction(self):
         document, _ = make_document(self.t["ccp"], status="approved")
         self.document_id = document.document_id
-        self.assertEqual(self.detail(5)["permissions"], {"submit": False, "start_correction": True})
+        self.assertEqual(self.detail(5)["permissions"], perms(start_correction=True, write=True))
         self.assertFalse(self.detail(4)["permissions"]["start_correction"])
 
 

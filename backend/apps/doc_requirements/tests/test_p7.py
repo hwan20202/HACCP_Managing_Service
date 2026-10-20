@@ -12,9 +12,12 @@ from django.test.utils import CaptureQueriesContext
 from apps.core import trace
 from apps.doc_requirements import flows, sources
 from apps.doc_requirements import services as req
+from apps.document_workflow import services as wf
 from apps.document_workflow.tests.base import invariant_violations
+from apps.document_workflow.tests.p7 import DAY as P7_DAY
 from apps.document_workflow.tests.p7 import d03, fill, new_lot, setup_p7
 from apps.staff import roles
+from apps.staff.tests.base import RolesFileMixin, default_roles
 
 DAY = "2026-10-20"
 
@@ -108,6 +111,7 @@ class IncomingBundleTests(TestCase):
                     "my_pending": 0,
                 },
                 "approval_line": roles.approval_line("D03"),
+                "permissions": {"assign_inspector": True},  # P14 r13: 직원 1 = 팀장(R08)
             },
         )
 
@@ -118,8 +122,8 @@ class IncomingBundleTests(TestCase):
                 self.assertEqual((res.status_code, res.json()["code"]), (400, "VALIDATION_ERROR"))
         res = self.client.get("/api/v1/incoming-inspections")
         self.assertEqual(res.status_code, 400)
-        res = self.get(staff=None)
-        self.assertEqual((res.status_code, res.json()["code"]), (400, "STAFF_HEADER_MISSING"))
+        res = self.get(staff=None)  # P14 r14(DR-24 Q7 b): 헤더 선택 — 사용자 없음으로 200
+        self.assertEqual(res.status_code, 200, res.content)
 
     def test_tc094_my_slot_done(self):
         m = d03("submitted_partial", day=DAY)
@@ -150,3 +154,31 @@ class IncomingBundleTests(TestCase):
         with mock.patch.object(sources, "LOT_VIEW", "v_doc_incoming_lot_missing"):  # 뷰 없음
             res = self.get()
         self.assertEqual((res.status_code, res.json()["code"]), (503, "REQ_SOURCE_MISSING"))
+
+
+class WriterBundleTests(RolesFileMixin, TestCase):
+    """ROLE-TC-41(r11, DR-20): D03 작성 권한자 — 묶음 can_submit, 일괄 상신 성공(후보 아님)."""
+
+    def setUp(self):
+        data = default_roles()
+        data["forms"]["D03"]["writers"] = ["DEV-004"]
+        self.use_roles(data)
+        setup_p7()
+
+    def tearDown(self):
+        self.assertEqual(invariant_violations(), [])
+
+    def test_writer_batch_submit(self):
+        made = [d03("completed") for _ in range(2)]
+        ids = [m["document_id"] for m in made]
+        lots = req.incoming_bundle(4, P7_DAY)["lots"]
+        docs = [
+            x["document"] for x in lots if x["document"] and x["document"]["document_id"] in ids
+        ]
+        self.assertEqual({(d["can_submit"], d["submit_block"]) for d in docs}, {(True, None)})
+        items = [{"document_id": d["document_id"], "expected_version": d["version"]} for d in docs]
+        body = wf.batch_submit(4, items)
+        self.assertEqual(body["succeeded"], 2, body)
+        request_id = body["results"][0]["result"]["request"]["request_id"]
+        slots = self.client.get(f"/api/v1/approval-requests/{request_id}").json()["slots"]
+        self.assertEqual([s["candidate_ids"] for s in slots], [[2, 3], [1, 5]])  # 4는 후보 아님

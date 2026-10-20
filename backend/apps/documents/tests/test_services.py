@@ -251,7 +251,7 @@ class UpdateTests(TestCase):
     def test_tc050_only_changes_are_applied(self):
         info_before = DocSection.objects.get(pk=self.rows["info"].section_id)
         r1_before = DocSection.objects.get(pk=self.rows["r1"].section_id)
-        result = update_current(4, self.doc.document_id, self.full_patch())
+        result = update_current(5, self.doc.document_id, self.full_patch())  # P14 r13: 팀장 5
         self.doc.refresh_from_db()
         self.assertEqual(self.doc.subject, "CCP-2B/라인B")
         self.assertGreater(self.doc.updated_at, self.doc.created_at)
@@ -264,11 +264,11 @@ class UpdateTests(TestCase):
         self.assertEqual(
             r1.values_json, {"round": "09:00", "temp": 85.5, "hold_sec": 16, "measured_by": 3}
         )
-        self.assertEqual(r1.recorded_by_id, 4)  # DOC-FR-08
+        self.assertEqual(r1.recorded_by_id, 5)  # DOC-FR-08
         self.assertGreater(r1.recorded_at, r1_before.recorded_at)
         self.assertFalse(DocSection.objects.filter(pk=self.rows["r2"].section_id).exists())
         new = DocSection.objects.get(document=self.doc, values_json__round="11:00")
-        self.assertEqual((new.row_no, new.recorded_by_id), (3, 4))
+        self.assertEqual((new.row_no, new.recorded_by_id), (3, 5))
         self.assertEqual(len(result["sections"]), 3)
 
     def test_tc052_locked_statuses_change_nothing(self):
@@ -463,8 +463,8 @@ class VersionTests(TestCase):
         )
         before = snapshot(doc.document_id)
         with self.assertRaises(errors.VersionConflict) as ctx:
-            services.update_document(
-                4, doc.document_id, {"expected_version": 1, "document": {"subject": "B"}}
+            services.update_document(  # P14 r13: 다른 사람 = 팀장 5(역할 없는 4는 403)
+                5, doc.document_id, {"expected_version": 1, "document": {"subject": "B"}}
             )
         detail = ctx.exception.details[0]
         self.assertEqual((detail["expected"], detail["current"]), (1, 2))

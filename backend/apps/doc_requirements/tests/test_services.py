@@ -219,6 +219,8 @@ class OutsideTransactionTests(TransactionTestCase):
         with self.assertRaises(errors.TransactionRequired):
             services.require_for_batch(3, 12)
         self.assertEqual(Document.objects.count(), 0)
+        with self.assertRaises(errors.TransactionRequired):  # D-178 F12(LC-TC-004)
+            services.delete_lot_documents(3, 88)
 
 
 class RequireForBatchTests(TestCase):

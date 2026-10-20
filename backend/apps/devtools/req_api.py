@@ -172,6 +172,10 @@ def lot_list(request):
     """REQ-D01: 개발 입고 LOT 목록 + 연결 문서 요약(F03)."""
     items = []
     for lot in sources.lots_received_on(_query_date(request)):
+        # D-178: 취소 LOT은 F03이 LOT_NOT_FOUND — 목록에 남기고(receipt_status) 문서는 없음
+        if lot.get("receipt_status") == "CANCELLED":
+            items.append({**lot, "documents": []})
+            continue
         found = req.docs_for_lot(lot["lot_id"])
         items.append({**lot, "documents": _doc_summary(found["documents"])})
     return json_response({"items": items})

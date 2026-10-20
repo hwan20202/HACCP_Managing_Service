@@ -559,7 +559,7 @@ class FlowMatchTests(TestCase):
     """S4b 검토 B1: 신호 안의 단계만 건너뛰고, 그 밖에 끼어든 다른 묶음 단계는 불일치."""
 
     def test_signal_window_only(self):
-        base = ["DOC-CMP-01", "DOC-CMP-02", "DOC-CMP-03", "DOC-SIG-01"]
+        base = ["DOC-CMP-01", "DOC-WRT-01", "DOC-WRT-02", "DOC-CMP-02", "DOC-CMP-03", "DOC-SIG-01"]
         nested = ["EFF-JDG-01", "EFF-JDG-02", "DOC-GET-01", "DOC-GET-02", "EFF-JDG-04"]
         self.assertTrue(doc_flows.matches("DOC-CMP", [*base, *nested, "DOC-CMP-04"]))
         self.assertFalse(

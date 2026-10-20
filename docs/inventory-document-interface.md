@@ -164,7 +164,7 @@ release_hold(hold_id=..., disposition="RELEASE", reason=..., staff_id=...)
 | 입고 등록 | `incoming_received(lot_id=..., staff_id=..., inspection=None)` | `require_for_lot(staff_id, lot_id, inspection)` — LOT 마다 D01·D02·D03 (작성중). `inspection` 은 새 D03 에만 채움 |
 | 입고 등록 + 육안검사 | `ReceiptInput.inspection` / API `inspection` | 문서 생성 뒤 판정을 수불이 반영(`apply_incoming_judgment`, `document_id` = D03). `judgment` 를 안 주면 `inspection.verdict` 를 판정으로 씀. 둘 다 주면 같아야 함 |
 | 입고 취소 전 | `receipt_cancel_blockers(lot_id=...)` | `docs_for_lot(lot_id)` — LOT 문서가 `submitted`·`approved`·`correcting`(정정 중) 이면 취소 거부. 작성중·작성완료·반려는 취소 가능 |
-| 입고 취소 | `incoming_receipt_cancelled(lot_id=..., reason=..., staff_id=...)` | 없음 — 문서 쪽 처리 미정(빈 함수 유지) |
+| 입고 취소 | `incoming_receipt_cancelled(lot_id=..., reason=..., staff_id=...)` | `delete_lot_documents(staff_id, lot_id)` — 같은 트랜잭션에서 입고 서류 소프트 딜리트. 오류 시 입고 취소도 롤백 |
 | HOLD 근거 문서 | `holds.source_document_id` 에 `document_id` 저장 (0003 에서 `lot_holds` → `holds`) | ⑥ `get_source_document` 로 조회 |
 | 생산 시작 (계획 없이 바로 완료한 경우는 완료 때) | `batch_started(batch_id=..., staff_id=...)` | `require_for_batch(staff_id, batch_id)` — 제조 배치면 CCP-1P·2B·3P 일지 (ERD v7 ③) |
 

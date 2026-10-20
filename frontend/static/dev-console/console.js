@@ -102,6 +102,12 @@
     // ---- P10 문서함·결재함 — document-workflow/p10-s2-spec.md(+ 5.1 단계 ID)
     todo: { label: 'REQ 작성 필요 목록 (F10·A08)', method: 'GET', flow: 'REQ-TDO', uses: ['query'], path: (s) => `todo${s.query ? `?${s.query}` : ''}` },
     cancelSubmission: { label: 'WF 상신 취소 (WF-F05)', method: 'POST', flow: 'WF-CAN', uses: ['id', 'docId'], path: (s) => `approval-requests/${s.id}/cancel`, doc: (s) => s.docId },
+    // ---- P11 CCP 대시보드 — dashboard/p11-s2-spec.md(+ 5장 단계 ID). 확인 대기 흐름은 헤더 없음 DOC-PND-ANON · summary=1 DOC-PND-SUM
+    ccpDashboard: { label: 'REQ CCP 현황 (F11·A09)', method: 'GET', flow: 'REQ-CCP', uses: ['query'], path: (s) => `ccp-dashboard${s.query ? `?${s.query}` : ''}` },
+    deviationsPending: { label: 'DOC 개선조치 확인 대기 (F30·A22)', method: 'GET', flow: 'DOC-PND', uses: ['query'], path: (s) => `deviations/pending${s.query ? `?${s.query}` : ''}` },
+    deviationCheck: { label: 'DOC 개선조치 확인 (F31·A23)', method: 'POST', flow: 'DOC-DVK', uses: ['id', 'body', 'docId'], path: (s) => `deviations/${s.id}/check`, doc: (s) => s.docId },
+    // ---- P14 역할 기반 결재 — roles/p14-s2-spec.md 10장
+    roles: { label: 'ROLE 역할 보기 (ROLE-A01)', method: 'GET', flow: 'DOC-ROL', uses: [], path: () => 'roles' },
   };
   function periodicScope(spec, fromKey, toKey) {
     try {
@@ -293,7 +299,8 @@
     steps.filter((s) => own(s) && !expected.includes(s.step_id))
       .forEach((s) => chips.push({ id: s.step_id, cls: s.result === 'fail' ? 'fail extra' : 'extra' }));
     // 실패 분기 단계(…-02a, P6 …-02b 등 숫자 뒤 글자)는 도식에 없으면 순서 비교에서 뺀다
-    const branch = (id) => /\d[a-z]$/.test(id) && !expected.includes(id);
+    // P14 r13: 조건부 단계(점검자를 바꾸는 수정의 DOC-WRT-03 — documents/flows.py OPTIONAL)도 도식에 없으면 뺀다
+    const branch = (id) => (/\d[a-z]$/.test(id) || id === 'DOC-WRT-03') && !expected.includes(id);
     let mainRun = steps.filter(own).map((s) => s.step_id).filter((id) => (reqFlow ? expected.includes(id) : !branch(id)));
     if (reqFlow) mainRun = mainRun.filter((id, i) => i === 0 || mainRun[i - 1] !== id);
     const inOrder = mainRun.every((id, i) => expected[i] === id);
@@ -759,7 +766,7 @@
         return { func: 'update', id: d.document_id, body: body('먼저 저장'),
           script: async (exec) => {
             await exec({ func: 'update', id: d.document_id, body: body('먼저 저장'), staff: api.staffId });
-            await exec({ func: 'update', id: d.document_id, body: body('나중 저장(덮어쓰기 시도)'), staff: '4' });
+            await exec({ func: 'update', id: d.document_id, body: body('나중 저장(덮어쓰기 시도)'), staff: '5' });  // P14 r13: 다른 사람 = 팀장(역할 없는 4는 403)
           } };
       } },
   ];
@@ -816,7 +823,7 @@
         const submit = J({ expected_version: d.version });
         return { func: 'submit', id: d.document_id, body: submit,
           script: async (exec) => {
-            await exec({ ...completeSpec(d), staff: '4' });
+            await exec({ ...completeSpec(d), staff: OWNER });  // P14 r13: 작성완료도 작성 권한(R07) — 담당자
             await exec({ func: 'submit', id: d.document_id, body: submit, staff: OWNER });
           } };
       } },
@@ -1016,7 +1023,7 @@
       prepare: async () => ({ func: 'reqLot', body: J(await lotBody(await freeDay(), { fail_after: true })) }) },
     { id: 'REQ-PS-07', label: '생산 시작(제조)', expect: '201 · REQ-DEV-BAT 도식 일치(REQ-BAT-03 ×3) · production_batches +1(개발 전용 INSERT), document +3(CCP-1P·2B·3P), document_ref(배치 + 공정) +3',
       prepare: async () => ({ func: 'reqBatch', body: J({ item_id: await itemId('유자차'), process_type: 'MANUFACTURE', manufactured_date: localDay(0), quantity_kg: 900 }) }) },
-    { id: 'REQ-PS-08', label: '같은 배치 다시 호출 / 포장 배치', expect: '[호출 1] 200 · 이미 있음 ×3 · ④ production_batches ~1(updated_at만) [호출 2] 201 · REQ-BAT-03 건너뜀(공정 없음) · ④ production_batches +1, 문서 변화 없음',
+    { id: 'REQ-PS-08', label: '같은 배치 다시 호출 / 포장 배치 거부', expect: '[호출 1] 200 · 이미 있음 ×3 · ④ production_batches ~1(updated_at만) [호출 2] 400 INVENTORY_REJECTED(포장배치는 MVP 범위 밖 — 수불 0006, ISS-048) · REQ-DEV-02에서 중단 · ④ 변화 없음',
       prepare: async () => {
         const batch = (await reqList('batches')).find((b) => b.process_type === 'MANUFACTURE' && b.status !== 'CANCELLED' && b.documents.length);
         if (!batch) throw new Error(`CCP 문서가 있는 제조 배치가 없습니다. ${REQ_HINT}.`);
@@ -1603,6 +1610,85 @@
       } }),
   );
 
+  // ---------------------------------------------------------------- 프리셋 DSH-PS-01~08 (P11 S5 — p11-s1-screens 6장)
+  // 사전 조건은 불러올 때 개발 API(fixtures/ccp — 새 배치 → REQ-F02 → 행·개선조치·확인)로 만든다(ISS-019). 기준일 = 실행하는 날(Asia/Seoul)
+  const p11 = (preset) => ({ unit: 'P11', ...preset });
+  async function ccpFixture(body) {
+    const made = await devPost('/api/dev/fixtures/ccp', body);
+    made.batches.forEach((b) => Object.entries(b.documents).forEach(([proc, id]) => prepared.push({ lot_number: '-', document_id: id, status: `배치 ${b.label} CCP-${proc}` })));
+    return made;
+  }
+  // fixtures/ccp 응답의 개선조치 id → 그 문서의 개선조치(version·확인 기록)
+  async function ccpDeviation(made, process, deviationId, batch = 1) {
+    const documentId = made.batches[batch - 1].documents[process];
+    const d = await quietGet(`documents/${documentId}`);
+    const x = d && d.deviations.find((y) => y.deviation_id === deviationId);
+    if (!x) throw new Error(`개선조치 #${deviationId}를 찾지 못했습니다.`);
+    return { documentId, deviation: x };
+  }
+  const BAD_2B = { process: '2B', values: { temp_c: 73.5 } };
+
+  PRESETS.push(
+    p11({ id: 'DSH-PS-01', label: '대시보드 기본', expect: '200 · REQ-CCP 도식 일치(01~05, 04 안쪽 DOC-MSM-01~05) · SQL 6개 이하(MSM) · cards 3개(CCP-1P·2B·3P 순서) · 준비한 배치 2개: 1P·2B는 측정 행 1개씩(최근 측정 값), 3P는 행 없음(no_rows · "측정 없음") · 작성중이라 todo · ④ 변화 없음',
+      prepare: async () => {
+        await ccpFixture({ rows: [{ process: '1P' }, { process: '2B' }] });
+        return { func: 'ccpDashboard', staff: '3', query: `date=${seoulToday()}` };
+      } }),
+    p11({ id: 'DSH-PS-02', label: '이탈 + 개선조치 없음', expect: '200 · REQ-CCP 도식 일치 · deviations에 준비한 2B 행(건조온도 73.5, reasons temp_c expect min 68·max 72) 1줄, deviation.state none("개선조치 없음") · CCP-2B 카드 counts.deviation_rows ≥ 1 · ④ 변화 없음',
+      prepare: async () => {
+        await ccpFixture({ rows: [BAD_2B] });
+        return { func: 'ccpDashboard', staff: '3', query: `date=${seoulToday()}` };
+      } }),
+    p11({ id: 'DSH-PS-03', label: 'CCP 개선조치 즉시 노출', expect: '200 · DOC-PND 도식 일치(00~05) · 준비한 2B 개선조치(확인자 staff 3)가 rows에 있음 — 문서는 작성중(CCP check_visibility immediate) · can_check true · counts.mine ≥ 1 · ④ 변화 없음',
+      prepare: async () => {
+        await ccpFixture({ rows: [BAD_2B], deviations: [{ process: '2B', row: 1, checker_ids: [3] }] });
+        return { func: 'deviationsPending', staff: '3', query: `date=${seoulToday()}` };
+      } }),
+    p11({ id: 'DSH-PS-04', label: '일반 양식은 작성완료 뒤', expect: '1번째 200(DOC-PND) → 2번째 200(DOC-CMP) → 3번째 200(DOC-PND) · 준비한 D03(작성중, 개선조치 확인자 staff 3)은 1번째 rows에 없고, 작성완료 뒤 3번째 rows에 있음(after_complete) · ④ document draft→completed',
+      prepare: async () => {
+        const { d } = await fixtureDoc({ state: 'draft', inspector: 4, received_date: seoulToday() });
+        await quietPostAs(`documents/${d.document_id}/deviations`, { description: '포장 파손(콘솔 준비)', action_result: '반품 처리', checker_ids: [3] }, 3);
+        const fresh = await quietGet(`documents/${d.document_id}`);
+        const query = `date=${seoulToday()}`;
+        const complete = { func: 'complete', staff: '3', id: String(d.document_id), body: J({ expected_version: fresh.version }) };
+        return { func: 'deviationsPending', staff: '3', query, docId: String(d.document_id),
+          script: async (exec) => {
+            await exec({ func: 'deviationsPending', staff: '3', query });
+            await exec(complete);
+            await exec({ func: 'deviationsPending', staff: '3', query });
+          } };
+      } }),
+    p11({ id: 'DSH-PS-05', label: '확인 성공', expect: '200 · DOC-DVK 도식 일치(00~02) · 02 조건부 UPDATE 영향 1행 · ④ deviation_action checked_by 3·checked_at 채움·version+1, updated_by·updated_at 그대로, document version 그대로 · 대시보드를 다시 보면 확인 대기에서 빠지고 이탈 줄 "확인됨"',
+      prepare: async () => {
+        const made = await ccpFixture({ rows: [BAD_2B], deviations: [{ process: '2B', row: 1, checker_ids: [3] }] });
+        const { documentId, deviation } = await ccpDeviation(made, '2B', made.deviations[0]);
+        return { func: 'deviationCheck', staff: '3', id: String(deviation.deviation_id), docId: String(documentId), body: J({ expected_version: deviation.version }) };
+      } }),
+    p11({ id: 'DSH-PS-06', label: '확인 거절(확인자 아님 · 이미 확인됨)', expect: '1번째 403 NOT_CHECKER(staff 4) → 2번째 409 ALREADY_CHECKED(details checked_by 3·checked_at) · 둘 다 DOC-DVK-02 영향 0행 → 02a 실패 사유 · ④ 변화 없음',
+      prepare: async () => {
+        const made = await ccpFixture({ rows: [BAD_2B, { process: '2B' }], deviations: [{ process: '2B', row: 1, checker_ids: [3] }, { process: '2B', row: 2, checker_ids: [3], checked_by: 3 }] });
+        const open = await ccpDeviation(made, '2B', made.deviations[0]);
+        const done = await ccpDeviation(made, '2B', made.deviations[1]);
+        const first = { func: 'deviationCheck', staff: '4', id: String(open.deviation.deviation_id), docId: String(open.documentId), body: J({ expected_version: open.deviation.version }) };
+        return { ...first,
+          script: async (exec) => {
+            await exec(first);
+            await exec({ func: 'deviationCheck', staff: '3', id: String(done.deviation.deviation_id), docId: String(done.documentId), body: J({ expected_version: done.deviation.version }) });
+          } };
+      } }),
+    p11({ id: 'DSH-PS-07', label: '확인 뒤 수정', expect: '200 · DOC-DVU 도식 일치 · ④ deviation_action action_result 바뀜·version+1·updated_* 바뀜, checked_by 3·checked_at 그대로(확인 기록 남음)',
+      prepare: async () => {
+        const made = await ccpFixture({ rows: [BAD_2B], deviations: [{ process: '2B', row: 1, checker_ids: [3], checked_by: 3 }] });
+        const { documentId, deviation } = await ccpDeviation(made, '2B', made.deviations[0]);
+        return { func: 'devUpdate', staff: '3', id: String(deviation.deviation_id), docId: String(documentId), body: J({ expected_version: deviation.version, action_result: '재측정 70.2℃, 적합(확인 뒤 수정)' }) };
+      } }),
+    p11({ id: 'DSH-PS-08', label: '확인자 없음', expect: '200 · DOC-PND 도식 일치 · 준비한 개선조치(확인자 비움)는 rows에 없고 no_checker.rows에 있음, no_checker.count ≥ 1 · 배지 합계(my_total)에 들지 않음 · ④ 변화 없음',
+      prepare: async () => {
+        await ccpFixture({ rows: [BAD_2B], deviations: [{ process: '2B', row: 1, checker_ids: [] }] });
+        return { func: 'deviationsPending', staff: '3', query: `date=${seoulToday()}` };
+      } }),
+  );
+
   function preparedText(m) {
     if (m.document_id === null) return `새 LOT ${esc(m.lot_number)} · 문서 없음(작성 요구 안 부름)`;
     if (m.lot_number === '-') return `문서 #${esc(m.document_id)}(${esc(m.status)})`;
@@ -1666,6 +1752,141 @@
     $('#dcDocIdWrap').style.display = uses.includes('docId') ? '' : 'none';
   }
 
+  // ---------------------------------------------------------------- 프리셋 ROLE-PS-01~11·13 (P14, roles/p14-s1-screens.md 7장)
+  // 개발 역할 파일(backend/apps/staff/roles.json): 팀장 1·5, D03·D01·D10·위생 담당자 2·3, CCP 담당자 1·3(1 = 겸직),
+  // D01·D02 작성 권한자 4(r4 DR-20 — 상신만, 후보 아님. 그 밖의 양식에서 4는 역할 없음).
+  // ROLE-PS-12(개선조치 팀장 확인)는 P11 병합 뒤.
+  const role = (preset) => ({ unit: 'ROLE', ...preset });
+  async function freshOf(types) {
+    const d = await findDoc('draft', (x) => types.includes(x.template && x.template.type_code) && !x.submitted_at && !x.record_key && !(x.subject || '').includes('PS-05'));
+    if (!d) throw new Error(`상신 이력 없는 작성중 ${types.join('·')} 문서가 없습니다. ${SEED_HINT}.`);
+    return quietGet(`documents/${d.document_id}`);
+  }
+  const slotsOf = (record) => (record && record.ok ? record.data.request.slots : []);
+  PRESETS.push(
+    role({ id: 'ROLE-PS-01', label: '역할 보기', expect: '200 · DOC-ROL 도식 일치 · leaders 1·5, 양식별 담당자·칸 구성(D10 담당자 칸 이름 "작성자"), me(staff 1) = HACCP팀장 + CCP 담당자 · DB 변화 없음',
+      prepare: async () => ({ func: 'roles', staff: '1' }) }),
+    role({ id: 'ROLE-PS-02', label: '담당자 상신(2칸)', expect: '201 · WF-SUB 도식 일치(02b·03·03b → APR-OPN-04b) · ④ approval +2(owner·leader, approver_id NULL), approval_candidate +4(칸1: 2·3, 칸2: 1·5)',
+      prepare: async () => {
+        const { d } = await fixtureDoc({ state: 'completed' });
+        return { func: 'submit', staff: '2', id: String(d.document_id), body: J({ expected_version: d.version }) };
+      } }),
+    role({ id: 'ROLE-PS-03', label: '권한 없는 상신', expect: '403 ROLE_REQUIRED · WF-SUB-03 실패, 트랜잭션(WF-SUB-04) 없음 · ④ 변화 없음',
+      prepare: async () => {
+        const { d } = await fixtureDoc({ state: 'completed' });
+        return { func: 'submit', staff: '4', id: String(d.document_id), body: J({ expected_version: d.version }) };
+      } }),
+    role({ id: 'ROLE-PS-04', label: '팀장 상신(owner 양식)', expect: '201 · 상신 staff 5 = 팀장(담당자 아님) · ④ approval +1(owner 칸 하나), approval_candidate = 그 양식 담당자(2·3) — 팀장은 후보 아님',
+      prepare: async () => {
+        // 담당자 칸만 있는 양식(D01)의 작성완료 문서를 불러올 때 새로 만든다(S5 r2 ISR-05 — 시드의 D01은 작성중뿐이라
+        // 예전에는 앞 프리셋 FILE-PS-03이 남긴 문서에 기대어 단독·두 번째 실행에서 준비 실패)
+        const m = await fileDoc({ state: 'completed', files: 1 });
+        return { func: 'submit', staff: '5', id: String(m.document_id), body: J({ expected_version: m.version }) };
+      } }),
+    role({ id: 'ROLE-PS-05', label: '겸직자 두 칸 처리', expect: '작성완료 → 상신(staff 3) 201 → staff 1이 1번 칸 승인 200(진행) → 2번 칸 승인 200(결재 완료) · ④ 두 칸 approver_id = 1, 회차·문서 승인',
+      prepare: async () => {
+        const d = await freshOf(['CCP_MONITORING']);
+        const submit = { func: 'submit', staff: '3', id: String(d.document_id), body: J({ expected_version: d.version + 1 }) };
+        return { ...submit, script: async (exec) => {
+          const done = await exec({ func: 'complete', id: String(d.document_id), body: J({ expected_version: d.version }), staff: '3' });
+          if (!done.record.ok) return;
+          const sub = await exec(submit);
+          for (const slot of slotsOf(sub.record)) {
+            await exec(decideSpec(slot, 1, { result: 'approved', comment: '겸직 처리(콘솔)' }, d.document_id));
+          }
+        } };
+      } }),
+    role({ id: 'ROLE-PS-06', label: '후보 아닌 사람 처리', expect: '403 NOT_YOUR_SLOT · APR-DEC-02 0행 → 02a(자격 없음) · ④ 변화 없음',
+      prepare: async () => {
+        const { d } = await fixtureDoc({ state: 'submitted' });
+        const req = await latestRequest(d.document_id);
+        const slot = req.slots.find((x) => x.state === 'pending' && x.role === 'leader') || req.slots.find((x) => x.state === 'pending');
+        return decideSpec(slot, 4, { result: 'approved' }, d.document_id);  // 4 = 역할 없음
+      } }),
+    role({ id: 'ROLE-PS-07', label: '팀장 상신 취소(남의 상신)', expect: '200 · WF-CAN 도식 일치(01b 팀장 → allow_any) · 회차 in_progress→cancelled, 대기 칸 skipped, 문서 작성완료',
+      prepare: async () => {
+        const { d } = await fixtureDoc({ state: 'submitted' });  // 상신자 = staff 3
+        const req = await latestRequest(d.document_id);
+        return { func: 'cancelSubmission', staff: '5', id: String(req.request_id), docId: String(d.document_id) };
+      } }),
+    role({ id: 'ROLE-PS-08', label: '결재선 없음', expect: '409 NO_APPROVAL_LINE · WF-SUB-03b 실패 · ④ 변화 없음 — 개발 역할 파일에는 상신 불가 양식이 없으므로 HACCP_ROLES_FILE로 담당자 0명 양식이 있는 파일을 지정했을 때만 준비됨',
+      prepare: async () => {
+        const roles = await quietGetAs('roles', 1);
+        const form = roles && roles.forms.find((f) => !f.submittable && f.block_reason !== 'config_invalid');
+        if (!form) throw new Error('상신할 수 없는 양식이 없습니다(개발 역할 파일은 모두 상신 가능). HACCP_ROLES_FILE로 담당자 0명 양식이 있는 파일을 지정하고 서버를 다시 시작하세요.');
+        const d = await findDoc('completed', (x) => x.template && x.template.type_code === form.type_code);
+        if (!d) throw new Error(`${form.type_code} 작성완료 문서가 없습니다.`);
+        return { func: 'submit', staff: '1', id: String(d.document_id), body: J({ expected_version: d.version }) };
+      } }),
+    role({ id: 'ROLE-PS-09', label: '정정 시작 권한', expect: '1번째 403 ROLE_REQUIRED(staff 4 — DOC-COR-01c 실패, DB 변화 없음) → 2번째 200(staff 2 = D03 담당자, 정정 중)',
+      prepare: async () => {
+        const { d } = await fixtureDoc({ state: 'approved' });
+        const first = { func: 'correction', staff: '4', id: String(d.document_id), body: J({ expected_version: d.version, reason: '권한 확인(콘솔)' }) };
+        return { ...first, script: async (exec) => {
+          await exec(first);
+          await exec({ ...first, staff: '2' });
+        } };
+      } }),
+    role({ id: 'ROLE-PS-10', label: '옛 회차 그대로 처리(직접 지정 칸)', expect: '200 · 옛 칸(role 없음)은 지정 결재자만 — ④ approver_id 그대로. P14 전 개발 DB 복사본(옛 회차가 있는 DB)에서만 준비됨',
+      prepare: async () => {
+        for (const staff of [1, 2, 3, 4, 5]) {
+          const r = await quietGetAs('approval-inbox?box=pending&page=1', staff);
+          const hit = r && r.items.find((x) => x.role === null);
+          if (hit) return decideSpec(hit, staff, { result: 'approved', comment: '옛 회차(콘솔)' }, hit.request.document_id);
+        }
+        throw new Error('옛 회차(직접 지정 칸)의 대기 칸이 없습니다. P14 전 개발 DB 복사본에서 실행하세요.');
+      } }),
+    role({ id: 'ROLE-PS-11', label: '일괄 승인 내 칸 전부', expect: '200 · D03 결재중 2건의 팀장 칸(staff 1) 2개 처리 · ③ WF-BAP 항목 2 · 개발 역할 파일에는 일괄 대상 양식의 겸직자가 없어 문서당 2칸은 클라우드 확인(별도 역할 파일)·서버 TC-24에서',
+      prepare: async () => {
+        const list = await fixtures({ state: 'submitted', count: 2 });
+        const slots = await Promise.all(list.map((m) => slotOf(m.document_id, 1, 'leader')));
+        return { func: 'batchApprove', staff: '1', docId: ids(list), body: J({ approval_ids: slots }) };
+      } }),
+    role({ id: 'ROLE-PS-13', label: '작성 권한자 상신(D01)', expect: '201 · WF-SUB 도식 일치(WF-SUB-03 = 작성 권한자) · 상신 staff 4 = D01 작성 권한자(담당자·팀장 아님) · ④ approval +1(owner 칸), approval_candidate = 담당자 2·3 — 작성 권한자는 후보 아님',
+      prepare: async () => {
+        const m = await fileDoc({ state: 'completed', files: 1 });  // 새 LOT의 D01(작성완료)
+        return { func: 'submit', staff: '4', id: String(m.document_id), body: J({ expected_version: m.version }) };
+      } }),
+    // P14 r13(DR-23) 작성 권한 — 화면 r7 7장. D03 fixture 점검자 기본 = staff 4(역할 없음)
+    role({ id: 'ROLE-PS-14', label: '작성 권한 없는 수정', expect: '403 ROLE_REQUIRED(required = owner·writer·leader·inspector) · DOC-UPD-01·02 → DOC-WRT-01 → DOC-WRT-02 실패, 잠금(DOC-UPD-03) 없음 · ④ 변화 없음',
+      prepare: async () => {
+        const { d } = await fixtureDoc({ state: 'draft', inspector: null });  // 점검자 없음 → staff 4는 D03 역할 없음
+        const insp = d.sections.find((x) => x.section_def === 'inspection');
+        return { func: 'update', staff: '4', id: String(d.document_id),
+          body: J({ expected_version: d.version, sections: { update: [{ section_id: insp.section_id, values: { packaging: '양호' } }] } }) };
+      } }),
+    role({ id: 'ROLE-PS-15', label: '점검자의 작성(역할 없음)', expect: '200 · DOC-WRT-02 통과(점검자) · DOC-UPD 도식 일치 · ④ doc_section 값·recorded_by = 4, version +1',
+      prepare: async () => {
+        const { d } = await fixtureDoc({ state: 'draft' });  // 점검자 = 4
+        const insp = d.sections.find((x) => x.section_def === 'inspection');
+        return { func: 'update', staff: '4', id: String(d.document_id),
+          body: J({ expected_version: d.version, sections: { update: [{ section_id: insp.section_id, values: { packaging: '양호' } }] } }) };
+      } }),
+    // P14 R05(FR-13 — P11 병합 뒤): 팀장은 지정 확인자가 아니어도·확인자 없는 개선조치도 확인
+    role({ id: 'ROLE-PS-12', label: '팀장의 개선조치 확인', expect: '1번째 200(staff 5 = HACCP팀장, 확인자 staff 3인 개선조치 — DOC-DVK-02 영향 1행) → 2번째 200(확인자 없는 개선조치) · ④ deviation_action checked_by 5 ×2',
+      prepare: async () => {
+        const made = await ccpFixture({ rows: [BAD_2B, { process: '2B', values: { temp_c: 74 } }], deviations: [{ process: '2B', row: 1, checker_ids: [3] }, { process: '2B', row: 2, checker_ids: [] }] });
+        const assigned = await ccpDeviation(made, '2B', made.deviations[0]);
+        const loose = await ccpDeviation(made, '2B', made.deviations[1]);
+        const first = { func: 'deviationCheck', staff: '5', id: String(assigned.deviation.deviation_id), docId: String(assigned.documentId), body: J({ expected_version: assigned.deviation.version }) };
+        return { ...first, script: async (exec) => {
+          await exec(first);
+          await exec({ ...first, id: String(loose.deviation.deviation_id), body: J({ expected_version: loose.deviation.version }) });
+        } };
+      } }),
+    role({ id: 'ROLE-PS-16', label: '점검자 바꾸기 권한', expect: '1번째 403 ROLE_REQUIRED(staff 4 = 점검자, required = owner·leader — DOC-WRT-03 실패, DB 변화 없음) → 2번째 200(staff 2 = D03 담당자, 점검자 2로)',
+      prepare: async () => {
+        const { d } = await fixtureDoc({ state: 'draft' });
+        const info = d.sections.find((x) => x.section_def === 'info');
+        const first = { func: 'update', staff: '4', id: String(d.document_id),
+          body: J({ expected_version: d.version, sections: { update: [{ section_id: info.section_id, values: { inspector: 2 } }] } }) };
+        return { ...first, script: async (exec) => {
+          await exec(first);
+          await exec({ ...first, staff: '2' });
+        } };
+      } }),
+  );
+
   async function init() {
     const staff = await quietGet('staff');
     $('#dcStaff').innerHTML = '<option value="">(헤더 없음)</option>' + (staff ? staff.items : [])
@@ -1674,7 +1895,7 @@
     $('#dcStaff').addEventListener('change', (e) => api.setStaff(e.target.value));
     $('#dcFunc').innerHTML = Object.entries(FUNCS).map(([k, f]) => `<option value="${k}">${esc(f.label)}</option>`).join('');
     const group = (unit, label) => `<optgroup label="${label}">${PRESETS.filter((p) => (p.unit || p.id.split('-')[0]) === unit).map((p) => `<option value="${p.id}">${p.id} ${esc(p.label)}</option>`).join('')}</optgroup>`;
-    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)') + group('FILE', '파일 업로드 (스프린트 3)') + group('P8', '점검표·작성 안 함 (P8)') + group('P9', '주기형 작성 요구 (P9)') + group('P10', '문서함·결재함 (P10)') + group('P12', '출력 (P12)');
+    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)') + group('FILE', '파일 업로드 (스프린트 3)') + group('P8', '점검표·작성 안 함 (P8)') + group('P9', '주기형 작성 요구 (P9)') + group('P10', '문서함·결재함 (P10)') + group('P11', 'CCP 대시보드 (P11)') + group('ROLE', '역할 기반 결재 (P14)') + group('P12', '출력 (P12)');
     $('#dcFunc').addEventListener('change', () => { state.preset = null; toggleInputs(); });
     ['#dcId', '#dcQuery', '#dcBody', '#dcDocId'].forEach((sel) => $(sel).addEventListener('input', () => { if (state.preset && state.preset.script) state.preset = null; }));
     $('#dcLoadPreset').addEventListener('click', loadPreset);

@@ -33,6 +33,8 @@ LOT_SELECT = (
     ("unit", "base_unit"),
     ("expiration_date", "expiration_date"),
     ("origin", "origin_country"),
+    # D-178: 입고 취소(소프트 딜리트) 여부 — COMPLETED / CANCELLED, 입고 건 없으면 NULL
+    ("receipt_status", "receipt_status"),
 )
 BATCH_SELECT = (
     ("production_batch_id", "production_batch_id"),
@@ -80,7 +82,8 @@ def incoming_lots_on(day):
     return _select(
         LOT_VIEW,
         LOT_SELECT,
-        " WHERE received_date = %s AND lot_kind = 'INCOMING'",
+        " WHERE received_date = %s AND lot_kind = 'INCOMING'"
+        " AND (receipt_status IS NULL OR receipt_status <> 'CANCELLED')",  # D-178 취소 입고 제외
         [day],
         " ORDER BY lot_number",
     )
@@ -89,6 +92,25 @@ def incoming_lots_on(day):
 def batch(batch_id):
     rows = _select(BATCH_VIEW, BATCH_SELECT, " WHERE production_batch_id = %s", [batch_id])
     return rows[0] if rows else None
+
+
+def batches_by_ids(batch_ids):
+    """P11 S5 r1: 배치 여러 개(대시보드 배치별 공정 순서 — 품목·공정 유형). 빈 목록이면 SQL 없음."""
+    ids = sorted({int(i) for i in batch_ids})
+    if not ids:
+        return []
+    marks = ", ".join(["%s"] * len(ids))
+    # D-171: 생산 상태·시작/종료 일시(대시보드 정렬 — 생산중 → 생산 전 → 생산 종료, 시작 빠른 순)
+    select = (
+        *BATCH_SELECT,
+        ("started_at", "started_at"),
+        ("completed_at", "completed_at"),
+        # D-172: 배치 영역 머리의 생산 수량(기준 단위) — 계획·산출
+        ("planned_qty", "planned_quantity_e6 / 1000000.0"),
+        ("output_qty", "output_quantity_e6 / 1000000.0"),
+        ("unit", "base_unit"),
+    )
+    return _select(BATCH_VIEW, select, f" WHERE production_batch_id IN ({marks})", ids)
 
 
 def lots_received_on(day=None, limit=100):

@@ -85,7 +85,7 @@ def seed_print(today=None):
         {"phase": "작업 중", "measured_at": _at(today, "10:50"), "gauss": 10400, "rod_cleaned": "O"},
         {"phase": "작업종료 후", "measured_at": _at(today, "17:00"), "gauss": 10200, "rod_cleaned": "O"},
     ])  # fmt: skip
-    _set_info(INSPECTOR, p1, {"inspector": INSPECTOR})
+    _set_info(OWNER, p1, {"inspector": INSPECTOR})
     deviation = doc.create_deviation(
         INSPECTOR,
         p1,
@@ -110,7 +110,7 @@ def seed_print(today=None):
         {"phase": "건조종료 전", "measured_at": _at(today + timedelta(days=1), "11:00"), "temp_c": 69.8,
          "dry_minutes": 119},
     ])  # fmt: skip
-    _set_info(INSPECTOR, p2, {"inspector": INSPECTOR})
+    _set_info(OWNER, p2, {"inspector": INSPECTOR})
     _complete(OWNER, p2)
     _submit_and_decide(p2, leader=False)
 
@@ -127,7 +127,7 @@ def seed_print(today=None):
     _add_rows(OWNER, p3, "summary", [
         {"item_name": item_name, "passed_qty": 1180, "detected_qty": 0, "note": "이상 없음"},
     ])  # fmt: skip
-    _set_info(INSPECTOR, p3, {"inspector": INSPECTOR})
+    _set_info(OWNER, p3, {"inspector": INSPECTOR})
     _complete(OWNER, p3)
     _submit_and_decide(p3)
     doc.start_correction(
@@ -349,7 +349,7 @@ def seed_print_weekly(day=None):
         checks={"d_clean_contact": "X", "y_water_test_date": monday.isoformat()},
     )
     deviation = doc.create_deviation(
-        INSPECTOR,
+        OWNER,  # 화 점검자는 2 — 작성 권한(P14 R07)은 역할자·점검자만, 조치자는 4 그대로
         ids["화"],
         {
             "description": "배수로 찌꺼기 남음(작업장 바닥·배수로 청소 불량)",

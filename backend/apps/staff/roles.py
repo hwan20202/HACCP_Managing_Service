@@ -1,4 +1,9 @@
-"""역할(P14) — 설정 파일의 HACCP팀장·양식별 담당자·결재 칸 구성. 테이블 없음.
+"""역할(P14) — 설정 파일의 HACCP팀장·양식별 담당자·작성 권한자·결재 칸 구성. 테이블 없음.
+
+- 작성 권한자(``writers``, DR-20 — 명세 ROLE-C08): 양식별, 작성(ROLE-R07, r13 DR-23)과
+  상신·재상신(ROLE-R01). 결재 칸 후보가 아니다.
+- 작성(R07) = 담당자·작성 권한자·팀장 + 그 문서 점검자(점검자 값은 DOC가 넘김 — 이 모듈은
+  문서를 읽지 않는다). 점검자 지정(R08) = 담당자·팀장.
 
 - 설정 파일은 ``HACCP_ROLES_FILE``(비우면 이 폴더의 roles.json — 가상 개발 직원만). 서버 시작 뒤
   처음 쓸 때 한 번 읽어 보관한다(파일을 바꾸면 재시작 — ROLE-C05). ``HACCP_ROLES_RELOAD``가 참이면
@@ -41,6 +46,8 @@ class RoleRequired(ApiError):
     status = 403
     code = "ROLE_REQUIRED"
     message = "이 양식의 담당자나 HACCP팀장만 할 수 있습니다."
+    SUBMIT = ("owner", "writer", "leader")  # ROLE-R01(r11 DR-20) — 정정 시작(R04)은 기본값
+    SUBMIT_MESSAGE = "이 양식의 담당자·작성 권한자나 HACCP팀장만 상신할 수 있습니다."
 
     def __init__(self, required=("owner", "leader"), message=None):
         super().__init__(
@@ -69,6 +76,7 @@ class FormRole:
     owners: frozenset
     slots: tuple
     labels: dict
+    writers: frozenset = frozenset()  # 작성 권한자(DR-20·23) — 작성·상신, 결재 후보 아님
 
 
 @dataclass
@@ -171,10 +179,12 @@ def _format_problems(data):
         if not isinstance(form, dict):
             problems.append(f"{where}는 객체여야 합니다.")
             continue
-        for key in sorted(set(form) - {"owners", "slots", "labels"}):
+        for key in sorted(set(form) - {"owners", "writers", "slots", "labels"}):
             problems.append(f"{where}: 알 수 없는 키 {key}")
         if not _code_list(form.get("owners")):
             problems.append(f"{where}.owners는 직원 코드 문자열 목록(중복 없음)이어야 합니다.")
+        if "writers" in form and not _code_list(form["writers"]):
+            problems.append(f"{where}.writers는 직원 코드 문자열 목록(중복 없음)이어야 합니다.")
         if form.get("slots") not in SLOT_CONFIGS:
             problems.append(f"{where}.slots는 owner·owner_leader·leader 중 하나여야 합니다.")
         labels = form.get("labels", {})
@@ -220,6 +230,7 @@ def _resolve(file):
     codes = set(data["haccp_leaders"])
     for form in data["forms"].values():
         codes.update(form["owners"])
+        codes.update(form.get("writers", []))
     with step("ROLE-CFG-03", "ROLE", "직원 코드 → id(지금 활성 여부)"):
         rows = {
             code: (sid, name, active)
@@ -266,6 +277,7 @@ def _resolve(file):
                 owners=ids(form["owners"], f"forms.{type_code}.owners"),
                 slots=SLOT_CONFIGS[form["slots"]],
                 labels=labels,
+                writers=ids(form.get("writers", []), f"forms.{type_code}.writers"),
             )
         s.note(f"경고 {len(config.warnings)}건")
     with step("ROLE-CFG-05", "ROLE", "양식별 칸 후보 검사"):
@@ -298,6 +310,25 @@ def _is_leader(config, staff_id):
     return staff_id is not None and staff_id in config.leaders
 
 
+def _is_writer(config, staff_id, type_code):
+    form = config.forms.get(type_code)
+    return staff_id is not None and form is not None and staff_id in form.writers
+
+
+def _submit_role(config, staff_id, type_code):
+    """ROLE-R01이 통과하는 역할 이름(trace 기록용) — 없으면 None.
+
+    여럿이면 팀장 > 담당자 > 작성 권한자.
+    """
+    if _is_leader(config, staff_id):
+        return "leader"
+    if _is_owner(config, staff_id, type_code):
+        return "owner"
+    if _is_writer(config, staff_id, type_code):
+        return "writer"
+    return None
+
+
 # ---------------------------------------------------------------- 조회
 
 
@@ -322,17 +353,98 @@ def is_owner(staff_id, type_code):
     return _is_owner(load(), staff_id, type_code)
 
 
+def writers(type_code):
+    form = load().forms.get(type_code)
+    return form.writers if form else frozenset()
+
+
+def is_writer(staff_id, type_code):
+    return _is_writer(load(), staff_id, type_code)
+
+
+def can_submit(staff_id, type_code):
+    """ROLE-R01(r11 DR-20): 담당자·작성 권한자·HACCP팀장.
+
+    설정 오류 여부는 보지 않는다(호출자가 먼저).
+    """
+    return _submit_role(load(), staff_id, type_code) is not None
+
+
+def require_submitter(staff_id, type_code):
+    """ROLE-R01: 설정 오류가 먼저(ROLE-C07), 그다음 담당자·작성 권한자·팀장.
+
+    반환: 통과한 역할 이름.
+    """
+    config = load()
+    if config.error:
+        raise RoleConfigInvalid()
+    role = _submit_role(config, staff_id, type_code)
+    if role is None:
+        raise RoleRequired(RoleRequired.SUBMIT, RoleRequired.SUBMIT_MESSAGE)
+    return role
+
+
 def forms_of(staff_id):
     return sorted(t for t, form in load().forms.items() if staff_id in form.owners)
 
 
 def require_owner_or_leader(staff_id, type_code):
-    """ROLE-R01·R04: 설정 오류가 먼저(ROLE-C07), 그다음 담당자 또는 팀장."""
+    """ROLE-R04(정정 시작): 설정 오류가 먼저(ROLE-C07), 그다음 담당자 또는 팀장.
+
+    상신(R01)은 작성 권한자도 되므로 require_submitter(r11 DR-20).
+    """
     config = load()
     if config.error:
         raise RoleConfigInvalid()
     if not (_is_owner(config, staff_id, type_code) or _is_leader(config, staff_id)):
         raise RoleRequired()
+
+
+WRITE_REQUIRED = ("owner", "writer", "leader", "inspector")  # ROLE-R07(r13 DR-23)
+WRITE_MESSAGE = "이 양식의 담당자·작성 권한자·HACCP팀장이나 지정된 점검자만 작성할 수 있습니다."
+INSPECTOR_MESSAGE = "점검자는 이 양식의 담당자나 HACCP팀장만 지정할 수 있습니다."
+
+
+def write_role(staff_id, type_code, inspector_id=None):
+    """ROLE-R07(r13): 작성이 통과하는 역할 이름(trace 기록용) — 없으면 None.
+
+    설정 형식 오류면 검사하지 않는다(ROLE-C07 — 현장 기록이 멈추지 않게): ``"config_invalid"``.
+    여럿이면 팀장 > 담당자 > 작성 권한자 > 점검자. inspector_id = 그 문서 ``info.inspector``
+    (새 문서는 None).
+    """
+    if staff_id is None:
+        return None
+    config = load()
+    if config.error:
+        return "config_invalid"
+    role = _submit_role(config, staff_id, type_code)
+    if role is not None:
+        return role
+    if inspector_id is not None and inspector_id == staff_id:
+        return "inspector"
+    return None
+
+
+def can_write(staff_id, type_code, inspector_id=None):
+    """ROLE-R07 여부(문서 상세 permissions.write·묶음 can_write)."""
+    return write_role(staff_id, type_code, inspector_id) is not None
+
+
+def can_assign_inspector(staff_id, type_code):
+    """ROLE-R08 여부(화면 권한 값) — 설정 형식 오류면 False(서버는 409)."""
+    config = load()
+    if staff_id is None or config.error:
+        return False
+    return _is_owner(config, staff_id, type_code) or _is_leader(config, staff_id)
+
+
+def require_inspector_setter(staff_id, type_code):
+    """ROLE-R08(r13): 점검자 지정·바꾸기 — 설정 오류가 먼저(409), 그다음 담당자 또는 팀장."""
+    config = load()
+    if config.error:
+        raise RoleConfigInvalid()
+    if not (_is_owner(config, staff_id, type_code) or _is_leader(config, staff_id)):
+        raise RoleRequired(message=INSPECTOR_MESSAGE)
 
 
 def approval_line(type_code, config=None):
@@ -395,6 +507,7 @@ def summary(active_forms, staff_id=None):
                 if form
                 else [],
                 "owners": [person(sid) for sid in sorted(form.owners)] if form else [],
+                "writers": [person(sid) for sid in sorted(form.writers)] if form else [],
                 "submittable": line["ok"],
                 "block_reason": line["reason"],
             }
@@ -430,5 +543,6 @@ def summary(active_forms, staff_id=None):
             "staff_id": staff_id,
             "is_leader": _is_leader(config, staff_id),
             "owner_of": sorted(t for t, f in config.forms.items() if staff_id in f.owners),
+            "writer_of": sorted(t for t, f in config.forms.items() if staff_id in f.writers),
         }
     return result

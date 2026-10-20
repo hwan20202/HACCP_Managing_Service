@@ -38,6 +38,9 @@ def _rollback_note(tx_step, error):
     tx_step.fail(f"{code} → 롤백")
 
 
+SUBMIT_ROLE_NAMES = {"leader": "HACCP팀장", "owner": "담당자", "writer": "작성 권한자"}
+
+
 def _line_for(actor_id, document_id):
     """WF-SUB-02b·03·03b(트랜잭션 밖): 양식 유형 → 설정 상태·권한(ROLE-R01, ROLE-C07) → 결재선."""
     with step("WF-SUB-02b", "WF", "문서 요약(양식 유형)") as s:
@@ -45,13 +48,11 @@ def _line_for(actor_id, document_id):
         s.note(type_code)
     with step("WF-SUB-03", "WF", "설정 상태·권한(ROLE-R01)") as s:
         try:
-            roles.require_owner_or_leader(actor_id, type_code)
+            role = roles.require_submitter(actor_id, type_code)  # 담당자·작성 권한자·팀장(DR-20)
         except ApiError as error:
             s.fail(error.code)
             raise
-        s.note(
-            "HACCP팀장" if roles.is_leader(actor_id) else "담당자"
-        )  # 둘 다면 팀장으로 적음(권한은 같음)
+        s.note(SUBMIT_ROLE_NAMES[role])  # 여럿이면 팀장 > 담당자 > 작성 권한자(권한은 같음)
     with step("WF-SUB-03b", "WF", "결재선 구성(ROLE-F01)") as s:
         try:
             line = roles.require_approval_line(type_code)

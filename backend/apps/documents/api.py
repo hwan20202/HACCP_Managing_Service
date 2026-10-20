@@ -48,7 +48,14 @@ def _actor(request, step_id):
 @require_http_methods(["GET"])
 @_api
 def staff_list(request):
-    return json_response({"items": services.list_staff()})
+    # P14 S5 r1(Q1 b): ?include_inactive=1이면 비활성 포함 + is_active(명세 10.2)
+    value = request.GET.get("include_inactive")
+    if value not in (None, "", "0", "1"):
+        raise ApiError(
+            "조회 조건을 확인하세요.",
+            [{"path": "include_inactive", "code": "invalid", "message": "0 또는 1"}],
+        )
+    return json_response({"items": services.list_staff(include_inactive=value == "1")})
 
 
 @require_http_methods(["GET"])
@@ -410,3 +417,33 @@ def file_item(request, file_id):
     response = FileResponse(open(path, "rb"), content_type=mime, filename=name)
     response["Cache-Control"] = "private, no-store"
     return response
+
+
+# ------------------------------------------------------- P11 개선조치 확인 (p11-s2-spec 3장)
+
+
+@require_http_methods(["GET"])
+@_api
+def deviations_pending(request):
+    """DOC-A22 확인 대기 ?date=YYYY-MM-DD&mine=0|1&summary=0|1 (X-Staff-Id 선택 — B2)."""
+    with step("DOC-PND-00", "API", "현재 사용자(선택)"):
+        actor = optional_actor_from_header(request.headers.get("X-Staff-Id"))
+    return json_response(
+        services.pending_deviations(
+            actor, request.GET.get("date"), request.GET.get("mine"), request.GET.get("summary")
+        )
+    )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@_api
+def deviation_check(request, deviation_id):
+    """DOC-A23 개선조치 확인 {expected_version} (X-Staff-Id 필수)."""
+    with step("DOC-DVK-00", "API", "요청 형식·사용자 확인"):
+        body = parse_json_body(request)
+        reject_unknown_keys(body, ("expected_version",))
+        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+    return json_response(
+        services.check_deviation(actor, deviation_id, body.get("expected_version"))
+    )

@@ -424,17 +424,19 @@ class FileFlowTests(FileTestCase):
             func()
         finally:
             trace.stop(token)
-        return [s.step_id for s in record.steps]
+        # ROLE-CFG(역할 설정 읽기)는 서버 시작 뒤 한 번 — 테스트는 매번이라 뺀다
+        return [s.step_id for s in record.steps if not s.step_id.startswith("ROLE-CFG")]
 
     def test_method_flows(self):
         a, b = d01(88), d01(89)
+        wrt = ["DOC-WRT-01", "DOC-WRT-02"]  # P14 r13 ROLE-R07
         ids = self.ids(lambda: upload(a))
-        self.assertEqual(ids, [f"DOC-FUP-0{n}" for n in range(2, 7)])
+        self.assertEqual(ids, ["DOC-FUP-02", *wrt] + [f"DOC-FUP-0{n}" for n in range(3, 7)])
         file_id = File.objects.get().file_id
         ids = self.ids(lambda: files.link_file(3, b, version_of(b), file_id))
-        self.assertEqual(ids, [f"DOC-FLK-0{n}" for n in range(2, 6)])
+        self.assertEqual(ids, wrt + [f"DOC-FLK-0{n}" for n in range(2, 6)])
         ids = self.ids(lambda: files.detach_file(3, b, version_of(b), file_id))
-        self.assertEqual(ids, [f"DOC-FDT-0{n}" for n in range(2, 5)])
+        self.assertEqual(ids, wrt + [f"DOC-FDT-0{n}" for n in range(2, 5)])
         ids = self.ids(lambda: files.search_files({"type_code": "D01"}))
         self.assertEqual(ids, ["DOC-FSR-01", "DOC-FSR-02"])
 
@@ -444,7 +446,8 @@ class FileFlowTests(FileTestCase):
 
         self.assertEqual(
             self.ids(conflict),
-            ["DOC-FUP-02", "DOC-FUP-03", "DOC-FUP-04", "DOC-FUP-04a", "DOC-FUP-06a"],
+            ["DOC-FUP-02", "DOC-WRT-01", "DOC-WRT-02"]
+            + ["DOC-FUP-03", "DOC-FUP-04", "DOC-FUP-04a", "DOC-FUP-06a"],
         )
 
 
