@@ -100,6 +100,8 @@ const InventoryApiPage = {
       #invApiPage .inv-panel-head p { font-size:0.76rem;color:var(--text-muted);margin:0; }
       #invApiPage .inv-item-group td { background:var(--bg-elevated,#eef2f6);font-weight:700; }
       #invApiPage .inv-selected { background:var(--bg-elevated,#eef3ff);outline:2px solid var(--brand-primary);outline-offset:-2px; }
+      #invApiPage .tabs .tab-btn.active { background:var(--brand-primary,#007bff);color:#fff;box-shadow:var(--shadow-sm); }
+      #invApiPage .tabs .tab-btn:focus-visible { outline:2px solid var(--brand-primary,#007bff);outline-offset:2px; }
       .inv-item-link { border:0;background:none;color:var(--brand-primary);padding:0.25rem 0;font:inherit;text-align:left;cursor:pointer; }
       .inv-item-link:hover, .inv-item-link:focus-visible { text-decoration:underline; }
       .inventory-detail-modal .inv-summary { display:flex;flex-wrap:wrap;gap:1rem;padding:1rem;background:var(--bg-elevated);margin-bottom:1rem; }
@@ -112,7 +114,7 @@ const InventoryApiPage = {
       <div class="page-header">
         <div class="page-title-group">
           <h1 class="page-title">${cfg.title}</h1>
-          <p class="page-desc">수불 내역과 현재고를 조회합니다. 품목명을 누르면 재고 요약·전체 LOT·선택 기간 수불을 함께 확인합니다.</p>
+          <p class="page-desc">품목명을 누르면 재고 상세를, 입고 #번호를 누르면 입고 내역과 취소 기능을 볼 수 있습니다.</p>
         </div>
         <div class="page-actions">
           <button id="qaReceiptOpen" class="btn btn-primary" onclick="InventoryApiPage.openQaReceipt()">입고 등록</button>
@@ -121,7 +123,7 @@ const InventoryApiPage = {
         </div>
       </div>
       <div class="tabs" style="margin-bottom:0.75rem;">
-        ${[['ledger','수불 내역'],['stock','현재고']].map(([v,l]) => `<button data-inventory-tab="${v}" class="tab-btn ${this.state().tab === v ? 'active' : ''}" onclick="InventoryApiPage.set('tab','${v}')">${l}</button>`).join('')}
+        ${[['ledger','수불 내역'],['stock','현재고']].map(([v,l]) => `<button data-inventory-tab="${v}" aria-pressed="${this.state().tab === v}" class="tab-btn ${this.state().tab === v ? 'active' : ''}" onclick="InventoryApiPage.set('tab','${v}')">${l}</button>`).join('')}
       </div>
       <div class="card" style="padding:0.75rem;margin-bottom:0.75rem;">
         <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:flex-end;">${this.renderFilters()}</div>
