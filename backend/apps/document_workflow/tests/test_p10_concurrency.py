@@ -24,10 +24,7 @@ from apps.document_workflow.tests.base import (
 )
 from apps.documents import services as doc
 
-TWO = [
-    {"slot_no": 1, "label": "담당자", "approver_id": 2},
-    {"slot_no": 2, "label": "HACCP팀장", "approver_id": 1},
-]
+# P14: CCP_MONITORING = 담당자 {1, 3}(칸 1) → HACCP팀장 {1, 5}(칸 2)
 
 
 @unittest.skipUnless(
@@ -46,16 +43,16 @@ class P10CancelConcurrencyTests(TransactionTestCase):
         self.assertEqual(invariant_violations(), [])
 
     def last_slot_pending(self):
-        out = services.submit(3, new_document(self.t), 2, TWO)
+        out = services.submit(3, new_document(self.t), 2)
         ids = slot_ids(out["request"])
-        services.decide(2, ids[1], "approved")
+        services.decide(3, ids[1], "approved")
         return out["document"]["document_id"], out["request"]["request_id"], ids[2]
 
     def test_tc026a_approve_first(self):
         document_id, request_id, last = self.last_slot_pending()
         self.pause_after(apr, "decide")
         r = self.race(
-            lambda: services.decide(1, last, "approved"),
+            lambda: services.decide(5, last, "approved"),
             lambda: services.cancel_submission(3, request_id),
         )
         self.assertEqual(r["first"][0], "ok", r)
@@ -67,7 +64,7 @@ class P10CancelConcurrencyTests(TransactionTestCase):
         self.pause_after(apr, "cancel_request")
         r = self.race(
             lambda: services.cancel_submission(3, request_id),
-            lambda: services.decide(1, last, "approved"),
+            lambda: services.decide(5, last, "approved"),
         )
         self.assertEqual(r["first"][0], "ok", r)
         self.assertIsInstance(r["second"][1], apr_errors.RequestClosed)

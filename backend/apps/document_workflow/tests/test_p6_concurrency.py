@@ -17,7 +17,6 @@ from apps.document_workflow.tests.base import (
     new_document,
     setup_reference_data,
     slot_ids,
-    slots,
     sql,
     version_of,
 )
@@ -42,9 +41,9 @@ class P6ConcurrencyTests(TransactionTestCase):
 
     def approved_document(self):
         document_id = new_document(self.t)
-        request = services.submit(3, document_id, version_of(document_id), slots())["request"]
+        request = services.submit(3, document_id, version_of(document_id))["request"]
         ids = slot_ids(request)
-        for slot_no, actor in ((1, 3), (2, 2), (3, 1)):
+        for slot_no, actor in ((1, 3), (2, 5)):
             services.decide(actor, ids[slot_no], "approved")
         return document_id
 
@@ -62,7 +61,8 @@ class P6ConcurrencyTests(TransactionTestCase):
             return lambda: doc.start_correction(actor, document_id, version, f"staff {actor}")
 
         results = self.run_threads(
-            self.hold_after(start(3), "DOC-COR-03"), lambda _l, _r: start(2)()
+            self.hold_after(start(3), "DOC-COR-03"),
+            lambda _l, _r: start(5)(),  # P14: 5 = 팀장(R04)
         )
         self.assertEqual(results["first"][0], "ok", results)
         self.assertEqual(results["second"][0], "error")

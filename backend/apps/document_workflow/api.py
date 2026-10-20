@@ -19,7 +19,7 @@ from apps.staff.services import actor_from_header
 
 from . import services
 
-SUBMIT_KEYS = ("expected_version", "slots")
+SUBMIT_KEYS = ("expected_version",)  # P14: 결재선(slots)은 받지 않음 — 설정으로 자동
 DECISION_KEYS = ("result", "comment")
 
 
@@ -57,7 +57,6 @@ def submit(request, document_id):
         body = parse_json_body(request)
         reject_unknown_keys(body, SUBMIT_KEYS)
         _required(body, "expected_version")
-        _required(body, "slots")
         version = body["expected_version"]
         if isinstance(version, bool) or not isinstance(version, int) or version < 1:
             raise ApiError(
@@ -65,7 +64,7 @@ def submit(request, document_id):
                 [{"path": "expected_version", "code": "invalid", "message": "1 이상의 정수"}],
             )
     actor = _actor(request, "WF-SUB-02")
-    result = services.submit(actor, document_id, version, body["slots"])
+    result = services.submit(actor, document_id, version)
     return json_response(result, status=201)
 
 
@@ -85,7 +84,7 @@ def decision(request, approval_id):
 # ---------------------------------------------------------------- P7 일괄 (p7-s2-spec 3.1)
 
 BATCH_DECISION_KEYS = ("approval_ids", "comment")
-BATCH_SUBMIT_KEYS = ("items", "slots")
+BATCH_SUBMIT_KEYS = ("items",)  # P14: 결재선은 문서마다 설정으로
 
 
 @csrf_exempt
@@ -106,15 +105,14 @@ def batch_decision(request):
 @require_http_methods(["POST"])
 @_api
 def batch_submit(request):
-    """WF-A04 일괄 상신 {items: [{document_id, expected_version}], slots}."""
+    """WF-A04 일괄 상신 {items: [{document_id, expected_version}]} — 결재선은 문서마다 설정(P14)."""
     with step("WF-BSB-01", "API", "입력 형식 확인"):
         body = parse_json_body(request)
         reject_unknown_keys(body, BATCH_SUBMIT_KEYS)
         _required(body, "items")
-        _required(body, "slots")
         batch.version_items(body["items"], "items")
     actor = _actor(request, "WF-BSB-02")
-    return json_response(services.batch_submit(actor, body["items"], body["slots"]))
+    return json_response(services.batch_submit(actor, body["items"]))
 
 
 @require_http_methods(["GET"])

@@ -10,7 +10,7 @@ FLOWS = {
     "DOC-TPL-GET": ["DOC-TPL-02"],
     # P7: 02·03 UNION, 04 문서 줄 값, 05 묶음 집계, 06 묶음 전체 건수, 07 조립(p7-s2-flows 6장)
     "DOC-LST": [f"DOC-LST-0{n}" for n in range(1, 8)],
-    "DOC-GET": ["DOC-GET-01", "DOC-GET-02", "DOC-GET-03"],
+    "DOC-GET": [f"DOC-GET-0{n}" for n in range(1, 6)],
     "DOC-CRT": [f"DOC-CRT-0{n}" for n in range(1, 10)],
     "DOC-UPD": [
         "DOC-UPD-01",
@@ -34,7 +34,14 @@ FLOWS = {
     # P4 (dev-notes/document/p4-s2-flows.md)
     "DOC-CMP": ["DOC-CMP-01", "DOC-CMP-02", "DOC-CMP-03", "DOC-SIG-01", "DOC-CMP-04"],
     "DOC-ROP": ["DOC-ROP-01", "DOC-ROP-02", "DOC-SIG-01", "DOC-ROP-03"],
-    "DOC-DVC": ["DOC-DVC-00", "DOC-DVC-01", "DOC-DVC-02", "DOC-DVC-03", "DOC-DVC-04"],
+    "DOC-DVC": [
+        "DOC-DVC-00",
+        "DOC-DVC-01",
+        "DOC-DVC-01b",
+        "DOC-DVC-02",
+        "DOC-DVC-03",
+        "DOC-DVC-04",
+    ],
     "DOC-DVU": ["DOC-DVU-00", "DOC-DVU-01", "DOC-DVU-02", "DOC-DVU-03", "DOC-DVU-04"],
     "DOC-DVD": ["DOC-DVD-01", "DOC-DVD-02"],
     # 작성 요구(REQ) 전용 내부 함수: API 단계 없음. 01a(이미 있음/이미 연결됨)는 분기라 제외
@@ -42,7 +49,9 @@ FLOWS = {
     "DOC-ARR": [f"DOC-ARR-0{n}" for n in range(0, 7)],
     "DOC-FND": ["DOC-FND-01"],
     # P6 정정 (dev-notes/document-workflow/p6-s2-flows.md 2·2.1장)
-    "DOC-COR": [*[f"DOC-COR-0{n}" for n in range(1, 5)], "DOC-SIG-01", "DOC-COR-05"],
+    # P14: 01b 양식 유형 · 01c 설정 상태·권한(ROLE-R04)
+    "DOC-COR": ["DOC-COR-01", "DOC-COR-01b", "DOC-COR-01c"]
+    + [*[f"DOC-COR-0{n}" for n in range(2, 5)], "DOC-SIG-01", "DOC-COR-05"],
     "DOC-CCN": [*[f"DOC-CCN-0{n}" for n in range(1, 4)], "DOC-SIG-01", "DOC-CCN-04"],
     # P7 (dev-notes/document-workflow/p7-s2-flows.md 4·5장, 11장). DOC-BIN은 문서 1건일 때
     # (04~06이 문서마다 반복 — 콘솔 비교는 항목별 묶음, S5). 같은 값이면 05 → 05a(성공)
@@ -97,8 +106,8 @@ def matches(flow_id, step_ids):
     groups = {_group(s) for s in expected} - {"DOC-SIG"}
     own, inside_signal = [], False
     for step_id in step_ids:
-        if step_id.endswith("a"):
-            continue
+        if step_id.endswith("a") or step_id.startswith("ROLE-CFG"):
+            continue  # ROLE-CFG: 역할 설정 읽기(서버 시작 뒤 한 번 — 테스트는 매번)
         if step_id == "DOC-SIG-01":
             own.append(step_id)
             inside_signal = True

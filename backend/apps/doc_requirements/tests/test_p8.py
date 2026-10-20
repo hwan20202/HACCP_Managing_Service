@@ -10,7 +10,6 @@ from django.test.utils import CaptureQueriesContext
 from apps.doc_requirements import flows
 from apps.document_workflow import services as wf
 from apps.document_workflow.tests.base import invariant_violations
-from apps.document_workflow.tests.p7 import slots
 from apps.documents import services as doc
 from apps.documents.tests.p8 import FRI, MON, TUE, WED, captured, fill, periodic, setup_p8
 
@@ -33,7 +32,7 @@ class PeriodicBundleTests(TestCase):
         done = fill(made[MON]["document_id"], extra={"checks": {"d_proc_zone": "X"}})
         doc.create_deviation(3, done["document_id"], {"description": "구역 작업 겹침"})
         done = doc.complete_document(3, done["document_id"], done["version"])
-        wf.submit(3, done["document_id"], done["version"], slots())  # 1번 담당 staff 3
+        wf.submit(3, done["document_id"], done["version"])  # 1번 담당 staff 3
         doc.skip_documents(
             3, [{"document_id": made[WED]["document_id"], "expected_version": 1}], "휴무"
         )
@@ -57,7 +56,7 @@ class PeriodicBundleTests(TestCase):
         self.assertEqual(mon["check_counts"], {"O": 13, "X": 1, "NA": 7, "blank": 0})
         self.assertTrue(mon["nonconforming"])  # 검토 A5: 점검표도 계산(X 있음)
         self.assertEqual(mon["progress"]["status"], "in_progress")
-        self.assertIsNotNone(mon["my_slot"])  # staff 3 = 1번 칸
+        self.assertTrue(mon["my_slots"])  # staff 3 = 1번 칸 후보
         self.assertEqual(days[1]["document"]["check_counts"]["blank"], 13)
         self.assertEqual([w["work_date"] for w in body["weekend"]], ["2026-10-17"])
         self.assertEqual(
@@ -69,10 +68,14 @@ class PeriodicBundleTests(TestCase):
                 "my_pending": 1,
             },
         )
-        self.assertEqual([s["approver_id"] for s in body["default_slots"]], [3, 1])
-        # 다른 사람에게는 내 칸 없음
-        other = self.get(staff=2).json()
-        self.assertIsNone(other["days"][0]["document"]["my_slot"])
+        # P14: 묶음 결재선 요약 — D10 담당자 칸 이름 "작성자"(DR-09)
+        self.assertEqual(
+            [(s["role"], s["label"], s["candidate_ids"]) for s in body["approval_line"]["slots"]],
+            [("owner", "작성자", [2, 3]), ("leader", "HACCP팀장", [1, 5])],
+        )
+        # 다른 사람(역할 없음)에게는 내 칸 없음
+        other = self.get(staff=4).json()
+        self.assertEqual(other["days"][0]["document"]["my_slots"], [])
 
     def test_empty_week(self):
         body = self.get(week_start="2026-10-19").json()

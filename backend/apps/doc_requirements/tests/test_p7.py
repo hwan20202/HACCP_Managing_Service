@@ -14,6 +14,7 @@ from apps.doc_requirements import flows, sources
 from apps.doc_requirements import services as req
 from apps.document_workflow.tests.base import invariant_violations
 from apps.document_workflow.tests.p7 import d03, fill, new_lot, setup_p7
+from apps.staff import roles
 
 DAY = "2026-10-20"
 
@@ -56,8 +57,8 @@ class IncomingBundleTests(TestCase):
         )
         sub = by_lot[made["submitted"]["lot_id"]]["document"]
         self.assertEqual(
-            sub["my_slot"],
-            {"approval_id": made["submitted"]["slots"][2], "slot_no": 2, "label": "HACCP팀장"},
+            sub["my_slots"],
+            [{"approval_id": made["submitted"]["slots"][2], "slot_no": 2, "label": "HACCP팀장"}],
         )
         self.assertEqual(
             {k: sub["progress"][k] for k in ("attempt", "status", "total", "approved", "pending")},
@@ -71,8 +72,12 @@ class IncomingBundleTests(TestCase):
         self.assertEqual(done["approved"]["attempt"], 1)
         draft = by_lot[made["draft"]["lot_id"]]["document"]
         self.assertEqual(
-            (draft["progress"], draft["my_slot"], draft["approved"]), (None, None, None)
+            (draft["progress"], draft["my_slots"], draft["approved"]), (None, [], None)
         )
+        # ROLE-TC-33: 묶음 문서별 상신 가능 여부(팀장 staff 1 기준)
+        self.assertEqual((draft["can_submit"], draft["submit_block"]), (False, "status"))
+        completed = by_lot[made["completed"]["lot_id"]]["document"]
+        self.assertEqual((completed["can_submit"], completed["submit_block"]), (True, None))
         self.assertEqual(draft["inspector_id"], 4)
         self.assertEqual(
             body["summary"],
@@ -83,7 +88,11 @@ class IncomingBundleTests(TestCase):
                 "my_pending": 1,
             },
         )
-        self.assertEqual([s["approver_id"] for s in body["default_slots"]], [3, 1])
+        # P14: 묶음 결재선 요약(일괄 상신 모달) — 예전 default_slots(최근 결재선) 대신
+        self.assertEqual(
+            [(s["role"], s["candidate_ids"]) for s in body["approval_line"]["slots"]],
+            [("owner", [2, 3]), ("leader", [1, 5])],
+        )
 
     def test_tc091_empty_day(self):
         body = self.get("2026-01-02").json()
@@ -98,7 +107,7 @@ class IncomingBundleTests(TestCase):
                     "correcting_count": 0,
                     "my_pending": 0,
                 },
-                "default_slots": [],
+                "approval_line": roles.approval_line("D03"),
             },
         )
 
@@ -115,7 +124,7 @@ class IncomingBundleTests(TestCase):
     def test_tc094_my_slot_done(self):
         m = d03("submitted_partial", day=DAY)
         lot = req.incoming_bundle(3, DAY)["lots"][0]
-        self.assertIsNone(lot["document"]["my_slot"])  # staff 3 칸은 이미 승인
+        self.assertEqual(lot["document"]["my_slots"], [])  # staff 3 칸은 이미 승인
         self.assertEqual(
             (lot["document"]["progress"]["approved"], lot["document"]["progress"]["total"]), (1, 2)
         )

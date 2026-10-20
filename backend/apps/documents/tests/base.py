@@ -23,7 +23,6 @@ def ccp_payload(template, **overrides):
         "template_id": template.template_id,
         "subject": "CCP-2B/라인A",
         "work_date": "2026-10-09",
-        "assignee_id": 2,
         "due_at": None,
         "sections": [
             {"section_def": "info", "values": {"product": "유자차", "lot": "LOT-1234"}},

@@ -7,7 +7,7 @@ from django.test import TestCase
 
 from apps.document_workflow import services as wf
 from apps.document_workflow.tests.base import invariant_violations
-from apps.document_workflow.tests.p7 import slots, sql, status_of, version_of
+from apps.document_workflow.tests.p7 import sql, status_of, version_of
 from apps.documents import services as doc
 from apps.documents.tests.p8 import MON, TUE, WED, fill, periodic, setup_p8
 
@@ -36,10 +36,10 @@ class P8WorkflowTests(TestCase):
         made = periodic("D10", TUE)
         doc.skip_documents(3, [{"document_id": made["document_id"], "expected_version": 1}], "휴무")
         items = [{"document_id": made["document_id"], "expected_version": 2}]
-        body = wf.batch_submit(3, items, slots())
+        body = wf.batch_submit(3, items)
         self.assertEqual(body["results"][0]["error"]["code"], "DOCUMENT_LOCKED")
         with self.assertRaises(Exception) as ctx:
-            wf.submit(3, made["document_id"], 2, slots())
+            wf.submit(3, made["document_id"], 2)
         self.assertEqual(getattr(ctx.exception, "code", None), "DOCUMENT_LOCKED")
         self.assertEqual(status_of(made["document_id"]), ("skipped", 2))
 
@@ -49,7 +49,7 @@ class P8WorkflowTests(TestCase):
             {"document_id": m["document_id"], "expected_version": version_of(m["document_id"])}
             for m in made
         ]
-        submitted = wf.batch_submit(3, items, slots())
+        submitted = wf.batch_submit(3, items)
         self.assertEqual(submitted["succeeded"], 3, submitted)
         first, second = ([slot_of(m["document_id"], n) for m in made] for n in (1, 2))
         self.assertEqual(wf.batch_approve(3, first)["succeeded"], 3)
@@ -59,4 +59,4 @@ class P8WorkflowTests(TestCase):
     def test_d11_batch_submit(self):
         made = completed(MON, "D11")
         items = [{"document_id": made["document_id"], "expected_version": made["version"]}]
-        self.assertEqual(wf.batch_submit(3, items, slots())["succeeded"], 1)
+        self.assertEqual(wf.batch_submit(3, items)["succeeded"], 1)

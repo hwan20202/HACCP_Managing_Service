@@ -18,7 +18,7 @@ from apps.approvals import services as apr_services
 from apps.core import trace
 from apps.document_workflow import services as wf
 from apps.document_workflow.tests.base import invariant_violations
-from apps.document_workflow.tests.p7 import d03, setup_p7, slots, sql, status_of, version_of
+from apps.document_workflow.tests.p7 import d03, setup_p7, sql, status_of, version_of
 from apps.documents import errors
 from apps.documents import services as doc
 from apps.documents.signals import document_transitioned
@@ -110,7 +110,7 @@ class P7ConcurrencyTests(TransactionTestCase):
                 items = [{"document_id": m["document_id"], "expected_version": version}]
 
                 def batch_submit():
-                    return wf.batch_submit(3, items, slots())
+                    return wf.batch_submit(3, items)
 
                 def reopen():
                     return doc.reopen_document(3, m["document_id"], version)
@@ -178,7 +178,7 @@ class P7ConcurrencyTests(TransactionTestCase):
             for m in completed
         ]
         started = time.perf_counter()
-        submitted = wf.batch_submit(3, items, slots())
+        submitted = wf.batch_submit(3, items)
         submit_ms = (time.perf_counter() - started) * 1000
         self.assertEqual((approved["succeeded"], submitted["succeeded"]), (50, 50))
         sys.stderr.write(

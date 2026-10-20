@@ -4,12 +4,28 @@
 - decide의 첫 쓰기는 슬롯 조건부 UPDATE다.
   동시 처리 시 직렬화되고 "마지막 승인"은 한 요청만 판정한다.
 - 이 모듈은 apps.documents, apps.document_workflow를 import하지 않는다.
+- P14(ERD v7.2): 칸은 직접 지정 칸(approver_id, P14 이전)과 역할 칸(role + 후보) 두 가지.
+  이 모듈은 역할 설정(apps.staff.roles)을 모른다 — WF가 만든 칸·후보를 받아 저장하고
+  판단한다(ROLE-NFR-02).
 """
 
 import datetime
 
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Exists, Max, OuterRef, Q, Subquery
+from django.db.models import (
+    BigIntegerField,
+    BooleanField,
+    Case,
+    Count,
+    Exists,
+    F,
+    Max,
+    OuterRef,
+    Q,
+    Subquery,
+    Value,
+    When,
+)
 from django.db.models.fields.json import KeyTextTransform, KeyTransform
 from django.utils import timezone
 
@@ -18,14 +34,15 @@ from apps.core.trace import step
 from apps.staff import services as staff_services
 
 from . import errors
-from .models import Approval, ApprovalRequest
+from .models import SLOT_ROLES, Approval, ApprovalCandidate, ApprovalRequest
 
 MAX_SLOTS = 10
 LABEL_MAX = 20
 COMMENT_MAX = 500
 PAGE_SIZE = 20
 MAX_RANGE_DAYS = 366
-SLOT_KEYS = {"slot_no", "approver_id", "label"}
+SLOT_KEYS = {"slot_no", "approver_id", "label"}  # 직접 지정 칸
+ROLE_SLOT_KEYS = {"slot_no", "label", "role", "candidate_ids"}  # 역할 칸(P14)
 REF_KEYS = ("document_id", "version", "template_id", "subject", "work_date")
 
 
@@ -54,21 +71,34 @@ def _require_transaction():
 
 
 def _check_slot_format(slots):
-    """형식 검사(DB 조회 없음). 반환: (정리된 슬롯, 오류 목록)."""
+    """형식 검사(DB 조회 없음). 반환: (정리된 슬롯, 오류 목록).
+
+    칸은 직접 지정 칸 {slot_no, label?, approver_id} 또는 역할 칸 {slot_no, label?, role,
+    candidate_ids}(P14). 한 결재선에 두 종류를 섞을 수 없다.
+    """
     problems, cleaned = [], []
     if not isinstance(slots, list) or not slots:
         return [], [_error("slots", "required", "결재 칸을 1개 이상 지정하세요.")]
     if len(slots) > MAX_SLOTS:
         problems.append(_error("slots", "max", f"결재 칸은 최대 {MAX_SLOTS}개입니다."))
+    kinds = {
+        "role" if isinstance(slot, dict) and "role" in slot else "direct"
+        for slot in slots
+        if isinstance(slot, dict)
+    }
+    if len(kinds) > 1:
+        problems.append(_error("slots", "mixed", "직접 지정 칸과 역할 칸을 섞을 수 없습니다."))
     seen_no, seen_approver = set(), set()
     for i, slot in enumerate(slots):
         path = f"slots[{i}]"
         if not isinstance(slot, dict):
             problems.append(_error(path, "invalid", "결재 칸은 객체여야 합니다."))
             continue
-        for key in sorted(set(slot) - SLOT_KEYS):
+        is_role = "role" in slot
+        allowed = ROLE_SLOT_KEYS if is_role else SLOT_KEYS
+        for key in sorted(set(slot) - allowed):
             problems.append(_error(f"{path}.{key}", "unknown_key", "허용되지 않은 키입니다."))
-        slot_no, approver, label = slot.get("slot_no"), slot.get("approver_id"), slot.get("label")
+        slot_no, label = slot.get("slot_no"), slot.get("label")
         if not _is_int(slot_no) or slot_no < 1:
             problems.append(_error(f"{path}.slot_no", "invalid", "칸 번호는 1 이상의 정수입니다."))
         elif slot_no in seen_no:
@@ -77,16 +107,41 @@ def _check_slot_format(slots):
             )
         else:
             seen_no.add(slot_no)
-        if not _is_int(approver):
-            problems.append(_error(f"{path}.approver_id", "invalid", "결재자는 staff id입니다."))
-        elif approver in seen_approver:
-            problems.append(
-                _error(
-                    f"{path}.approver_id", "duplicate", "같은 사람을 두 칸에 배정할 수 없습니다."
+        approver, role, candidates = None, None, None
+        if is_role:
+            role, candidates = slot.get("role"), slot.get("candidate_ids")
+            if role not in SLOT_ROLES:
+                problems.append(_error(f"{path}.role", "invalid", "역할은 owner·leader입니다."))
+            if (
+                not isinstance(candidates, list)
+                or not candidates
+                or not all(_is_int(c) for c in candidates)
+                or len(set(candidates)) != len(candidates)
+            ):
+                problems.append(
+                    _error(
+                        f"{path}.candidate_ids",
+                        "invalid",
+                        "후보는 staff id 목록(1명 이상, 중복 없음)입니다.",
+                    )
                 )
-            )
+                candidates = []
         else:
-            seen_approver.add(approver)
+            approver = slot.get("approver_id")
+            if not _is_int(approver):
+                problems.append(
+                    _error(f"{path}.approver_id", "invalid", "결재자는 staff id입니다.")
+                )
+            elif approver in seen_approver:
+                problems.append(
+                    _error(
+                        f"{path}.approver_id",
+                        "duplicate",
+                        "같은 사람을 두 칸에 배정할 수 없습니다.",
+                    )
+                )
+            else:
+                seen_approver.add(approver)
         if label is not None and not isinstance(label, str):
             problems.append(_error(f"{path}.label", "invalid", "역할 이름은 문자열입니다."))
             label = None
@@ -95,12 +150,23 @@ def _check_slot_format(slots):
             problems.append(
                 _error(f"{path}.label", "max_length", f"역할 이름은 {LABEL_MAX}자 이하입니다.")
             )
-        cleaned.append({"slot_no": slot_no, "approver_id": approver, "label": label, "_path": path})
+        cleaned.append(
+            {
+                "slot_no": slot_no,
+                "approver_id": approver,
+                "label": label,
+                "role": role,
+                "candidate_ids": sorted(candidates) if candidates else [],
+                "_path": path,
+            }
+        )
     return cleaned, problems
 
 
 def _check_slot_staff(cleaned, problems):
-    existing = staff_services.existing_ids(s["approver_id"] for s in cleaned)
+    wanted = [s["approver_id"] for s in cleaned]
+    wanted += [c for s in cleaned for c in s["candidate_ids"]]
+    existing = staff_services.existing_ids(wanted)
     for slot in cleaned:
         if _is_int(slot["approver_id"]) and slot["approver_id"] not in existing:
             problems.append(
@@ -108,16 +174,32 @@ def _check_slot_staff(cleaned, problems):
                     f"{slot['_path']}.approver_id", "unknown_staff", "등록되지 않은 사용자입니다."
                 )
             )
+        missing = [c for c in slot["candidate_ids"] if c not in existing]
+        if missing:
+            problems.append(
+                _error(
+                    f"{slot['_path']}.candidate_ids",
+                    "unknown_staff",
+                    f"등록되지 않았거나 비활성인 사용자: {missing}",
+                )
+            )
 
 
 def _finish_slots(cleaned):
+    keys = {True: ("slot_no", "label", "role", "candidate_ids"), False: tuple(SLOT_KEYS)}
     return [
-        {k: v for k, v in s.items() if k != "_path"}
+        {k: s[k] for k in sorted(keys[s["role"] is not None])}
         for s in sorted(cleaned, key=lambda s: s["slot_no"])
     ]
 
 
 def validate_slots(slots):
+    """직접 지정 칸 결재선 형식·직원 검사(APR-VAL).
+
+    P14부터 WF는 부르지 않는다(결재선은 역할 설정으로 자동 — p14-s2-spec 3.3). 옛 직접 지정 칸
+    형식 규칙의 테스트용으로 남긴다. 정리는 병합 뒤(S4 리뷰 A4). ``open_request``는 같은 검사를
+    안쪽 함수로 직접 한다.
+    """
     with step("APR-VAL-01", "APR", "슬롯 형식 검사") as s:
         cleaned, problems = _check_slot_format(slots)
         if problems:
@@ -134,11 +216,29 @@ def validate_slots(slots):
 # ---------------------------------------------------------------- 직렬화
 
 
-def _slot_dict(slot):
+def _candidates_of(slots):
+    """칸 id → 후보 staff id 목록(역할 칸만, id 순). SQL 1(역할 칸이 없으면 없음)."""
+    ids = [s.approval_id for s in slots if s.role]
+    result = {}
+    if ids:
+        for approval_id, staff_id in (
+            ApprovalCandidate.objects.filter(approval_id__in=ids)
+            .order_by("approval_id", "staff_id")
+            .values_list("approval_id", "staff_id")
+        ):
+            result.setdefault(approval_id, []).append(staff_id)
+    return result
+
+
+def _slot_dict(slot, candidates=None):
     return {
         "approval_id": slot.approval_id,
         "slot_no": slot.slot_no,
         "label": slot.label,
+        "role": slot.role,
+        "candidate_ids": (candidates or {}).get(slot.approval_id, [])
+        if slot.role
+        else [slot.approver_id],
         "approver_id": slot.approver_id,
         "state": slot.state,
         "comment": slot.comment,
@@ -175,7 +275,7 @@ def _correction_values(req, next_approved):
     }
 
 
-def _request_dict(req, slots, *, with_snapshot, next_approved=None):
+def _request_dict(req, slots, *, with_snapshot, next_approved=None, candidates=None, actor_id=None):
     data = {
         "request_id": req.request_id,
         "document_id": req.document_id,
@@ -188,7 +288,11 @@ def _request_dict(req, slots, *, with_snapshot, next_approved=None):
         "requested_by": req.requested_by_id,
         "requested_at": _iso(req.requested_at),
         "closed_at": _iso(req.closed_at),
-        "slots": [_slot_dict(s) for s in sorted(slots, key=lambda s: s.slot_no)],
+        "slots": [_slot_dict(s, candidates) for s in sorted(slots, key=lambda s: s.slot_no)],
+        # P14: 상신자 본인 취소 가능 여부(팀장 예외는 WF·화면이 역할로 — p14-s2-spec 3.3)
+        "can_cancel": actor_id is not None
+        and req.status == "in_progress"
+        and req.requested_by_id == actor_id,
         **_correction_values(req, next_approved),
     }
     if with_snapshot:
@@ -280,31 +384,68 @@ def open_request(document_ref, snapshot, requested_by, slots):
                 request=req,
                 slot_no=s["slot_no"],
                 label=s["label"],
-                approver_id=s["approver_id"],
+                role=s.get("role"),
+                approver_id=s.get("approver_id"),  # 역할 칸은 None(처리 때 채움 — ERD v7.2 M16)
                 state="pending",
             )
             for s in slots
         )
-    with step("APR-OPN-05", "APR", "결과"):
         if any(slot.approval_id is None for slot in created):
-            created = list(req.slots.all())
-        return _request_dict(req, created, with_snapshot=False)
+            created = list(req.slots.order_by("slot_no"))
+    with step("APR-OPN-04b", "APR", "후보 저장(역할 칸)") as st:
+        by_no = {slot.slot_no: slot.approval_id for slot in created}
+        rows = [
+            ApprovalCandidate(approval_id=by_no[s["slot_no"]], staff_id=c)
+            for s in slots
+            if s.get("role")
+            for c in s["candidate_ids"]
+        ]
+        if rows:
+            ApprovalCandidate.objects.bulk_create(rows)
+            st.note(f"후보 {len(rows)}행")
+        else:
+            st.skip("직접 지정 칸")
+    with step("APR-OPN-05", "APR", "결과"):
+        candidates = {}
+        for s in slots:
+            if s.get("role"):
+                candidates[by_no[s["slot_no"]]] = list(s["candidate_ids"])
+        return _request_dict(req, created, with_snapshot=False, candidates=candidates)
 
 
 # ---------------------------------------------------------------- F03 슬롯 처리
 
 
+def _eligible(actor_id):
+    """처리 자격(P14 흐름 3.4): 직접 지정 칸은 지정 결재자, 역할 칸은 후보."""
+    mine = ApprovalCandidate.objects.filter(approval_id=OuterRef("pk"), staff_id=actor_id)
+    return Q(role__isnull=True, approver_id=actor_id) | (Q(role__isnull=False) & Q(Exists(mine)))
+
+
+def _eligible_flag(actor_id):
+    return Case(
+        When(_eligible(actor_id), then=Value(True)),
+        default=Value(False),
+        output_field=BooleanField(),
+    )
+
+
 def _decide_failure(approval_id, actor_id):
-    """조건부 UPDATE가 0행일 때 이유: 없음 → 결재자 불일치 → 요청 종료 → 이미 처리."""
+    """조건부 UPDATE가 0행일 때 이유: 없음 → 처리 자격 없음 → 요청 종료 → 이미 처리.
+
+    P14: 자격은 칸 종류별(직접 지정 = 결재자, 역할 = 후보)로 먼저 본다 — 역할 칸은 대기 중
+    결재자가 비어 있어, 결재자 비교를 먼저 하면 후보인데 회차가 끝난 경우에도 403이 됐다.
+    """
     with step("APR-DEC-02a", "APR", "처리 실패 사유 확인"):
         row = (
             Approval.objects.filter(pk=approval_id)
-            .values("approver_id", "state", "request__status")
+            .annotate(eligible=_eligible_flag(actor_id))
+            .values("eligible", "state", "request__status")
             .first()
         )
         if row is None:
             raise errors.ApprovalNotFound()
-        if row["approver_id"] != actor_id:
+        if not row["eligible"]:
             raise errors.NotYourSlot()
         if row["request__status"] != "in_progress":
             raise errors.RequestClosed()
@@ -342,12 +483,21 @@ def decide(approval_id, actor_id, result, comment=None):
         comment = check_decision_input(result, comment)
     now = timezone.now()
     with step("APR-DEC-02", "APR", "내 슬롯 처리(조건부 UPDATE)") as s:
-        changed = Approval.objects.filter(
-            pk=approval_id,
-            approver_id=actor_id,
-            state="pending",
-            request__status="in_progress",
-        ).update(state=result, comment=comment, decided_at=now)
+        changed = (
+            Approval.objects.filter(pk=approval_id, state="pending", request__status="in_progress")
+            .filter(_eligible(actor_id))
+            .update(
+                state=result,
+                comment=comment,
+                decided_at=now,
+                # 역할 칸은 처리한 사람이 결재자(서명) — 직접 지정 칸은 그대로
+                approver_id=Case(
+                    When(role__isnull=False, then=Value(actor_id)),
+                    default=F("approver_id"),
+                    output_field=BigIntegerField(),
+                ),
+            )
+        )
         s.note(f"영향 행 {changed}")
     if changed == 0:
         _decide_failure(approval_id, actor_id)
@@ -391,34 +541,36 @@ def decide(approval_id, actor_id, result, comment=None):
 # ---------------------------------------------------------------- A7 상신 취소 (P10)
 
 
-def _cancel_failure(request_id, actor_id):
+def _cancel_failure(request_id, actor_id, allow_any=False):
     """조건부 UPDATE가 0행일 때 이유: 없음 → 상신자 아님 → 진행 중 아님(p10-s2-spec 3.1)."""
     with step("APR-CAN-01a", "APR", "취소 실패 사유 확인"):
         row = ApprovalRequest.objects.filter(pk=request_id).values("requested_by_id", "status")
         row = row.first()
         if row is None:
             raise errors.RequestNotFound()
-        if row["requested_by_id"] != actor_id:
+        if row["requested_by_id"] != actor_id and not allow_any:
             raise errors.NotRequester()
         raise errors.RequestClosed()
 
 
-def cancel_request(request_id, actor_id):
+def cancel_request(request_id, actor_id, *, allow_any=False):
     """A7: 진행 중 회차를 상신자가 취소한다(P6-S2-Q7 a — 받은 승인·반려 칸은 그대로,
     대기 칸만 skipped). WF 트랜잭션 안에서만 호출한다. 첫 쓰기 = 회차 조건부 UPDATE(D-067).
 
     반환: 회차(스냅샷 없음). 결재 완료 신호는 없다(회차가 승인으로 끝나지 않음).
+    P14: allow_any = WF가 HACCP팀장이라고 확인함(상신자가 아니어도 취소 — ROLE-R02).
     """
     with step("APR-CAN-00", "APR", "트랜잭션 확인"):
         _require_transaction()
     now = timezone.now()
     with step("APR-CAN-01", "APR", "회차 취소(조건부 UPDATE)") as s:
-        changed = ApprovalRequest.objects.filter(
-            pk=request_id, status="in_progress", requested_by_id=actor_id
-        ).update(status="cancelled", closed_at=now)
+        target = ApprovalRequest.objects.filter(pk=request_id, status="in_progress")
+        if not allow_any:
+            target = target.filter(requested_by_id=actor_id)
+        changed = target.update(status="cancelled", closed_at=now)
         s.note(f"영향 행 {changed}")
     if changed == 0:
-        _cancel_failure(request_id, actor_id)
+        _cancel_failure(request_id, actor_id, allow_any)
     with step("APR-CAN-02", "APR", "대기 칸 건너뜀") as s:
         skipped = Approval.objects.filter(request_id=request_id, state="pending").update(
             state="skipped", decided_at=now
@@ -431,19 +583,20 @@ def cancel_request(request_id, actor_id):
             .get(pk=request_id)
         )
         slots = list(Approval.objects.filter(request_id=request_id).order_by("slot_no"))
-        return _request_dict(req, slots, with_snapshot=False)
+        return _request_dict(req, slots, with_snapshot=False, candidates=_candidates_of(slots))
 
 
 # ---------------------------------------------------------------- F04·F05 조회
 
 
-def get_request(request_id):
+def get_request(request_id, actor_id=None):
     with step("APR-GET-01", "APR", "요청 조회"):
         req = ApprovalRequest.objects.filter(pk=request_id).first()
         if req is None:
             raise errors.RequestNotFound()
-    with step("APR-GET-02", "APR", "슬롯 조회"):
+    with step("APR-GET-02", "APR", "슬롯·후보 조회"):
         slots = list(Approval.objects.filter(request_id=request_id).order_by("slot_no"))
+        candidates = _candidates_of(slots)
     with step("APR-GET-03", "APR", "다음 승인 회차(대체됨 계산)") as s:
         next_approved = None
         if req.status == "approved":
@@ -458,10 +611,17 @@ def get_request(request_id):
         else:
             s.skip("승인 회차 아님")
     with step("APR-GET-04", "APR", "조립"):
-        return _request_dict(req, slots, with_snapshot=True, next_approved=next_approved)
+        return _request_dict(
+            req,
+            slots,
+            with_snapshot=True,
+            next_approved=next_approved,
+            candidates=candidates,
+            actor_id=actor_id,
+        )
 
 
-def list_requests(document_id):
+def list_requests(document_id, actor_id=None):
     with step("APR-HIS-01", "APR", "회차 조회"):
         reqs = list(
             ApprovalRequest.objects.filter(document_id=document_id)
@@ -476,6 +636,7 @@ def list_requests(document_id):
                 request_id__in=[r.request_id for r in reqs]
             ).order_by("request_id", "slot_no"):
                 by_request.setdefault(slot.request_id, []).append(slot)
+        candidates = _candidates_of([s for group in by_request.values() for s in group])
     with step("APR-HIS-03", "APR", "조립·대체됨 계산"):
         # 승인 회차를 attempt 오름차순으로 — 각 승인 회차의 "바로 다음 승인 회차"
         approved = sorted((r.attempt, r.closed_at) for r in reqs if r.status == "approved")
@@ -488,6 +649,8 @@ def list_requests(document_id):
                     by_request.get(r.request_id, []),
                     with_snapshot=False,
                     next_approved=following.get(r.attempt),
+                    candidates=candidates,
+                    actor_id=actor_id,
                 )
                 for r in reqs
             ],
@@ -540,12 +703,14 @@ def list_inbox(actor_id, box="pending", filters=None, page=1):
         if problems:
             raise errors.InvalidFilter(details=problems)
 
-    queryset = Approval.objects.filter(approver_id=actor_id)
     if box == "pending":
-        queryset = queryset.filter(state="pending", request__status="in_progress")
+        # P14: 직접 지정 칸 결재자 = 나, 또는 역할 칸 후보 = 나(처리 전)
+        queryset = Approval.objects.filter(
+            _eligible(actor_id), state="pending", request__status="in_progress"
+        )
         order = ("request__requested_at", "approval_id")
     else:
-        queryset = queryset.filter(state__in=("approved", "rejected"))
+        queryset = Approval.objects.filter(approver_id=actor_id, state__in=("approved", "rejected"))
         order = ("-decided_at", "-approval_id")
     if date_from:
         queryset = queryset.filter(request__work_date__gte=date_from)
@@ -598,6 +763,7 @@ def list_inbox(actor_id, box="pending", filters=None, page=1):
                     "approval_id": slot.approval_id,
                     "slot_no": slot.slot_no,
                     "label": slot.label,
+                    "role": slot.role,
                     "state": slot.state,
                     "decided_at": _iso(slot.decided_at),
                     "request_status": req.status,  # P10: 처리 완료 줄 "취소됨"
@@ -687,14 +853,16 @@ def slot_refs(approval_ids):
 
 
 def document_progress(document_ids, actor_id):
-    """A10: 문서마다 가장 큰 attempt 회차의 진행·내 대기 칸, 가장 최근 상신 회차의 결재선(SQL 2).
+    """A10: 문서마다 가장 큰 attempt 회차의 진행·내 대기 칸(SQL 1).
 
-    반환 {"documents": {id: {request_id, attempt, status, total, approved, pending, my_slot}},
-    "latest_slots": [{slot_no, label, approver_id}]}. my_slot은 회차가 진행 중일 때만(검토 B-9).
+    반환 {"documents": {id: {request_id, attempt, status, total, approved, pending, my_slots}}}.
+    my_slots는 회차가 진행 중일 때 내가 처리할 수 있는 대기 칸 목록(칸 번호 순) — P14: 직접 지정 칸
+    결재자 = 나 또는 역할 칸 후보 = 나. 담당자이면서 팀장이면 2개일 수 있다(DR-05).
+    P14에서 latest_slots(일괄 상신 결재선 기본값, D-109)는 없앴다 — 결재선은 설정으로 자동.
     회차가 없는 문서는 빠진다. 빈 목록이면 SQL 없음.
     """
     ids = _ids(document_ids)
-    result = {"documents": {}, "latest_slots": []}
+    result = {"documents": {}}
     if not ids:
         return result
     with step("APR-PRG-01", "APR", "문서별 최신 회차·내 칸"):
@@ -703,23 +871,26 @@ def document_progress(document_ids, actor_id):
             .order_by("-attempt")
             .values("attempt")[:1]
         )
-        rows = (
-            Approval.objects.filter(request__document_id__in=ids, request__attempt=Subquery(newest))
-            .order_by("request__document_id", "slot_no")
-            .values_list(
-                "request__document_id",
-                "request_id",
-                "request__attempt",
-                "request__status",
-                "approval_id",
-                "slot_no",
-                "label",
-                "approver_id",
-                "state",
-            )
-        )
+        mine = _eligible_flag(actor_id) if actor_id else None
+        rows = Approval.objects.filter(
+            request__document_id__in=ids, request__attempt=Subquery(newest)
+        ).order_by("request__document_id", "slot_no")
+        if mine is not None:
+            rows = rows.annotate(mine=mine)
+        fields = [
+            "request__document_id",
+            "request_id",
+            "request__attempt",
+            "request__status",
+            "approval_id",
+            "slot_no",
+            "label",
+            "state",
+        ] + (["mine"] if mine is not None else [])
         documents = result["documents"]
-        for doc_id, req_id, attempt, status, approval_id, slot_no, label, approver, state in rows:
+        for row in rows.values_list(*fields):
+            doc_id, req_id, attempt, status, approval_id, slot_no, label, state = row[:8]
+            eligible = bool(row[8]) if mine is not None else False
             item = documents.setdefault(
                 doc_id,
                 {
@@ -729,28 +900,14 @@ def document_progress(document_ids, actor_id):
                     "total": 0,
                     "approved": 0,
                     "pending": 0,
-                    "my_slot": None,
+                    "my_slots": [],
                 },
             )
             item["total"] += 1
             item["approved"] += state == "approved"
             item["pending"] += state == "pending"
-            mine = approver == actor_id and state == "pending" and status == "in_progress"
-            if mine and item["my_slot"] is None:
-                item["my_slot"] = {"approval_id": approval_id, "slot_no": slot_no, "label": label}
-    with step("APR-PRG-02", "APR", "가장 최근 상신 회차의 결재선") as s:
-        if not result["documents"]:
-            s.skip("회차 없음")
-            return result
-        latest = (
-            ApprovalRequest.objects.filter(document_id__in=ids)
-            .order_by("-requested_at", "-request_id")
-            .values("request_id")[:1]
-        )
-        result["latest_slots"] = [
-            {"slot_no": slot_no, "label": label, "approver_id": approver}
-            for slot_no, label, approver in Approval.objects.filter(request_id=Subquery(latest))
-            .order_by("slot_no")
-            .values_list("slot_no", "label", "approver_id")
-        ]
+            if eligible and state == "pending" and status == "in_progress":
+                item["my_slots"].append(
+                    {"approval_id": approval_id, "slot_no": slot_no, "label": label}
+                )
     return result

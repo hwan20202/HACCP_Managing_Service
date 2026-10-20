@@ -13,7 +13,6 @@ from apps.document_workflow.tests.base import (
     new_document,
     setup_reference_data,
     slot_ids,
-    slots,
     version_of,
 )
 from apps.documents import flows as doc_flows
@@ -44,9 +43,9 @@ class P6ApiTestCase(TestCase):
 
     def approved_document(self):
         document_id = new_document(self.t)
-        request = services.submit(3, document_id, version_of(document_id), slots())["request"]
+        request = services.submit(3, document_id, version_of(document_id))["request"]
         ids = slot_ids(request)
-        for slot_no, actor in ((1, 3), (2, 2), (3, 1)):
+        for slot_no, actor in ((1, 3), (2, 5)):
             services.decide(actor, ids[slot_no], "approved")
         return document_id
 
@@ -155,7 +154,7 @@ class CorrectionReadApiTests(P6ApiTestCase):
         self.assertTrue(listed[0]["correcting"])
         self.assertError(self.client.get("/api/v1/documents?correcting=1"), 400, "INVALID_FILTER")
         complete_again(document_id)
-        services.submit(3, document_id, version_of(document_id), slots())
+        services.submit(3, document_id, version_of(document_id))
         history = self.client.get(f"/api/v1/documents/{document_id}/approval-requests").json()
         keys = {"effective", "superseded_by", "superseded_at", "is_correction", "correction_reason"}
         self.assertTrue(keys <= set(history["items"][0]))

@@ -22,3 +22,56 @@ def check_batch_types(app_configs, **kwargs):
             id="document_workflow.W001",
         )
     ]
+
+
+@register(Tags.compatibility)
+def check_roles(app_configs, **kwargs):
+    """P14 역할 설정 점검(S2a 1.4): 형식 오류 R-E1은 Error, 나머지는 Warning.
+
+    staff·양식 표를 읽는다 — 표가 없거나(마이그레이션 전) 직원이 없으면 형식 검사만 한다(L-22).
+    """
+    import json
+
+    from django.core.checks import Error
+    from django.db import connection
+    from django.db.utils import DatabaseError
+
+    from apps.staff import roles
+
+    try:
+        data = json.loads(roles.config_path().read_text(encoding="utf-8"))
+        problems = roles._format_problems(data)
+    except (OSError, UnicodeDecodeError, ValueError) as error:
+        problems = [f"설정 파일을 읽지 못했습니다: {error}"]
+    if problems:
+        return [
+            Error(
+                "역할 설정 파일(HACCP_ROLES_FILE) 형식 오류 — 모든 상신이 막힙니다: "
+                + " / ".join(problems),
+                id="document_workflow.E002",
+            )
+        ]
+    try:
+        tables = set(connection.introspection.table_names())
+    except DatabaseError:
+        return []
+    if not {"staff", "document_template"} <= tables:
+        return []
+    from apps.documents import services as doc
+    from apps.staff import services as staff_services
+
+    try:
+        if not staff_services.active_people():
+            return []  # 직원 등록 전(새 설치·테스트 DB) — 모든 코드가 R-W1이 되는 소음 방지
+        roles.reset()
+        summary = doc.roles_summary()
+    except DatabaseError:
+        return []
+    return [
+        Warning(
+            f"역할 설정 {item['code']}: {item['message']}",
+            hint="역할 보기 화면에서 확인하세요. 설정 파일을 고친 뒤 서버를 다시 시작합니다.",
+            id="document_workflow.W002",
+        )
+        for item in summary["warnings"]
+    ]

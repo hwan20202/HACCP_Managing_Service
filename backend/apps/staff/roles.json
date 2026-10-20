@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "haccp_leaders": ["DEV-001", "DEV-005"],
+  "forms": {
+    "D01": {"owners": ["DEV-002", "DEV-003"], "slots": "owner"},
+    "D02": {"owners": ["DEV-002", "DEV-003"], "slots": "owner"},
+    "D03": {"owners": ["DEV-002", "DEV-003"], "slots": "owner_leader"},
+    "CCP-1P": {"owners": ["DEV-001", "DEV-003"], "slots": "owner_leader"},
+    "CCP-2B": {"owners": ["DEV-001", "DEV-003"], "slots": "owner_leader"},
+    "CCP-3P": {"owners": ["DEV-001", "DEV-003"], "slots": "owner_leader"},
+    "D10": {"owners": ["DEV-002", "DEV-003"], "slots": "owner_leader", "labels": {"owner": "작성자"}},
+    "D11": {"owners": ["DEV-002", "DEV-003"], "slots": "owner_leader"},
+    "D12": {"owners": ["DEV-002", "DEV-003"], "slots": "owner_leader"},
+    "CCP_MONITORING": {"owners": ["DEV-001", "DEV-003"], "slots": "owner_leader"},
+    "HYGIENE_CHECK": {"owners": ["DEV-002", "DEV-003"], "slots": "owner"}
+  }
+}

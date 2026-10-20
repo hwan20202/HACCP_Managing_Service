@@ -251,6 +251,8 @@
 
   // ---------------------------------------------------------------- ③ 처리 로직
   function compareFlow(flowId, steps) {
+    // ROLE-CFG는 설정을 처음 읽을 때만 나오는 내부 단계다. 서버 흐름 비교와 같은 기준으로 뺀다.
+    steps = steps.filter((s) => !s.step_id.startsWith('ROLE-CFG'));
     const expected = state.flows[flowId] || [];
     // P5 REQ 흐름은 안에 DOC·APR 단계를 품고 반복(#n 번호·공정)이 있다(s2-flows 9장, D-070 G3):
     // 이 흐름의 단계만 골라 연속 반복을 하나로 줄여 비교하고, 안쪽 단계는 칩 대신 개수로만 보인다.
@@ -320,7 +322,22 @@
   // 입력 검사에서 멈추면(400) 항목·꼬리 없이 머리만.
   const compare = (flowId, steps, record) => (state.batch[flowId] ? compareBatch(flowId, steps, record) : compareFlow(flowId, steps));
   function compareBatch(flowId, steps, record) {
+    steps = steps.filter((s) => !s.step_id.startsWith('ROLE-CFG'));
     const spec = state.batch[flowId];
+    // P14 WF-BSB: 머리의 문서마다 권한·결재선 단계(head_skip)는 문서 수만큼 반복된다 — 머리 끝 단계 앞에서
+    // 두 번째부터 뺀다(document_workflow/flows.py matches_batch와 같은 규칙)
+    if (spec.head_skip && spec.head_skip.length) {
+      const cut = steps.findIndex((s) => s.step_id === spec.head[spec.head.length - 1]);
+      if (cut >= 0) {
+        const seen = new Set();
+        steps = steps.filter((s, i) => {
+          if (i >= cut || !spec.head_skip.includes(s.step_id)) return true;
+          if (seen.has(s.step_id)) return false;
+          seen.add(s.step_id);
+          return true;
+        });
+      }
+    }
     const kinds = Object.entries(spec.items);
     const start = kinds[0][1][0];
     const ids = steps.map((s) => s.step_id);
@@ -423,7 +440,7 @@
     lots: 'id', production_batches: 'id', incoming_receipts: 'id',  // 수불 테이블(C2)
   };
   // 복합 PK 테이블 (ERD v5 A12)
-  const keyOf = (name, row) => (name === 'deviation_checker' ? `${row.deviation_id}-${row.staff_id}` : row[PK[name]]);
+  const keyOf = (name, row) => (name === 'deviation_checker' ? `${row.deviation_id}-${row.staff_id}` : name === 'approval_candidate' ? `${row.approval_id}-${row.staff_id}` : row[PK[name]]);  // P14 approval_candidate
 
   function cellDiff(a, b) {
     if (a && b && typeof a === 'object' && typeof b === 'object') {
@@ -518,7 +535,7 @@
     $('#dcDbTitle').innerHTML = `document_id = ${esc(docId)} ${after && after.deleted ? '<span class="dc-deleted-flag">· 논리 삭제됨 (업무 API는 404)</span>' : ''} ${!before || !before.exists ? '<span class="te-hint">· 실행 전 없음</span>' : ''}`;
     $('#dcDbBody').innerHTML = docTables(b, a, onlyChanged);
   }
-  const docTables = (b, a, onlyChanged) => ['document', 'doc_section', 'document_ref', 'deviation_action', 'deviation_checker', 'approval_request', 'approval', 'document_correction', 'lots', 'document_template', 'staff']
+  const docTables = (b, a, onlyChanged) => ['document', 'doc_section', 'document_ref', 'deviation_action', 'deviation_checker', 'approval_request', 'approval', 'approval_candidate', 'document_correction', 'lots', 'document_template', 'staff']
     .filter((t) => t in a || t in b).map((t) => diffTable(t, b[t], a[t], onlyChanged)).join('');
 
   function scopeTables(before, after, onlyChanged) {
@@ -646,7 +663,7 @@
   }
   function ccpBody(tid, rounds) {
     return {
-      template_id: tid, subject: 'CCP-2B/라인A(콘솔)', work_date: new Date().toISOString().slice(0, 10), assignee_id: 2,
+      template_id: tid, subject: 'CCP-2B/라인A(콘솔)', work_date: new Date().toISOString().slice(0, 10),
       sections: [
         { section_def: 'info', values: { product: '유자차', lot: 'LOT-CONSOLE' } },
         ...rounds.map((r) => ({ section_def: 'rounds', values: { round: r, temp: 87.0, hold_sec: 16, measured_by: 3 } })),
@@ -737,7 +754,11 @@
     return r.ok ? r.json() : null;
   }
   const SEED_HINT = 'seed_dev_workflow로 시드 데이터를 넣으세요';
-  const SLOTS3 = [{ slot_no: 1, label: '담당', approver_id: 3 }, { slot_no: 2, label: '검토', approver_id: 2 }, { slot_no: 3, label: '승인', approver_id: 1 }];
+  // P14: 결재선은 역할 설정(backend/apps/staff/roles.json)으로 자동 — 상신 본문에 slots 없음(보내면 400 unknown_key).
+  // 개발 역할: 3 = 모든 양식 담당자, 1 = CCP 담당자 + HACCP팀장(겸직), 5 = HACCP팀장, 2 = D·위생 양식 담당자, 4 = 역할 없음.
+  // 역할 칸은 대기 중 결재자가 비어 있으므로 처리할 사람 = 후보(candidate_ids) 중 1명.
+  const OWNER = '3';
+  const actorOf = (slot) => (slot.approver_id != null ? slot.approver_id : (slot.candidate_ids || [])[0]);
   async function freshDraft(pred = () => true) {
     const d = await findDoc('draft', (x) => !x.submitted_at && !x.record_key && !(x.subject || '').includes('PS-05') && pred(x));
     if (!d) throw new Error(`상신 이력 없는 draft 문서가 없습니다. ${SEED_HINT}.`);
@@ -761,81 +782,80 @@
   const decideSpec = (item, staff, body, docId) => ({ func: 'decide', id: String(item.approval_id), staff: String(staff), docId: String(docId), body: J(body) });
 
   PRESETS.push(
-    { id: 'WF-PS-01', label: '상신 정상 (작성완료 → 상신)', expect: '작성완료 200 → 상신 201 · WF-SUB 도식 일치(VAL→[LCK→GET→OPN]) · document completed→submitted·version+1, approval_request +1(1회차), approval +3(pending)',
+    { id: 'WF-PS-01', label: '상신 정상 (작성완료 → 상신)', expect: '작성완료 200 → 상신(staff 3 = 담당자) 201 · WF-SUB 도식 일치(02b 양식 유형 → 03 권한 → 03b 결재선 → [LCK→GET→OPN·04b]) · document completed→submitted·version+1, approval_request +1(1회차), approval +2(역할 칸 owner·leader, approver_id NULL, pending), approval_candidate +4',
       prepare: async () => {
         const d = await freshDraft();
-        const submit = { func: 'submit', id: d.document_id, body: J({ expected_version: d.version + 1, slots: SLOTS3 }) };
-        return { ...submit, script: async (exec) => { await exec(completeSpec(d)); await exec({ ...submit, staff: api.staffId }); } };
+        const submit = { func: 'submit', id: d.document_id, body: J({ expected_version: d.version + 1 }) };
+        return { ...submit, staff: OWNER, script: async (exec) => { await exec(completeSpec(d)); await exec({ ...submit, staff: OWNER }); } };
       } },
-    { id: 'WF-PS-02', label: '잘못된 결재선(같은 결재자 2칸)', expect: '작성완료 200 → 상신 400 INVALID_SLOTS · WF-SUB-03(APR-VAL)에서 실패, 트랜잭션 단계(WF-SUB-04) 없음 · 상신 변화 없음(문서는 작성완료로 남음)',
+    { id: 'WF-PS-02', label: '역할 없는 사람의 상신(P14)', expect: '작성완료 200 → 상신(staff 4 = 역할 없음) 403 ROLE_REQUIRED · WF-SUB-03(설정 상태·권한)에서 실패, 트랜잭션 단계(WF-SUB-04) 없음 · 상신 변화 없음(문서는 작성완료로 남음)',
       prepare: async () => {
         const d = await freshDraft();
-        const submit = { func: 'submit', id: d.document_id, body: J({ expected_version: d.version + 1, slots: [{ slot_no: 1, approver_id: 2 }, { slot_no: 2, approver_id: 2 }] }) };
-        return { ...submit, script: async (exec) => { await exec(completeSpec(d)); await exec({ ...submit, staff: api.staffId }); } };
+        const submit = { func: 'submit', id: d.document_id, body: J({ expected_version: d.version + 1 }) };
+        return { ...submit, staff: '4', script: async (exec) => { await exec(completeSpec(d)); await exec({ ...submit, staff: '4' }); } };
       } },
     { id: 'WF-PS-03', label: '오래된 버전으로 상신', expect: '작성완료 200(version+1) → 작성완료 전 버전으로 상신 409 VERSION_CONFLICT · DOC-LCK-01 영향 0행 → 01a · WF-SUB-04 롤백 · 상신 변화 없음',
       prepare: async () => {
         const d = await freshDraft();
-        const submit = J({ expected_version: d.version, slots: SLOTS3 });
+        const submit = J({ expected_version: d.version });
         return { func: 'submit', id: d.document_id, body: submit,
           script: async (exec) => {
             await exec({ ...completeSpec(d), staff: '4' });
-            await exec({ func: 'submit', id: d.document_id, body: submit, staff: api.staffId });
+            await exec({ func: 'submit', id: d.document_id, body: submit, staff: OWNER });
           } };
       } },
     { id: 'WF-PS-04', label: '결재 중 문서 상신', expect: '409 DOCUMENT_LOCKED · DOC-LCK-01 영향 0행 → 01a · WF-SUB-04 롤백 · DB 변화 없음',
-      prepare: async () => { const d = need(await findDoc('submitted'), 'submitted'); return { func: 'submit', id: d.document_id, body: J({ expected_version: d.version, slots: SLOTS3 }) }; } },
+      prepare: async () => { const d = need(await findDoc('submitted'), 'submitted'); return { func: 'submit', staff: OWNER, id: d.document_id, body: J({ expected_version: d.version }) }; } },
     { id: 'WF-PS-05', label: '회차 생성 실패 → 잠금까지 롤백', expect: '409 OPEN_REQUEST_EXISTS · DOC-LCK-01 통과(잠금) → APR-OPN-02 실패 → WF-SUB-04 롤백 · document status·version 그대로(잠금도 되돌려짐)',
       prepare: async () => {
         const d = need(await findDoc('completed', (x) => (x.subject || '').includes('PS-05')), '시드의 어긋난 데이터(PS-05)');
-        return { func: 'submit', id: d.document_id, body: J({ expected_version: d.version, slots: SLOTS3 }) };
+        return { func: 'submit', staff: OWNER, id: d.document_id, body: J({ expected_version: d.version }) };
       } },
     { id: 'WF-PS-06', label: '중간 승인', expect: '200 · WF-DEC-PROGRESS(WF-DEC-05 건너뜀) · approval 1행 pending→approved · document 변화 없음, 응답 document null',
-      prepare: async () => { const it = await pendingItem(2, (x) => x.request.progress.pending >= 2); return decideSpec(it, 2, { result: 'approved' }, it.request.document_id); } },
+      prepare: async () => { const it = await pendingItem(3, (x) => x.slot_no === 1 && x.request.progress.pending >= 2); return decideSpec(it, 3, { result: 'approved' }, it.request.document_id); } },
     { id: 'WF-PS-07', label: '마지막 승인 = 결재 완료', expect: '대기 칸을 차례로 승인, 마지막 호출 200 · WF-DEC-APPROVED(DOC-APV) · 회차 approved·closed_at, document submitted→approved·version+1',
       prepare: async () => {
         const it = await pendingItem(1, (x) => x.request.progress.pending >= 1);
         const req = await quietGet(`approval-requests/${it.request.request_id}`);
         const pending = req.slots.filter((s) => s.state === 'pending');
         const last = pending[pending.length - 1];
-        return { ...decideSpec(last, last.approver_id, { result: 'approved' }, req.document_id),
+        return { ...decideSpec(last, actorOf(last), { result: 'approved' }, req.document_id),
           script: async (exec) => {
             for (const slot of pending) {
-              await exec(decideSpec(slot, slot.approver_id, { result: 'approved', comment: '콘솔 승인' }, req.document_id));
+              await exec(decideSpec(slot, actorOf(slot), { result: 'approved', comment: '콘솔 승인' }, req.document_id));
             }
           } };
       } },
     { id: 'WF-PS-08', label: '반려', expect: '200 · WF-DEC-REJECTED(DOC-RJT) · approval →rejected(사유), 남은 pending →skipped, 회차 rejected, document submitted→rejected·version+1',
-      prepare: async () => { const it = await pendingItem(2); return decideSpec(it, 2, { result: 'rejected', comment: '온도 기록 누락(콘솔)' }, it.request.document_id); } },
+      prepare: async () => { const it = await pendingItem(5); return decideSpec(it, 5, { result: 'rejected', comment: '온도 기록 누락(콘솔)' }, it.request.document_id); } },
     { id: 'WF-PS-09', label: '반려 사유 없음', expect: '400 COMMENT_REQUIRED · APR-DEC-01 실패 → WF-DEC-03 롤백 · DB 변화 없음',
-      prepare: async () => { const it = await pendingItem(2); return decideSpec(it, 2, { result: 'rejected' }, it.request.document_id); } },
+      prepare: async () => { const it = await pendingItem(5); return decideSpec(it, 5, { result: 'rejected' }, it.request.document_id); } },
     { id: 'WF-PS-10', label: '남의 칸 처리', expect: '403 NOT_YOUR_SLOT · APR-DEC-02 영향 0행 → 02a · WF-DEC-03 롤백 · DB 변화 없음',
-      prepare: async () => { const it = await pendingItem(2); return decideSpec(it, 4, { result: 'approved' }, it.request.document_id); } },
+      prepare: async () => { const it = await pendingItem(5); return decideSpec(it, 4, { result: 'approved' }, it.request.document_id); } },
     { id: 'WF-PS-11', label: '종료된 회차의 칸 처리', expect: '409 REQUEST_CLOSED · 반려로 끝난 회차의 미처리 종료(skipped) 칸 · APR-DEC-02 영향 0행 → 02a · DB 변화 없음',
       prepare: async () => {
         const d = need(await findDoc('rejected'), 'rejected');
         const req = await latestRequest(d.document_id);
         const slot = req && req.slots.find((s) => s.state === 'skipped');
         if (!slot) throw new Error(`반려 회차에 미처리 종료 칸이 없습니다. ${SEED_HINT}.`);
-        return decideSpec(slot, slot.approver_id, { result: 'approved' }, d.document_id);
+        return decideSpec(slot, actorOf(slot), { result: 'approved' }, d.document_id);  // 후보인데 회차 끝남 → 409
       } },
     { id: 'WF-PS-12', label: '재상신(수정 → 작성완료 → 상신)', expect: 'PATCH 200 → 작성완료 200 → 상신 201 · DOC-LCK가 completed 통과 · approval_request +1(n+1회차), 이전 회차 행·스냅샷 그대로 · document rejected→completed→submitted',
       prepare: async () => {
         // C3 S6(ISS-032): 파일 필수 양식(D01·D02)의 반려 문서는 파일을 끊었으면 작성완료가 files_required로 막힌다 → 빼고 고름
         const d = need(await findDoc('rejected', (x) => !['D01', 'D02'].includes(x.template && x.template.type_code)), 'rejected');
-        const req = await latestRequest(d.document_id);
-        const slots = req ? req.slots.map((s) => ({ slot_no: s.slot_no, label: s.label || undefined, approver_id: s.approver_id })) : SLOTS3;
-        return { func: 'submit', id: d.document_id, body: J({ expected_version: d.version + 2, slots }),
+        // P14: 재상신 결재선은 그때 설정으로 새로(직전 회차 결재선을 쓰지 않음)
+        return { func: 'submit', staff: OWNER, id: d.document_id, body: J({ expected_version: d.version + 2 }),
           script: async (exec) => {
             const first = await exec({ func: 'update', id: d.document_id, body: J({ expected_version: d.version, document: { subject: `${d.subject || ''} (반려 후 수정)` } }), staff: api.staffId });
             const version = first.record.ok ? first.record.data.version : d.version;
             const done = await exec({ func: 'complete', id: d.document_id, body: J({ expected_version: version }), staff: api.staffId });
             const ready = done.record.ok ? done.record.data.version : version;
-            await exec({ func: 'submit', id: d.document_id, body: J({ expected_version: ready, slots }), staff: api.staffId });
+            await exec({ func: 'submit', id: d.document_id, body: J({ expected_version: ready }), staff: OWNER });
           } };
       } },
     { id: 'WF-PS-13', label: '결재함 조회', expect: '200 · APR-INB 도식 일치 · SQL 3개(건수·목록·진행률) · DB 변화 없음(조회)',
-      prepare: async () => ({ func: 'inbox', staff: '2', query: 'box=pending&page=1' }) },
+      prepare: async () => ({ func: 'inbox', staff: '1', query: 'box=pending&page=1' }) },  // 1 = 겸직(회차마다 칸 2줄)
   );
 
   // ---------------------------------------------------------------- 프리셋 DOC-PS-16~27 (document/p4-s1-screens.md 6장, P4·P6a)
@@ -1007,7 +1027,7 @@
 
   // ---------------------------------------------------------------- 프리셋 WF-PS-14~22 · EFF-PS-01~05 · REQ-PS-11 (document-workflow/p6-s1-screens.md 6장, P6a 6장)
   // 사전 조건은 시드에 기대지 않고 프리셋을 불러올 때 새 LOT·D03을 만든다(ISS-019, POST /api/dev/fixtures/d03).
-  // 그래서 같은 프리셋을 여러 번 실행할 수 있다. 결재선은 2칸(staff 3·1).
+  // 그래서 같은 프리셋을 여러 번 실행할 수 있다. 결재선은 역할 설정(D03 = 담당자 {2, 3} → HACCP팀장 {1, 5}).
   // 불러오기 때 만든 준비 데이터(설명란에 표시 — P6 S5 검토 A4)
   let prepared = [];
   const fixture = async (body) => {
@@ -1015,7 +1035,6 @@
     prepared.push(made);
     return made;
   };
-  const FIX_SLOTS = [{ slot_no: 1, label: '담당', approver_id: 3 }, { slot_no: 2, label: 'HACCP팀장', approver_id: 1 }];
   const FIX_REASON = '판정 오기 정정(콘솔)';
   const p6 = (preset) => ({ unit: 'P6', ...preset });
   async function fixtureDoc(body) {
@@ -1028,7 +1047,7 @@
     const pending = req ? req.slots.filter((x) => x.state === 'pending') : [];
     for (let i = 0; i < pending.length; i += 1) {
       const result = i === pending.length - 1 ? last : { result: 'approved' };
-      await exec(decideSpec(pending[i], pending[i].approver_id, result, documentId));
+      await exec(decideSpec(pending[i], actorOf(pending[i]), result, documentId));
     }
   }
 
@@ -1044,7 +1063,7 @@
     p6({ id: 'WF-PS-18', label: '정정 재상신 → 승인', expect: '상신 201 → 승인 200 ×2(마지막 WF-DEC-APPROVED, DOC-APV + SIG-01) · approval_request +1(2회차, 정정 상신), document approved, 정정 기록 closed·approved · 회차 이력(F: APR 문서별 회차)에서 1회차 superseded_by 2',
       prepare: async () => {
         const { d } = await fixtureDoc({ state: 'correction_completed', edited: true });
-        const sub = { func: 'submit', id: String(d.document_id), body: J({ expected_version: d.version, slots: FIX_SLOTS }) };
+        const sub = { func: 'submit', id: String(d.document_id), body: J({ expected_version: d.version }) };
         return { ...sub, script: async (exec) => {
           const first = await exec({ ...sub, staff: '3' });
           if (!first.record.ok) return;
@@ -1057,7 +1076,7 @@
         const { d } = await fixtureDoc({ state: 'correction_submitted', edited: true });
         const req = await latestRequest(d.document_id);
         const slot = req.slots.find((x) => x.state === 'pending');
-        return decideSpec(slot, slot.approver_id, { result: 'rejected', comment: '정정 내용 확인 필요(콘솔)' }, d.document_id);
+        return decideSpec(slot, actorOf(slot), { result: 'rejected', comment: '정정 내용 확인 필요(콘솔)' }, d.document_id);
       } }),
     p6({ id: 'WF-PS-20', label: '유효 승인본 조회(A8)', expect: '200 · REQ-FND(안쪽 APR-LAT-01 = A8) · 정정 중 D03(판정 FAIL로 고침)이어도 승인본 기준 판정 PASS, 정정 중 열에 사유 · DB 변화 없음',
       prepare: async () => { const { made } = await fixtureDoc({ state: 'correcting', change_to: 'FAIL' }); return { func: 'lotDocs', id: String(made.lot_id) }; } }),
@@ -1138,9 +1157,11 @@
     if (out.length < n) throw new Error('빈 날짜를 찾지 못했습니다.');
     return out;
   }
-  async function slotOf(documentId, approver) {
+  // P14: 처리할 수 있는 대기 칸 = 후보(candidate_ids). 겸직자(1)는 칸이 둘이라 역할로 고름(기본: 3 = 담당자 칸, 그 밖 = 팀장 칸)
+  async function slotOf(documentId, approver, role = approver === 3 ? 'owner' : 'leader') {
     const req = await latestRequest(documentId);
-    const slot = req && req.slots.find((x) => x.approver_id === approver && x.state === 'pending');
+    const mine = req ? req.slots.filter((x) => x.state === 'pending' && (x.candidate_ids || []).includes(approver)) : [];
+    const slot = mine.find((x) => !x.role || x.role === role) || mine[0];
     if (!slot) throw new Error(`문서 #${documentId}에 staff ${approver}의 대기 칸이 없습니다.`);
     return slot.approval_id;
   }
@@ -1171,14 +1192,14 @@
         const ok = await fixtures({ state: 'submitted', count: 2 });
         const closed = await one({ state: 'rejected' });
         const req = await latestRequest(closed.document_id);
-        const mine = req.slots.find((x) => x.approver_id === 3);
+        const mine = req.slots.find((x) => x.approver_id === 3 || (x.candidate_ids || []).includes(3));
         const slots = [...await Promise.all(ok.map((m) => slotOf(m.document_id, 3))), mine.approval_id];
         return { func: 'batchApprove', staff: '3', docId: ids([...ok, closed]), body: J({ approval_ids: slots }) };
       } }),
     p7({ id: 'WF-PS-25', label: '대상 양식 아님(승인)', expect: '400 INVALID_REQUEST(details not_batchable, path approval_ids[1]) · ③ 입력 검사(WF-BAP-04)에서 중단, 항목 처리 없음 · ④ 변화 없음',
       prepare: async () => {
         const d03 = await one({ state: 'submitted' });
-        const other = await pendingItem(2, (x) => x.request.template_id !== undefined);
+        const other = await pendingItem(5, (x) => x.request.template_id !== undefined);
         const t = await quietGet(`templates/${other.request.template_id}`);
         if (t && t.type_code === 'D03') throw new Error('D03이 아닌 결재 대기 칸을 찾지 못했습니다(seed_dev_workflow).');
         return { func: 'batchApprove', staff: '3', docId: `${d03.document_id},${other.request.document_id}`, body: J({ approval_ids: [await slotOf(d03.document_id, 3), other.approval_id] }) };
@@ -1188,12 +1209,12 @@
         const d03 = await one({ state: 'completed' });
         const other = need(await findDoc('draft', (d) => d.template.type_code !== 'D03'), 'D03이 아닌 draft');
         return { func: 'batchSubmit', staff: '3', docId: `${d03.document_id},${other.document_id}`,
-          body: J({ items: [...items([d03]), { document_id: other.document_id, expected_version: other.version }], slots: FIX_SLOTS }) };
+          body: J({ items: [...items([d03]), { document_id: other.document_id, expected_version: other.version }] }) };
       } }),
     p7({ id: 'WF-PS-31', label: '일괄 상신 버전 충돌', expect: '[호출 1·2] 작성 재개·작성완료 200(문서 B 버전 +2) → [호출 3] 일괄 상신 200 · succeeded 1 · failed 1(VERSION_CONFLICT, 문서 B) · ④ 문서 A만 submitted + approval_request +1',
       prepare: async () => {
         const [a, b] = await fixtures({ state: 'completed', count: 2 });
-        const submit = { func: 'batchSubmit', docId: ids([a, b]), body: J({ items: items([a, b]), slots: FIX_SLOTS }) };
+        const submit = { func: 'batchSubmit', staff: OWNER, docId: ids([a, b]), body: J({ items: items([a, b]) }) };
         return { ...submit, script: async (exec) => {
           const re = await exec({ func: 'reopen', id: String(b.document_id), body: J({ expected_version: b.version }), staff: '3' });
           if (!re.record.ok) return;
@@ -1218,13 +1239,13 @@
     p7({ id: 'WF-PS-27', label: '일괄 상신 정상', expect: '200 · succeeded 2 · ③ WF-BSB 도식 일치(머리 12 → 항목 2: submitted → 꼬리) · ④ 문서마다 completed→submitted, approval_request +1(각 1회차, subject = LOT … · 품명 · 매입처 — ISS-018), approval +2',
       prepare: async () => {
         const list = await fixtures({ state: 'completed', count: 2 });
-        return { func: 'batchSubmit', staff: '3', docId: ids(list), body: J({ items: items(list), slots: FIX_SLOTS }) };
+        return { func: 'batchSubmit', staff: '3', docId: ids(list), body: J({ items: items(list) }) };
       } }),
     p7({ id: 'WF-PS-28', label: '일괄 상신 일부 실패', expect: '200 · succeeded 1 · failed 1(DOCUMENT_LOCKED, details code draft — 화면 문구 "작성완료 상태가 아닙니다") · ④ 작성완료 문서만 submitted, 작성중 문서 변화 없음',
       prepare: async () => {
         const ok = await one({ state: 'completed' });
         const draft = await one({ state: 'draft' });
-        return { func: 'batchSubmit', staff: '3', docId: ids([ok, draft]), body: J({ items: items([ok, draft]), slots: FIX_SLOTS }) };
+        return { func: 'batchSubmit', staff: '3', docId: ids([ok, draft]), body: J({ items: items([ok, draft]) }) };
       } }),
     p7({ id: 'DOC-PS-28', label: '점검자 일괄 지정', expect: '200 · succeeded 2(changed) · failed 1(DOCUMENT_LOCKED, details code completed) · ③ DOC-BIN 도식 일치(머리 3 → 항목 3: changed 2 · 실패 1 → 꼬리) · ④ 작성중 2건 doc_section info.inspector → 5·version+1, 작성완료 1건 변화 없음',
       prepare: async () => {
@@ -1249,7 +1270,7 @@
     p7({ id: 'WF-PS-29', label: '결재 대상 요약(ISS-018)', expect: '201 · WF-SUB 도식 일치 · 응답 request.subject = "LOT AYJ… · 유자 · 콘솔준비농협"(상세 target_summary) · ④ approval_request.subject 같은 값',
       prepare: async () => {
         const m = await one({ state: 'completed' });
-        return { func: 'submit', staff: '3', id: String(m.document_id), body: J({ expected_version: m.version, slots: FIX_SLOTS }) };
+        return { func: 'submit', staff: '3', id: String(m.document_id), body: J({ expected_version: m.version }) };
       } }),
   );
 
@@ -1362,7 +1383,7 @@
     p8({ id: 'P8-PS-10', label: 'D10 일괄 상신(같은 주 3일)', expect: '200 · succeeded 3 · ③ WF-BSB 도식 일치(항목 3: submitted) · ④ 문서마다 completed→submitted, approval_request +1, approval +2(일괄 대상 D10 — HACCP_BATCH_TYPES 기본)',
       prepare: async () => {
         const w = await periodicWeek({ type_code: 'D10', days: [{ weekday: 1, state: 'completed' }, { weekday: 2, state: 'completed' }, { weekday: 3, state: 'completed' }] });
-        return { func: 'batchSubmit', staff: '3', docId: ids(w.items), body: J({ items: items(w.items), slots: FIX_SLOTS }) };
+        return { func: 'batchSubmit', staff: '3', docId: ids(w.items), body: J({ items: items(w.items) }) };
       } }),
   );
 
@@ -1512,7 +1533,7 @@
         return { ...cancel,
           script: async (exec) => {
             await exec(cancel);
-            await exec({ func: 'submit', staff: '3', id: String(d.document_id), body: J({ expected_version: d.version + 1, slots: FIX_SLOTS }) });
+            await exec({ func: 'submit', staff: '3', id: String(d.document_id), body: J({ expected_version: d.version + 1 }) });
           } };
       } }),
   );
@@ -1583,7 +1604,7 @@
   async function init() {
     const staff = await quietGet('staff');
     $('#dcStaff').innerHTML = '<option value="">(헤더 없음)</option>' + (staff ? staff.items : [])
-      .map((id) => `<option value="${id}" ${String(id) === api.staffId ? 'selected' : ''}>staff ${id}</option>`).join('') + '<option value="999">999 (없는 staff)</option>';
+      .map((p) => { const id = typeof p === 'object' ? p.id : p; const name = typeof p === 'object' ? `${p.name}(${p.staff_code})` : ''; return `<option value="${id}" ${String(id) === api.staffId ? 'selected' : ''}>staff ${id} ${esc(name)}</option>`; }).join('') + '<option value="999">999 (없는 staff)</option>';
     $('#dcStaff').value = api.staffId || '';
     $('#dcStaff').addEventListener('change', (e) => api.setStaff(e.target.value));
     $('#dcFunc').innerHTML = Object.entries(FUNCS).map(([k, f]) => `<option value="${k}">${esc(f.label)}</option>`).join('');

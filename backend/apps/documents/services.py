@@ -19,6 +19,7 @@ from django.utils import timezone
 from apps.core import batch
 from apps.core.http import ApiError
 from apps.core.trace import step
+from apps.staff import roles
 from apps.staff import services as staff_services
 
 from . import errors, signals, validation
@@ -50,7 +51,8 @@ REF_TARGETS = ("lot_id", "production_batch_id", "item_id", "process_code")
 DEVIATION_MAX_CHECKERS = 10
 PAGE_SIZE = 20
 MAX_RANGE_DAYS = 366
-EDITABLE_FIELDS = ("subject", "work_date", "assignee_id", "due_at")
+# P14(Q3 a): 문서 머리 담당자(assignee_id)는 더 받지 않는다 — 담당자는 양식에 있음(DR-03)
+EDITABLE_FIELDS = ("subject", "work_date", "due_at")
 # P7(p7-s2-spec 3.2, Q9): DOC가 양식 코드를 직접 아는 첫 예외 — 스키마 표시로 옮기는 일은 ISS-020
 # P8(p8-s2-spec 4.1, Q5 a): 목록 묶음 단위 — day = 작업일마다 1줄, week = 그 주 월요일마다 1줄
 BUNDLE_UNITS = {"D03": "day", "D10": "week", "D12": "week"}
@@ -406,8 +408,18 @@ def _detail(document_id):
 
 
 def list_staff():
+    """활성 직원 [{id, staff_code, name}](P14 ROLE-A02 — 예전에는 id 목록, DR-07)."""
     with step("DOC-STF-01", "DOC", "staff 목록"):
-        return staff_services.active_ids()
+        return staff_services.active_people()
+
+
+@roles.scope()
+def roles_summary(actor_id=None):
+    """P14 ROLE-A01 역할 보기: 활성 양식(최신 버전) 순서로 설정 내용·경고·내 역할."""
+    with step("DOC-ROL-01", "DOC", "활성 양식"):
+        forms = [(t["type_code"], t["name"]) for t in list_templates()]
+    with step("DOC-ROL-02", "DOC", "역할 설정 요약"):
+        return roles.summary(forms, actor_id)
 
 
 def list_templates(all_versions=False):
@@ -485,7 +497,7 @@ def list_documents(filters=None, page=1):
             )
         template_id = _int_filter(filters, "template_id", problems)
         author_id = _int_filter(filters, "author_id", problems)
-        assignee_id = _int_filter(filters, "assignee_id", problems)
+        owner_id = _int_filter(filters, "owner_id", problems)  # P14 [내 담당 양식]
         page_number = _int_filter({"page": page}, "page", problems) or 1
         if page_number < 1 or page in (0, "0"):
             problems.append(validation.error("page", "invalid", "1 이상이어야 합니다."))
@@ -499,7 +511,7 @@ def list_documents(filters=None, page=1):
         status=status,
         template_id=template_id,
         author_id=author_id,
-        assignee_id=assignee_id,
+        owner_types=None if owner_id is None else roles.forms_of(owner_id),
         target=target,
     )
     filtered = len(where) > 1  # 삭제 제외 말고 필터가 하나라도 있는가(DOC-LST-06)
@@ -690,11 +702,18 @@ def _list_where(**f):
         ("d.status", "status"),
         ("d.template_id", "template_id"),
         ("d.created_by", "author_id"),
-        ("d.assignee_id", "assignee_id"),
     ):
         if f[key] is not None:
             where.append(f"{column} = %s")
             params.append(f[key])
+    if f.get("owner_types") is not None:  # P14: 내가 담당자인 양식(설정)
+        types = list(f["owner_types"]) or [""]
+        marks = ", ".join(["%s"] * len(types))
+        where.append(
+            "d.template_id IN (SELECT template_id FROM document_template"
+            f" WHERE type_code IN ({marks}))"
+        )
+        params.extend(types)
     if f["target"]:
         # 지금까지의 label__icontains와 같은 식(SQLite LIKE, ESCAPE)
         from django.db import connection
@@ -1636,6 +1655,14 @@ def start_correction(actor_id, document_id, expected_version, reason):
     같은 문장에서 옮겨 적은 뒤 문서를 바꾼다 — 문서를 먼저 바꾸면 지운 작성완료 기록을 남길 곳이
     없다(P6-S4a G1). 회차는 읽지도 쓰지도 않는다.
     """
+    with step("DOC-COR-01b", "DOC", "양식 유형"):
+        type_code = document_type(document_id)
+    with step("DOC-COR-01c", "DOC", "설정 상태·권한(ROLE-R04)") as s:
+        try:
+            roles.require_owner_or_leader(actor_id, type_code)
+        except ApiError as error:
+            s.fail(error.code)
+            raise
     with step("DOC-COR-02", "DOC", "사유 검사"):
         text = _clean_reason(reason)
     now = timezone.now()
@@ -1803,13 +1830,35 @@ def _deviation_detail(deviation_id):
     return _deviation_row(deviation, checkers)
 
 
+@roles.scope()
 def create_deviation(actor_id, document_id, data):
-    """개선조치 쓰기(F19). 문서 상태와 무관하다(D-054). 문서 버전은 바뀌지 않는다."""
+    """개선조치 쓰기(F19). 문서 상태와 무관하다(D-054). 문서 버전은 바뀌지 않는다.
+
+    P14(ROLE-FR-12): checker_ids 키가 없으면 확인자 기본값 = 그 양식 담당자 + HACCP팀장(담당자
+    먼저, 각각 id 순, 10명까지 — 넘치면 checker_default_truncated). 빈 목록을 보내면 비운다.
+    """
     with step("DOC-DVC-01", "DOC", "형식 검사") as s:
         cleaned, problems = _clean_deviation(data, partial=False)
         if problems:
             s.fail(f"오류 {len(problems)}건")
             raise errors.ValidationFailed(details=problems)
+    truncated = False
+    with step("DOC-DVC-01b", "DOC", "확인자 기본값(담당자 + HACCP팀장)") as s:
+        if "checker_ids" in data:
+            s.skip("checker_ids 보냄")
+        else:
+            try:
+                type_code = document_type(document_id)
+            except errors.DocumentNotFound:
+                type_code = None  # 아래 INSERT가 404로 막는다
+            if type_code is None:
+                s.skip("문서 없음")
+            else:
+                wanted = sorted(roles.owners(type_code))
+                wanted += [sid for sid in sorted(roles.leaders()) if sid not in wanted]
+                truncated = len(wanted) > DEVIATION_MAX_CHECKERS
+                cleaned["checker_ids"] = wanted[:DEVIATION_MAX_CHECKERS]
+                s.note(f"{len(cleaned['checker_ids'])}명" + (" (10명까지만)" if truncated else ""))
     now = timezone.now()
     with transaction.atomic():
         with step("DOC-DVC-02", "DOC", "개선조치 저장(INSERT … WHERE 문서 있음)") as s:
@@ -1844,7 +1893,10 @@ def create_deviation(actor_id, document_id, data):
                 DeviationChecker(deviation_id=deviation_id, staff_id=sid)
                 for sid in cleaned.get("checker_ids", [])
             )
-    return _deviation_detail(deviation_id)
+    detail = _deviation_detail(deviation_id)
+    if truncated:
+        detail["checker_default_truncated"] = True
+    return detail
 
 
 def _deviation_failure(deviation_id, expected_version, step_id):
@@ -2238,6 +2290,53 @@ def _verdict_of(schema, values_by_key):
     if any(r is True for r in results):
         return None, True
     return None, None if any(r is None for r in results) else False
+
+
+def document_type(document_id):
+    """P14: 문서의 양식 유형(type_code) — 역할 판단용. SQL 1.
+
+    쓰는 곳: WF 상신 WF-SUB-02b, DOC 정정 시작 DOC-COR-01b.
+
+    없거나 삭제된 문서면 404 DOCUMENT_NOT_FOUND.
+    """
+    type_code = (
+        Document.objects.filter(pk=document_id, deleted_at__isnull=True)
+        .values_list("template__type_code", flat=True)
+        .first()
+    )
+    if type_code is None:
+        raise errors.DocumentNotFound()
+    return type_code
+
+
+SUBMITTABLE = LOCKABLE  # 상신 가능한 문서 상태(작성완료)
+CORRECTABLE = ("approved",)
+
+
+@roles.scope()
+def document_roles(document, actor_id=None):
+    """P14 문서 상세에 더하는 값(ROLE-FR-11, p14-s2-flows.md 3.8 DOC-GET-04·05). 저장 안 함.
+
+    document = get_document() 결과. 반환 {owner_ids, approval_line, permissions}.
+    permissions는 현재 사용자 기준(없으면 모두 False). 상신 취소 권한은 회차 정보가 필요해 APR
+    회차 상세의 can_cancel로 준다(DOC는 APR을 읽지 않음).
+    """
+    type_code = document["template"]["type_code"]
+    with step("DOC-GET-04", "DOC", "양식 담당자·결재선 미리 보기"):
+        owner_ids = sorted(roles.owners(type_code))
+        line = roles.approval_line(type_code)
+    with step("DOC-GET-05", "DOC", "권한(현재 사용자)") as s:
+        allowed = (
+            actor_id is not None
+            and roles.config_error() is None
+            and (roles.is_owner(actor_id, type_code) or roles.is_leader(actor_id))
+        )
+        permissions = {
+            "submit": allowed and line["ok"] and document["status"] in SUBMITTABLE,
+            "start_correction": allowed and document["status"] in CORRECTABLE,
+        }
+        s.note(str(permissions))
+    return {"owner_ids": owner_ids, "approval_line": line, "permissions": permissions}
 
 
 def brief_documents(document_ids):

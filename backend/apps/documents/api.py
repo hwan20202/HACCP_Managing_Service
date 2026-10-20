@@ -17,11 +17,11 @@ from apps.core.http import (
     reject_unknown_keys,
 )
 from apps.core.trace import step
-from apps.staff.services import actor_from_header
+from apps.staff.services import actor_from_header, optional_actor_from_header
 
 from . import errors, files, services
 
-CREATE_KEYS = ("template_id", "subject", "work_date", "assignee_id", "due_at", "sections")
+CREATE_KEYS = ("template_id", "subject", "work_date", "due_at", "sections")  # P14: assignee_id 없앰
 PATCH_KEYS = ("expected_version", "document", "sections")
 PATCH_SECTION_KEYS = ("add", "update", "delete")
 
@@ -53,6 +53,14 @@ def staff_list(request):
 
 @require_http_methods(["GET"])
 @_api
+def roles_view(request):
+    """P14 ROLE-A01 역할 보기(읽기 전용, 헤더 선택 — 있으면 me)."""
+    actor = optional_actor_from_header(request.headers.get("X-Staff-Id"))
+    return json_response(services.roles_summary(actor))
+
+
+@require_http_methods(["GET"])
+@_api
 def template_list(request):
     return json_response({"items": services.list_templates()})
 
@@ -77,7 +85,7 @@ def document_collection(request):
                 "template_id",
                 "status",
                 "author_id",
-                "assignee_id",
+                "owner_id",
                 "target",
                 "correcting",
             )
@@ -121,7 +129,9 @@ def _check_patch_shape(body):
 @_api
 def document_item(request, document_id):
     if request.method == "GET":
-        return json_response(services.get_document(document_id))
+        actor = optional_actor_from_header(request.headers.get("X-Staff-Id"))
+        document = services.get_document(document_id)
+        return json_response({**document, **services.document_roles(document, actor)})
 
     if request.method == "PATCH":
         with step("DOC-UPD-01", "API", "요청 형식 확인"):

@@ -3,6 +3,9 @@
 - 테이블이 없다. DOC·APR의 공개 서비스 함수만 호출한다(모델 import 금지, WF-NFR-01).
 - WF는 호출 순서, 트랜잭션 경계, 결과에 따른 분기만 정한다. 규칙 판단은 도메인이 한다.
 - 오류는 도메인 오류를 그대로 올려 보낸다(WF-S2-Q3). 트랜잭션 안에서 실패하면 전체를 되돌린다.
+- P14: 상신·재상신·일괄 상신은 역할(apps.staff.roles)로 권한을 보고 결재선을 설정에서 만든다
+  (사용자가 결재선을 고르지 않음). 상신 취소는 상신자 또는 HACCP팀장.
+  흐름 p14-s2-flows.md 3.2·3.3·3.6.
 """
 
 from django.conf import settings
@@ -13,6 +16,7 @@ from apps.core import batch
 from apps.core.http import ApiError
 from apps.core.trace import step
 from apps.documents import services as doc
+from apps.staff import roles
 
 
 def _document_ref(snapshot):
@@ -34,6 +38,30 @@ def _rollback_note(tx_step, error):
     tx_step.fail(f"{code} → 롤백")
 
 
+def _line_for(actor_id, document_id):
+    """WF-SUB-02b·03·03b(트랜잭션 밖): 양식 유형 → 설정 상태·권한(ROLE-R01, ROLE-C07) → 결재선."""
+    with step("WF-SUB-02b", "WF", "문서 요약(양식 유형)") as s:
+        type_code = doc.document_type(document_id)
+        s.note(type_code)
+    with step("WF-SUB-03", "WF", "설정 상태·권한(ROLE-R01)") as s:
+        try:
+            roles.require_owner_or_leader(actor_id, type_code)
+        except ApiError as error:
+            s.fail(error.code)
+            raise
+        s.note(
+            "HACCP팀장" if roles.is_leader(actor_id) else "담당자"
+        )  # 둘 다면 팀장으로 적음(권한은 같음)
+    with step("WF-SUB-03b", "WF", "결재선 구성(ROLE-F01)") as s:
+        try:
+            line = roles.require_approval_line(type_code)
+        except ApiError as error:
+            s.fail(error.code)
+            raise
+        s.note(" / ".join(f"{x['label']}({len(x['candidate_ids'])}명)" for x in line))
+    return line
+
+
 def _submit_steps(actor_id, document_id, expected_version, slots):
     """상신 한 건의 트랜잭션 안 단계(WF-SUB-05~07). 한 건·일괄 상신이 같이 쓴다(P7 G5)."""
     with step("WF-SUB-05", "WF", "문서 잠금"):
@@ -45,10 +73,13 @@ def _submit_steps(actor_id, document_id, expected_version, slots):
     return lock, request
 
 
-def submit(actor_id, document_id, expected_version, slots):
-    """상신·재상신 (WF-F01·F04): 결재선 검증 → [문서 잠금 → 스냅샷 → 회차 생성]."""
-    with step("WF-SUB-03", "WF", "결재선 검증(트랜잭션 밖)"):
-        apr.validate_slots(slots)
+@roles.scope()
+def submit(actor_id, document_id, expected_version):
+    """상신·재상신 (WF-F01·F04): 권한·결재선(설정) → [문서 잠금 → 스냅샷 → 회차 생성].
+
+    P14: 결재선은 받지 않고 설정의 칸 구성으로 만든다(재상신도 그때 설정 — 직전 결재선 아님).
+    """
+    slots = _line_for(actor_id, document_id)
     with step("WF-SUB-04", "WF", "트랜잭션") as tx:
         try:
             with transaction.atomic():
@@ -94,13 +125,20 @@ def decide(actor_id, approval_id, result, comment=None):
 # ---------------------------------------------------------------- P10 상신 취소 (p10-s2-spec 3.1)
 
 
+@roles.scope()
 def cancel_submission(actor_id, request_id):
-    """WF-F05: [회차 취소(APR A7) → 문서 되돌림(DOC F23)] 한 트랜잭션. 사유 없음(S1a-Q9 a)."""
+    """WF-F05: [회차 취소(APR A7) → 문서 되돌림(DOC F23)] 한 트랜잭션. 사유 없음(S1a-Q9 a).
+
+    P14(ROLE-R02): 상신자 또는 HACCP팀장. 설정 오류면 팀장 예외는 쓸 수 없음(ROLE-C07).
+    """
+    with step("WF-CAN-01b", "WF", "HACCP팀장인가(상신자가 아니어도 취소)") as s:
+        allow_any = roles.config_error() is None and roles.is_leader(actor_id)
+        s.note("팀장" if allow_any else "상신자 본인만")
     with step("WF-CAN-02", "WF", "트랜잭션") as tx:
         try:
             with transaction.atomic():
                 with step("WF-CAN-03", "WF", "회차 취소"):
-                    request = apr.cancel_request(request_id, actor_id)
+                    request = apr.cancel_request(request_id, actor_id, allow_any=allow_any)
                 with step("WF-CAN-04", "WF", "문서 되돌림"):
                     document = doc.unlock_for_review(request["document_id"])
         except ApiError as error:
@@ -215,11 +253,14 @@ def _submit_result(lock, request):
     }
 
 
-def batch_submit(actor_id, items, slots):
-    """WF-F07 일괄 상신: 결재선 1개로 문서마다 한 건 상신 단계(세이브포인트)."""
+@roles.scope()
+def batch_submit(actor_id, items):
+    """WF-F07 일괄 상신: 문서마다 그 양식의 결재선(설정)으로 한 건 상신 단계(세이브포인트).
+
+    P14: 결재선은 받지 않는다. 권한·결재선 판단(WF-BSB-03)은 트랜잭션 밖에서 문서마다 하고,
+    실패한 문서는 그 항목만 실패로 남긴다(다른 문서는 계속 — p14-s2-flows.md 3.3).
+    """
     pairs = batch.version_items(items, "items")
-    with step("WF-BSB-03", "WF", "결재선 검증(트랜잭션 밖)"):
-        apr.validate_slots(slots)
     with step("WF-BSB-04", "WF", "대상 양식 검사(DOC F26)"):
         types = set(batch_types())
         brief = {
@@ -233,12 +274,29 @@ def batch_submit(actor_id, items, slots):
         ]
         if wrong:
             raise batch.not_batchable(wrong)
+    with step("WF-BSB-03", "WF", "문서마다 권한·결재선(트랜잭션 밖)") as s:
+        lines = {}
+        for document_id, _ in pairs:
+            if document_id in lines:
+                continue
+            try:
+                lines[document_id] = _line_for(actor_id, document_id)
+            except ApiError as error:
+                lines[document_id] = error
+        s.note(f"실패 {sum(isinstance(v, ApiError) for v in lines.values())}건")
+
+    def submit_one(pair):
+        line = lines[pair[0]]
+        if isinstance(line, ApiError):
+            raise line
+        return _submit_result(*_submit_steps(actor_id, pair[0], pair[1], line))
+
     with step("WF-BSB-05", "WF", "트랜잭션") as tx:
         try:
             with transaction.atomic():
                 results = batch.run_each(
                     pairs,
-                    lambda pair: _submit_result(*_submit_steps(actor_id, pair[0], pair[1], slots)),
+                    submit_one,
                     ident=lambda pair: {"document_id": pair[0]},
                     layer="WF",
                     item_step="WF-BSB-06",

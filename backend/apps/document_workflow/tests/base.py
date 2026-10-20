@@ -3,19 +3,15 @@
 문서는 DOC 공개 함수로 만들고, 어긋난 데이터는 SQL로만 만든다(모델 import 없음).
 """
 
-import copy
-
 from django.db import connection
 
 from apps.approvals import services as apr
 from apps.documents import services as doc
 from apps.documents.tests.base import ccp_payload, setup_reference_data
 
-SLOTS = [
-    {"slot_no": 1, "label": "담당", "approver_id": 3},
-    {"slot_no": 2, "label": "검토", "approver_id": 2},
-    {"slot_no": 3, "approver_id": 1},
-]
+# P14: 결재선은 역할 설정(apps/staff/roles.json, 가상 개발 직원)으로 자동이다. 테스트 양식
+# CCP_MONITORING = 담당자 {1, 3} → HACCP팀장 {1, 5}. 직원 1은 겸직, 2·4는 이 양식에 역할 없음.
+OWNER, LEADER, OTHER_LEADER, DUAL, NO_ROLE = 3, 5, 1, 1, 4
 # 5.1 결합 상태: (문서 상태, 최신 회차 상태)
 ALLOWED_PAIRS = {
     ("draft", None),
@@ -47,8 +43,19 @@ NEEDS_OPEN_CORRECTION = {
 CORRECTION_STATES = {"correcting", "completed", "submitted"}
 
 
-def slots():
-    return copy.deepcopy(SLOTS)
+def approve_all(request):
+    """역할 칸 2개를 담당자(3)·팀장(5)이 승인한다. 반환: 마지막 decide 결과."""
+    from apps.document_workflow import services as wf
+
+    ids = slot_ids(request)
+    wf.decide(OWNER, ids[1], "approved")
+    return wf.decide(LEADER, ids[2], "approved")
+
+
+def reject_by_leader(request, reason="온도 누락"):
+    from apps.document_workflow import services as wf
+
+    return wf.decide(LEADER, slot_ids(request)[2], "rejected", reason)
 
 
 def new_document(templates, author=3, completed=True):

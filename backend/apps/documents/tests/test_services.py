@@ -23,7 +23,7 @@ class ReferenceTests(TestCase):
         cls.t = setup_reference_data()
 
     def test_tc001_list_staff(self):
-        self.assertEqual(services.list_staff(), [1, 2, 3, 4, 5])
+        self.assertEqual([p["id"] for p in services.list_staff()], [1, 2, 3, 4, 5])
 
     def test_tc003_list_templates_latest_active_only(self):
         items = services.list_templates()
@@ -55,7 +55,7 @@ class CreateTests(TestCase):
         document = Document.objects.get(pk=result["document_id"])
         self.assertEqual(document.status, "draft")
         self.assertEqual(document.created_by_id, 3)
-        self.assertEqual(document.assignee_id, 2)
+        self.assertIsNone(document.assignee_id)  # P14: 생성 때 담당자 지정 없음
         self.assertEqual(document.updated_at, document.created_at)
         rows = list(DocSection.objects.filter(document=document).order_by("section_def", "row_no"))
         self.assertEqual(
@@ -196,7 +196,6 @@ class ListAndGetTests(TestCase):
         )
         self.assertEqual(ids(status="approved"), {self.hygiene_doc.document_id})
         self.assertEqual(services.list_documents({"author_id": "2"}, 1)["total"], 5)
-        self.assertEqual(services.list_documents({"assignee_id": "2"}, 1)["total"], 26)
 
     def test_tc033_query_count(self):
         with self.assertNumQueries(3):  # 개수 + 목록 + 대상 요약(NFR-03: 4개 이하)

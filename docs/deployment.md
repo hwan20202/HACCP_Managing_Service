@@ -187,6 +187,17 @@ schtasks /Run /TN "HACCP 주기 문서"      # 한 번 실행해 로그 확인
 - 규칙 파일을 바꾸면 재시작 없이 다음 실행부터 반영됩니다. 운영 시작일이 정해지면 `start_date`를 고쳐 커밋합니다. 다른 경로의 규칙 파일은 `.env.production`의 `HACCP_PERIODIC_RULES`로 지정합니다.
 - 화면에서도 같은 일을 할 수 있게 됩니다(작성 요구 화면의 [주기 문서 만들기], 날짜를 골라 하나만 만드는 [새 문서] — 문서 영역 C4 S5 화면 구현 뒤).
 
+### 역할 설정(결재선)
+
+상신하면 결재선이 역할 설정 파일로 자동으로 만들어집니다(HACCP팀장·양식별 담당자·양식별 결재 칸). 기본 파일 `backend/apps/staff/roles.json`에는 가상 개발 직원(DEV-001~005)만 있으므로 운영에서는 실제 직원 코드로 만든 파일을 지정합니다.
+
+1. `backend/apps/staff/roles.json`을 `C:\HACCPData\roles.json`으로 복사해 직원 코드(`staff_code`)를 고칩니다. 형식: `{"version": 1, "haccp_leaders": [코드...], "forms": {"양식유형": {"owners": [코드...], "slots": "owner" | "owner_leader" | "leader", "labels": {"owner": "작성자"}}}}`(`labels`는 선택).
+2. `.env.production`에 `HACCP_ROLES_FILE=C:/HACCPData/roles.json`을 넣습니다.
+3. 서비스를 다시 시작합니다(설정 파일은 서버 시작 뒤 처음 쓸 때 한 번 읽습니다 — 파일을 바꾸면 재시작해야 반영). 직원 등록·비활성(직원 마스터 가져오기)은 재시작 없이 바로 반영됩니다 — 비활성 직원은 역할에서 빠지고, 칸을 처리할 사람이 0명이 되면 그 양식은 상신이 막힙니다.
+4. `backend\manage.py check --settings=config.settings.production`으로 확인합니다. 형식 오류는 Error(`document_workflow.E002` — 이 상태로는 모든 상신이 409로 막힘), 없는 코드·비활성 직원·처리할 사람이 없는 칸은 Warning(`W002`)입니다. 화면에서는 [역할 보기](`GET /api/v1/roles`)에서 같은 내용을 봅니다.
+5. 역할 파일은 아래 5장 백업 명령에 들어가지 않습니다. 고치기 전에 같은 폴더에 날짜를 붙인 사본(예: `roles.2026-10-20.json`)을 남기고, 별도 백업에 포함합니다. 회차마다 결재 후보·처리한 사람은 DB에 저장되므로 지난 결재 기록은 DB 백업으로 남습니다.
+6. 이 기능의 DB 변경(결재 칸 표 다시 만들기, `approvals` 0003)은 적용 전에 5장 백업을 먼저 합니다. 0003을 되돌리는 마이그레이션은 역할 칸이 있는 DB에서는 실패하므로, 되돌리기는 백업 복구로 합니다.
+
 ## 4. 코드 업데이트
 
 1. 서비스를 중지하고 아래 방법으로 DB·업로드를 백업합니다.
@@ -211,7 +222,7 @@ DB와 첨부파일이 같은 시점을 나타내도록 **앱 서비스를 중지
 
 문서 첨부 파일(시험성적서·원산지 증빙, PDF·JPG·PNG 20MB 이하)은 `HACCP_DATA_DIR/uploads/files/YYYY/MM/`에 무작위 이름으로 저장되고 원래 이름은 DB에만 있으므로, DB와 `uploads.zip`은 항상 같은 백업 시점의 것을 함께 복구합니다. Caddy의 요청 본문 상한(`infra/caddy/Caddyfile`의 `max_size 30MB`)은 20MB 파일과 요청 머리말을 받을 수 있도록 그대로 둡니다. 시제품의 메모리·브라우저 `localStorage` 데이터는 서버 백업 대상이 아닙니다.
 
-`.env.production`, Caddy 인증서·상태, 시제품 데이터와 `data/reference` 원본은 이 명령에 포함되지 않습니다. 필요한 자료는 접근을 제한한 별도 백업으로 보관합니다.
+`.env.production`, 역할 설정 파일(`HACCP_ROLES_FILE`), Caddy 인증서·상태, 시제품 데이터와 `data/reference` 원본은 이 명령에 포함되지 않습니다. 필요한 자료는 접근을 제한한 별도 백업으로 보관합니다.
 
 복구 순서:
 

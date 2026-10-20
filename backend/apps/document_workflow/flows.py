@@ -3,11 +3,14 @@
 WF 단계 안에 도메인 단계가 이어서 기록된다. 도식을 바꾸면 이 목록도 함께 바꾼다.
 """
 
+# P14(p14-s2-flows.md 3.2): 결재선 검증(APR-VAL) 대신 양식 유형 → 설정 상태·권한 → 결재선 구성
+_LINE = ["WF-SUB-02b", "WF-SUB-03", "WF-SUB-03b"]
+_OPN = [*[f"APR-OPN-0{n}" for n in range(0, 5)], "APR-OPN-04b", "APR-OPN-05"]
 _SUB = (
-    ["WF-SUB-01", "WF-SUB-02", "WF-SUB-03", "APR-VAL-01", "APR-VAL-02", "APR-VAL-03"]
+    ["WF-SUB-01", "WF-SUB-02", *_LINE]
     + ["WF-SUB-04", "WF-SUB-05", "DOC-LCK-00", "DOC-LCK-01", "DOC-LCK-01b", "DOC-LCK-02"]
     + ["WF-SUB-06", "DOC-GET-01", "DOC-GET-02", "DOC-GET-03"]
-    + ["WF-SUB-07", *[f"APR-OPN-0{n}" for n in range(0, 6)], "WF-SUB-08"]
+    + ["WF-SUB-07", *_OPN, "WF-SUB-08"]
 )
 _DEC_HEAD = ["WF-DEC-01", "WF-DEC-02", "WF-DEC-03", "WF-DEC-04"] + [
     f"APR-DEC-0{n}" for n in range(0, 6)
@@ -51,9 +54,12 @@ BATCH = {
         "tail": ["WF-BAP-07"],
     },
     "WF-BSB": {
-        "head": ["WF-BSB-01", "WF-BSB-02", "WF-BSB-03", "APR-VAL-01", "APR-VAL-02", "APR-VAL-03"]
-        + ["WF-BSB-04", *[f"DOC-BRF-0{n}" for n in range(1, 5)], "WF-BSB-05"],
-        "items": {"submitted": ["WF-BSB-06", *_SUB[7:-1], "WF-BSB-06b"]},
+        # P14: 03(문서마다 권한·결재선)은 04 뒤. 03 안의 _LINE은 문서 수만큼 반복되므로 머리에는
+        # 한 번만 두고, 두 번째부터는 head_skip으로 뺀다(matches_batch)
+        "head": ["WF-BSB-01", "WF-BSB-02", "WF-BSB-04", *[f"DOC-BRF-0{n}" for n in range(1, 5)]]
+        + ["WF-BSB-03", *_LINE, "WF-BSB-05"],
+        "head_skip": list(_LINE),
+        "items": {"submitted": ["WF-BSB-06", *_SUB[6:-1], "WF-BSB-06b"]},
         "tail": ["WF-BSB-07"],
     },
 }
@@ -68,7 +74,7 @@ FLOWS.update(
         "WF-BSB": [*BATCH["WF-BSB"]["head"], *BATCH["WF-BSB"]["items"]["submitted"], "WF-BSB-07"],
         "WF-CFG": ["WF-CFG-01", "WF-CFG-02", "DOC-TPL-01"],
         # P10 상신 취소(p10-s2-spec 5장): API 사용자 확인 → [APR A7 → DOC F23] 한 트랜잭션
-        "WF-CAN": ["WF-CAN-01", "WF-CAN-02", "WF-CAN-03"]
+        "WF-CAN": ["WF-CAN-01", "WF-CAN-01b", "WF-CAN-02", "WF-CAN-03"]
         + [f"APR-CAN-0{n}" for n in range(0, 4)]
         + ["WF-CAN-04", "DOC-ULK-00", "DOC-ULK-01", "DOC-ULK-02", "WF-CAN-05"],
     }
@@ -81,7 +87,16 @@ def matches_batch(flow_id, step_ids):
     반환: 항목마다 고른 묶음 이름 목록(일치하지 않으면 None).
     """
     spec = BATCH[flow_id]
-    steps = [s for s in step_ids if not s.endswith("a")]
+    steps = [s for s in _normal(step_ids)]
+    skip = set(spec.get("head_skip", ()))
+    if skip and spec["head"][-1] in steps:
+        cut, seen, kept = steps.index(spec["head"][-1]), set(), []
+        for s in steps[:cut]:
+            if s in skip and s in seen:
+                continue  # 두 번째 문서부터의 반복
+            seen.add(s)
+            kept.append(s)
+        steps = kept + steps[cut:]
     head, tail = spec["head"], spec["tail"]
     if steps[: len(head)] != head or steps[len(steps) - len(tail) :] != tail:
         return None
@@ -97,6 +112,14 @@ def matches_batch(flow_id, step_ids):
     return kinds or None
 
 
+def _normal(step_ids):
+    """실패 분기(a)와 역할 설정 읽기(ROLE-CFG)를 뺀다.
+
+    ROLE-CFG는 서버 시작 뒤 처음 한 번만 나온다(테스트는 매번).
+    """
+    return [s for s in step_ids if not s.endswith("a") and not s.startswith("ROLE-CFG")]
+
+
 def matches(flow_id, step_ids):
     """정상 경로 단계가 빠짐없이 순서대로 실행됐는지 본다(실패 분기 a 단계는 제외)."""
-    return [s for s in step_ids if not s.endswith("a")] == FLOWS[flow_id]
+    return _normal(step_ids) == FLOWS[flow_id]

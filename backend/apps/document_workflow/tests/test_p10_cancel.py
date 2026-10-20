@@ -18,17 +18,13 @@ from apps.document_workflow.tests.base import (
     new_document,
     setup_reference_data,
     slot_ids,
-    slots,
     sql,
     version_of,
 )
 from apps.documents import signals
 from apps.documents.tests.base import update_current
 
-TWO = [
-    {"slot_no": 1, "label": "담당자", "approver_id": 2},
-    {"slot_no": 2, "label": "HACCP팀장", "approver_id": 1},
-]
+# P14: 결재선은 역할 설정 — CCP_MONITORING = 담당자 {1, 3}(칸 1) → HACCP팀장 {1, 5}(칸 2)
 
 
 class CancelTestCase(TestCase):
@@ -39,9 +35,9 @@ class CancelTestCase(TestCase):
     def tearDown(self):
         self.assertEqual(invariant_violations(), [])
 
-    def submitted(self, line=None, requester=3):
+    def submitted(self, requester=3):
         document_id = new_document(self.t)
-        request = services.submit(requester, document_id, version_of(document_id), line or TWO)
+        request = services.submit(requester, document_id, version_of(document_id))
         return document_id, request["request"]
 
     def post(self, request_id, staff=3, raw=None):
@@ -62,7 +58,7 @@ class CancelTests(CancelTestCase):
     def test_tc020_cancel_after_one_approval(self):
         document_id, request = self.submitted()
         ids = slot_ids(request)
-        services.decide(2, ids[1], "approved")
+        services.decide(3, ids[1], "approved")
         before = version_of(document_id)
         response = self.post(request["request_id"])
         self.assertEqual(response.status_code, 200, response.content)
@@ -114,7 +110,7 @@ class CancelTests(CancelTestCase):
 
     def test_tc020b_queries_after_cancel(self):
         document_id, request = self.submitted()
-        services.decide(2, slot_ids(request)[1], "approved")
+        services.decide(3, slot_ids(request)[1], "approved")
         services.cancel_submission(3, request["request_id"])
         one = apr.get_request(request["request_id"])
         self.assertEqual(one["status"], "cancelled")
@@ -123,18 +119,18 @@ class CancelTests(CancelTestCase):
         self.assertEqual(history[0]["status"], "cancelled")
         progress = apr.document_progress([document_id], 2)["documents"][document_id]
         self.assertEqual(
-            (progress["status"], progress["approved"], progress["total"], progress["my_slot"]),
-            ("cancelled", 1, 2, None),
+            (progress["status"], progress["approved"], progress["total"], progress["my_slots"]),
+            ("cancelled", 1, 2, []),
         )
 
     def test_tc021_correction_resubmission(self):
         document_id = new_document(self.t)
-        request = services.submit(3, document_id, version_of(document_id), TWO)["request"]
-        for slot_no, actor in ((1, 2), (2, 1)):
+        request = services.submit(3, document_id, version_of(document_id))["request"]
+        for slot_no, actor in ((1, 3), (2, 5)):
             services.decide(actor, slot_ids(request)[slot_no], "approved")
         doc.start_correction(3, document_id, version_of(document_id), "판정 오기")
         complete_again(document_id)
-        again = services.submit(3, document_id, version_of(document_id), TWO)["request"]
+        again = services.submit(3, document_id, version_of(document_id))["request"]
         self.assertTrue(again["is_correction"])
         out = services.cancel_submission(3, again["request_id"])
         self.assertEqual(out["request"]["status"], "cancelled")
@@ -165,10 +161,10 @@ class CancelTests(CancelTestCase):
         self.assertError(self.post(rid), 409, "REQUEST_CLOSED")  # 이미 취소
         # 승인으로 끝남 / 반려됨
         approved_doc, approved = self.submitted()
-        for slot_no, actor in ((1, 2), (2, 1)):
+        for slot_no, actor in ((1, 3), (2, 5)):
             services.decide(actor, slot_ids(approved)[slot_no], "approved")
         rejected_doc, rejected = self.submitted()
-        services.decide(2, slot_ids(rejected)[1], "rejected", "온도 누락")
+        services.decide(3, slot_ids(rejected)[1], "rejected", "온도 누락")
         for document, req in ((approved_doc, approved), (rejected_doc, rejected)):
             with self.subTest(status=req["request_id"]):
                 state = db_state(document)
@@ -187,7 +183,7 @@ class CancelTests(CancelTestCase):
     def test_tc024_resubmit_after_cancel(self):
         document_id, request = self.submitted()
         services.cancel_submission(3, request["request_id"])
-        again = services.submit(3, document_id, version_of(document_id), TWO)["request"]
+        again = services.submit(3, document_id, version_of(document_id))["request"]
         self.assertEqual(again["attempt"], request["attempt"] + 1)
         self.assertEqual(again["status"], "in_progress")
 
@@ -201,7 +197,7 @@ class CancelTests(CancelTestCase):
         self.assertEqual(doc.get_document(document_id)["status"], "completed")
 
     def test_tc025_inbox(self):
-        document_id, request = self.submitted(line=slots())
+        document_id, request = self.submitted()
         ids = slot_ids(request)
         services.decide(3, ids[1], "approved")  # staff 3 = 상신자이자 1번 칸 결재자
         services.cancel_submission(3, request["request_id"])
@@ -212,3 +208,31 @@ class CancelTests(CancelTestCase):
         mine = next(i for i in done if i["request"]["request_id"] == request["request_id"])
         self.assertEqual(mine["request_status"], "cancelled")
         self.assertEqual(mine["state"], "approved")
+
+
+class LeaderCancelTests(CancelTestCase):
+    """ROLE-TC-25(ROLE-R02): 상신 취소 = 상신자 또는 HACCP팀장."""
+
+    def test_leader_cancels_others_submission(self):
+        _, request = self.submitted(requester=3)
+        response = self.post(request["request_id"], staff=5)  # 5 = 팀장, 상신자 아님
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["request"]["status"], "cancelled")
+
+    def test_no_role_non_requester_refused(self):
+        document_id, request = self.submitted(requester=3)
+        before = db_state(document_id)
+        response = self.post(request["request_id"], staff=4)
+        self.assertError(response, 403, "NOT_REQUESTER")
+        self.assertIn("HACCP팀장", response.json()["message"])
+        self.assertEqual(db_state(document_id), before)
+
+    def test_can_cancel_flag_on_request(self):
+        """ROLE-TC-28: 회차 상세 can_cancel = 현재 사용자가 상신자(팀장 예외는 화면이 역할로)."""
+        _, request = self.submitted(requester=3)
+        rid = request["request_id"]
+        self.assertTrue(apr.get_request(rid, 3)["can_cancel"])
+        self.assertFalse(apr.get_request(rid, 5)["can_cancel"])
+        self.assertFalse(apr.get_request(rid)["can_cancel"])
+        api = self.client.get(f"/api/v1/approval-requests/{rid}", HTTP_X_STAFF_ID="3").json()
+        self.assertTrue(api["can_cancel"])

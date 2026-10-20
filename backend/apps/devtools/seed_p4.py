@@ -23,10 +23,7 @@ from apps.documents.seed import ensure_p4_templates, ensure_p8_templates, ensure
 
 from . import inventory_dev
 
-SLOTS = [
-    {"slot_no": 1, "label": "담당", "approver_id": 3},
-    {"slot_no": 2, "label": "HACCP팀장", "approver_id": 1},
-]
+# P14: 결재선은 역할 설정(roles.json) — D03·CCP = 담당자 {1, 3} → HACCP팀장 {1, 5}
 # (품목 이름, 매입처, 수량(품목 기준 단위), 소비기한까지 일수, 입고일 = 오늘에서 뺄 일수)
 LOTS = [
     ("유자", "고흥농협", 500, 200, 0),
@@ -75,18 +72,6 @@ def ensure_stock(today):
 def _count(made, results):
     for item in results:
         made["documents"] += int(item["result"] == "created")
-
-
-def _assign(actor, results, assignee_id=2):
-    """REQ는 담당자를 비워 둔다(REQ-S2-Q1). P4 시드와 같게 새로 만든 D03·CCP만 담당자 2."""
-    for item in results:
-        if item["type_code"] in ("D01", "D02"):
-            continue  # P4 시드도 D01·D02는 담당자 없음
-        if item["result"] == "created":
-            document_id = item["document_id"]
-            version = doc.get_document(document_id)["version"]
-            patch = {"expected_version": version, "document": {"assignee_id": assignee_id}}
-            doc.update_document(actor, document_id, patch)
 
 
 def _at(day, hm):
@@ -167,7 +152,7 @@ def _complete(actor, document_id):
 
 def _submit(actor, document_id):
     version = doc.get_document(document_id)["version"]
-    out = wf.submit(actor, document_id, version, [dict(s) for s in SLOTS])
+    out = wf.submit(actor, document_id, version)
     return {s["slot_no"]: s["approval_id"] for s in out["request"]["slots"]}
 
 
@@ -194,7 +179,6 @@ def seed_p4(today=None):
                 inventory_dev.touch_lot(lot_id)
                 out = req.require_for_lot(actor, lot_id)
             _count(made, out["documents"])
-            _assign(actor, out["documents"])
             lot_out.append(out)
         today_d03 = [
             next(d for d in out["documents"] if d["type_code"] == "D03") for out in lot_out[:3]
@@ -211,7 +195,6 @@ def seed_p4(today=None):
             inventory_dev.touch_batch(batch_id)
             out = req.require_for_batch(actor, batch_id)
             _count(made, out["documents"])
-            _assign(actor, out["documents"])
             batch_out.append({d["type_code"]: d for d in out["documents"]})
         ccp = {
             code: {"document": {"document_id": d["document_id"]},

@@ -29,10 +29,7 @@ from .base import (
     setup_req,
 )
 
-SLOTS = [
-    {"slot_no": 1, "label": "담당", "approver_id": 3},
-    {"slot_no": 2, "label": "HACCP팀장", "approver_id": 1},
-]
+# P14: 결재선은 역할 설정(roles.json) — 칸 1 담당자(staff 3), 칸 2 HACCP팀장(staff 1)
 
 
 def lot(lot_id, actor=3):
@@ -62,7 +59,7 @@ def approve_d03(document_id, verdict):
     if verdict == "FAIL":  # 부적합이면 개선조치가 있어야 작성완료(P4)
         doc.create_deviation(4, document_id, {"description": "포장 파손", "action_result": "반품"})
     doc.complete_document(3, document_id, detail(document_id)["version"])
-    out = wf.submit(3, document_id, detail(document_id)["version"], [dict(s) for s in SLOTS])
+    out = wf.submit(3, document_id, detail(document_id)["version"])
     ids = {s["slot_no"]: s["approval_id"] for s in out["request"]["slots"]}
     wf.decide(3, ids[1], "approved")
     wf.decide(1, ids[2], "approved")
@@ -432,6 +429,7 @@ class BoundaryTests(TestCase):
         "apps.documents.services",
         "apps.approvals.services",
         "apps.staff.services",
+        "apps.staff.roles",  # P14 공용 역할 모듈(테이블 없음, ROLE-NFR-01·DR-03)
         "apps.core.",
         "django",
         # P9 periodic.py(규칙 파일 읽기·날짜 계산): 표준 라이브러리는 계층과 무관(S4 G1)
