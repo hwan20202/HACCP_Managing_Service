@@ -1,7 +1,9 @@
 """역할(P14) — 설정 파일의 HACCP팀장·양식별 담당자·작성 권한자·결재 칸 구성. 테이블 없음.
 
-- 작성 권한자(``writers``, DR-20 — 명세 ROLE-C08): 양식별, 상신·재상신만(ROLE-R01).
-  결재 칸 후보가 아니다.
+- 작성 권한자(``writers``, DR-20 — 명세 ROLE-C08): 양식별, 작성(ROLE-R07, r13 DR-23)과
+  상신·재상신(ROLE-R01). 결재 칸 후보가 아니다.
+- 작성(R07) = 담당자·작성 권한자·팀장 + 그 문서 점검자(점검자 값은 DOC가 넘김 — 이 모듈은
+  문서를 읽지 않는다). 점검자 지정(R08) = 담당자·팀장.
 
 - 설정 파일은 ``HACCP_ROLES_FILE``(비우면 이 폴더의 roles.json — 가상 개발 직원만). 서버 시작 뒤
   처음 쓸 때 한 번 읽어 보관한다(파일을 바꾸면 재시작 — ROLE-C05). ``HACCP_ROLES_RELOAD``가 참이면
@@ -74,7 +76,7 @@ class FormRole:
     owners: frozenset
     slots: tuple
     labels: dict
-    writers: frozenset = frozenset()  # 작성 권한자(DR-20) — 상신만, 결재 후보 아님
+    writers: frozenset = frozenset()  # 작성 권한자(DR-20·23) — 작성·상신, 결재 후보 아님
 
 
 @dataclass
@@ -396,6 +398,53 @@ def require_owner_or_leader(staff_id, type_code):
         raise RoleConfigInvalid()
     if not (_is_owner(config, staff_id, type_code) or _is_leader(config, staff_id)):
         raise RoleRequired()
+
+
+WRITE_REQUIRED = ("owner", "writer", "leader", "inspector")  # ROLE-R07(r13 DR-23)
+WRITE_MESSAGE = "이 양식의 담당자·작성 권한자·HACCP팀장이나 지정된 점검자만 작성할 수 있습니다."
+INSPECTOR_MESSAGE = "점검자는 이 양식의 담당자나 HACCP팀장만 지정할 수 있습니다."
+
+
+def write_role(staff_id, type_code, inspector_id=None):
+    """ROLE-R07(r13): 작성이 통과하는 역할 이름(trace 기록용) — 없으면 None.
+
+    설정 형식 오류면 검사하지 않는다(ROLE-C07 — 현장 기록이 멈추지 않게): ``"config_invalid"``.
+    여럿이면 팀장 > 담당자 > 작성 권한자 > 점검자. inspector_id = 그 문서 ``info.inspector``
+    (새 문서는 None).
+    """
+    if staff_id is None:
+        return None
+    config = load()
+    if config.error:
+        return "config_invalid"
+    role = _submit_role(config, staff_id, type_code)
+    if role is not None:
+        return role
+    if inspector_id is not None and inspector_id == staff_id:
+        return "inspector"
+    return None
+
+
+def can_write(staff_id, type_code, inspector_id=None):
+    """ROLE-R07 여부(문서 상세 permissions.write·묶음 can_write)."""
+    return write_role(staff_id, type_code, inspector_id) is not None
+
+
+def can_assign_inspector(staff_id, type_code):
+    """ROLE-R08 여부(화면 권한 값) — 설정 형식 오류면 False(서버는 409)."""
+    config = load()
+    if staff_id is None or config.error:
+        return False
+    return _is_owner(config, staff_id, type_code) or _is_leader(config, staff_id)
+
+
+def require_inspector_setter(staff_id, type_code):
+    """ROLE-R08(r13): 점검자 지정·바꾸기 — 설정 오류가 먼저(409), 그다음 담당자 또는 팀장."""
+    config = load()
+    if config.error:
+        raise RoleConfigInvalid()
+    if not (_is_owner(config, staff_id, type_code) or _is_leader(config, staff_id)):
+        raise RoleRequired(message=INSPECTOR_MESSAGE)
 
 
 def approval_line(type_code, config=None):

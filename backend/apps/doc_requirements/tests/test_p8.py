@@ -95,4 +95,4 @@ class PeriodicBundleTests(TestCase):
             body = response.json()
             self.assertEqual(body["code"], "VALIDATION_ERROR")
             self.assertEqual(body["details"][0]["path"], path)
-        self.assertEqual(self.get(staff=None).json()["code"], "STAFF_HEADER_MISSING")
+        self.assertEqual(self.get(staff=None).status_code, 200)  # P14 r14: 헤더 선택(DR-24 Q7 b)

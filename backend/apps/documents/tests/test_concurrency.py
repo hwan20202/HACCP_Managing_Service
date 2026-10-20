@@ -94,7 +94,7 @@ class ConcurrencyTests(TransactionTestCase):
 
         def second(locked, release):
             return services.update_document(
-                4,
+                5,  # P14 r13: 다른 사람 = 팀장 5(역할 없는 4는 잠금 전 403 — ISR-01과 같은 종류)
                 self.doc.document_id,
                 {
                     "expected_version": 1,

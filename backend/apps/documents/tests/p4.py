@@ -233,9 +233,13 @@ def rows_of(document_id, section_def):
     return [s for s in detail["sections"] if s["section_def"] == section_def]
 
 
-def set_info(document_id, values):
+def set_info(document_id, values, actor=3):
     info = rows_of(document_id, "info")[0]
-    return patch(document_id, {"update": [{"section_id": info["section_id"], "values": values}]})
+    return patch(
+        document_id,
+        {"update": [{"section_id": info["section_id"], "values": values}]},
+        actor=actor,
+    )
 
 
 def at(hm, day=DAY):

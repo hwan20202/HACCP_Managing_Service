@@ -173,8 +173,9 @@ class AddRefRowTests(P4TestCase):
             88,
             {"appearance": "양호", "packaging": "양호", "labeling": "양호", "verdict": "PASS"},
         )
-        set_info(self.d03, {"inspector": 4})
-        complete(self.d03)
+        # P14 r13: 테스트 전용 양식(TEST-LOT-ROWS)은 역할 설정에 없어 팀장(1)만 쓴다(R07·R08)
+        set_info(self.d03, {"inspector": 4}, actor=1)
+        complete(self.d03, actor=1)
         version = version_of(self.d03)
         with self.assertRaises(errors.DocumentLocked):
             add_lot_row(self.d03, 89)
@@ -192,7 +193,8 @@ class AddRefRowTests(P4TestCase):
             88,
             {"appearance": "양호", "packaging": "양호", "labeling": "양호", "verdict": "PASS"},
         )
-        set_info(self.d03, {"inspector": 4})
+        # P14 r13: 테스트 전용 양식 — 점검자 지정은 팀장(R08), 점검자 3이 작성완료(R07 점검자)
+        set_info(self.d03, {"inspector": 3}, actor=1)
         self.to_status(self.d03, "submitted")
         version = version_of(self.d03)
         again = add_lot_row(self.d03, 88)
@@ -452,7 +454,7 @@ class CreateUpdateRuleTests(P4TestCase):
             with self.subTest(code=code, sections=sections, document=document):
                 version = version_of(document_id)
                 with self.assertRaises(errors.ValidationFailed) as ctx:
-                    patch(document_id, sections, document)
+                    patch(document_id, sections, document, actor=1)  # P14 r13: 팀장(R07)
                 self.assertEqual(codes(ctx), {code})
                 self.assertEqual(version_of(document_id), version)
 
@@ -579,16 +581,17 @@ class DeviationTests(P4TestCase):
 
     def test_tc172_update(self):
         created = self.create()
+        # P14 r13: 수정하는 사람 = CCP 담당자(3) — 2는 CCP 역할이 없어 403(R07)
         result = services.update_deviation(
-            2, created["deviation_id"], 1, {"action_result": "재조정 후 적합", "checker_ids": [3]}
+            3, created["deviation_id"], 1, {"action_result": "재조정 후 적합", "checker_ids": [3]}
         )
         self.assertEqual((result["version"], result["checker_ids"]), (2, [3]))
         row = DeviationAction.objects.get(pk=created["deviation_id"])
-        self.assertEqual((row.updated_by_id, row.action_result), (2, "재조정 후 적합"))
+        self.assertEqual((row.updated_by_id, row.action_result), (3, "재조정 후 적합"))
         with self.assertRaises(errors.VersionConflict):
-            services.update_deviation(2, created["deviation_id"], 1, {"action_result": "x"})
+            services.update_deviation(3, created["deviation_id"], 1, {"action_result": "x"})
         _, ids = traced(
-            lambda: services.update_deviation(2, created["deviation_id"], 2, {"action_result": "y"})
+            lambda: services.update_deviation(3, created["deviation_id"], 2, {"action_result": "y"})
         )
         self.assertTrue(flows.matches("DOC-DVU", ["DOC-DVU-00", *ids]), ids)
 

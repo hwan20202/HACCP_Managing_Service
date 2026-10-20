@@ -55,8 +55,13 @@ def _check_input(base_date, mine):
 
 
 def _is_mine(actor_id, source):
-    """P14 [내 문서](DR-09): 점검자 = 나, 또는 그 문서 양식의 담당자에 내가 있음(작성자는 안 봄)."""
-    return actor_id == source["inspector_id"] or roles.is_owner(actor_id, source["type_code"])
+    """P14 [내 문서](DR-09·r13 DR-23): 점검자 = 나, 또는 그 문서 양식의 담당자·작성 권한자에
+    내가 있음(작성자는 안 봄)."""
+    return (
+        actor_id == source["inspector_id"]
+        or roles.is_owner(actor_id, source["type_code"])
+        or roles.is_writer(actor_id, source["type_code"])
+    )
 
 
 def _row(source, **extra):

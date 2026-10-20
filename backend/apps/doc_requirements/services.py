@@ -329,7 +329,20 @@ def _my_slots(progress):
     return [] if progress is None else progress["my_slots"]
 
 
-def _bundle_document(brief, approved, progress, submit=(False, None)):
+def _write_check(actor_id, type_code, brief):
+    """P14 r13 묶음 문서별 작성 가능(ROLE-R07, 상태 무관 — 점검자는 문서마다 다름)."""
+    return roles.can_write(actor_id, type_code, brief["inspector_id"])
+
+
+def _bundle_permissions(actor_id, type_code):
+    """P14 r13 묶음 권한(묶음은 한 양식): 점검자 지정(ROLE-R08)."""
+    return {
+        "assign_inspector": type_code in doc.INSPECTOR_TYPES
+        and roles.can_assign_inspector(actor_id, type_code)
+    }
+
+
+def _bundle_document(brief, approved, progress, submit=(False, None), can_write=False):
     """LOT 줄의 문서 값(p7-s2-spec 3.4). 승인본 판정은 F03과 같은 규칙(_approved_verdict)."""
     return {
         "document_id": brief["document_id"],
@@ -352,6 +365,7 @@ def _bundle_document(brief, approved, progress, submit=(False, None)):
         "my_slots": _my_slots(progress),  # P14: 내 칸이 2개일 수 있음(DR-05)
         "can_submit": submit[0],
         "submit_block": submit[1],
+        "can_write": can_write,  # r13 ROLE-R07
     }
 
 
@@ -400,6 +414,7 @@ def incoming_bundle(actor_id, received_date):
                     latest.get(brief["document_id"]),
                     progress["documents"].get(brief["document_id"]),
                     _submit_check(actor_id, rules.D03, brief["status"], line),
+                    _write_check(actor_id, rules.D03, brief),
                 )
                 status_counts[brief["status"]] = status_counts.get(brief["status"], 0) + 1
                 correcting += brief["correcting"]
@@ -426,13 +441,14 @@ def incoming_bundle(actor_id, received_date):
                 "my_pending": mine,
             },
             "approval_line": line,
+            "permissions": _bundle_permissions(actor_id, rules.D03),  # r13 ROLE-R08
         }
 
 
 # ---------------------------------------------------------------- P8 REQ-F06 주 묶음 조회
 
 
-def _week_document(brief, progress, submit=(False, None)):
+def _week_document(brief, progress, submit=(False, None), can_write=False):
     """하루 칸의 문서 값(P7 _bundle_document와 같은 조립 — 승인본 판정 대신 점검 결과 수)."""
     return {
         "document_id": brief["document_id"],
@@ -451,6 +467,7 @@ def _week_document(brief, progress, submit=(False, None)):
         "my_slots": _my_slots(progress),  # P14: 내 칸이 2개일 수 있음(DR-05)
         "can_submit": submit[0],
         "submit_block": submit[1],
+        "can_write": can_write,  # r13 ROLE-R07
     }
 
 
@@ -508,6 +525,7 @@ def periodic_bundle(actor_id, type_code, week_start):
                     brief,
                     progress["documents"].get(brief["document_id"]),
                     _submit_check(actor_id, type_code, brief["status"], line),
+                    _write_check(actor_id, type_code, brief),
                 )
                 status_counts[brief["status"]] = status_counts.get(brief["status"], 0) + 1
                 correcting += brief["correcting"]
@@ -530,4 +548,5 @@ def periodic_bundle(actor_id, type_code, week_start):
                 "my_pending": mine,
             },
             "approval_line": line,
+            "permissions": _bundle_permissions(actor_id, type_code),  # r13 ROLE-R08
         }

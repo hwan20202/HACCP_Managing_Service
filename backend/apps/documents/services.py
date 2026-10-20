@@ -846,8 +846,19 @@ def _is_round_violation(error):
 # ---------------------------------------------------------------- F06 작성
 
 
+@roles.scope()
 def create_document(actor_id, data):
     now = timezone.now()
+    with step("DOC-WRT-01", "DOC", "양식 유형(새 문서 — 점검자 없음)") as s:
+        new_type = (
+            DocumentTemplate.objects.filter(pk=data.get("template_id"))
+            .values_list("type_code", flat=True)
+            .first()
+        )
+        if new_type is None:
+            s.skip("양식 없음 — DOC-CRT-03에서 404")
+    if new_type is not None:
+        _check_write(actor_id, (new_type, None, None))  # ROLE-R07(r13): 404 → 403 → 409
     with step("DOC-CRT-03", "DOC", "양식 확인"):
         template = DocumentTemplate.objects.filter(pk=data.get("template_id")).first()
         if template is None:
@@ -1065,6 +1076,10 @@ def update_document(actor_id, document_id, patch):
     doc_fields, adds, updates, deletes = _patch_parts(patch)
     if not (doc_fields or adds or updates or deletes):
         raise errors.NoChanges()
+    with roles.scope():
+        target = require_write(actor_id, document_id)  # ROLE-R07(r13)
+        if _inspector_changed(updates, target):
+            _require_inspector_setter(actor_id, target[0])  # ROLE-R08(r13)
     now = timezone.now()
     try:
         with transaction.atomic():
@@ -1291,7 +1306,9 @@ def update_document(actor_id, document_id, patch):
 # ---------------------------------------------------------------- F08 삭제(논리)
 
 
+@roles.scope()
 def delete_document(actor_id, document_id):
+    require_write(actor_id, document_id)  # ROLE-R07(r13)
     now = timezone.now()
     with transaction.atomic():
         with step("DOC-DEL-02", "DOC", "삭제 표시(조건부 UPDATE)") as s:
@@ -1493,6 +1510,8 @@ def complete_document(actor_id, document_id, expected_version, note=None):
     예외를 내면 작성완료도 롤백된다(P6-FR-17).
     """
     note = _clean_note(note)
+    with roles.scope():
+        require_write(actor_id, document_id)  # ROLE-R07(r13)
     now = timezone.now()
     with transaction.atomic():
         with step("DOC-CMP-02", "DOC", "작성완료(조건부 UPDATE)") as s:
@@ -1546,6 +1565,8 @@ def reopen_document(actor_id, document_id, expected_version):
 
     작성완료 기록을 지운다(P4-S2-Q7). 목적지는 UPDATE 안의 CASE(P6-NFR-01).
     """
+    with roles.scope():
+        require_write(actor_id, document_id)  # ROLE-R07(r13)
     now = timezone.now()
     with transaction.atomic():
         with step("DOC-ROP-02", "DOC", "작성 재개(조건부 UPDATE)") as s:
@@ -1712,6 +1733,8 @@ def cancel_correction(actor_id, document_id, expected_version):
 
     작성완료 기록을 정정 전 값으로 되돌리고 정정 기록을 cancelled로 닫는다. 회차 변화 없음.
     """
+    with roles.scope():
+        require_write(actor_id, document_id)  # ROLE-R07(r13)
     now = timezone.now()
     current = _open_correction()
     with transaction.atomic():
@@ -1841,29 +1864,33 @@ def create_deviation(actor_id, document_id, data):
 
     P14(ROLE-FR-12): checker_ids 키가 없으면 확인자 기본값 = 그 양식 담당자 + HACCP팀장(담당자
     먼저, 각각 id 순, 10명까지 — 넘치면 checker_default_truncated). 빈 목록을 보내면 비운다.
+    기본값이 0명이면 저장하고 checker_warning(config_invalid·no_holders — r14 DR-24 Q5 a).
+    권한: ROLE-R07(r13) — 404 → 403 순서라 문서 확인이 INSERT보다 먼저다.
     """
     with step("DOC-DVC-01", "DOC", "형식 검사") as s:
         cleaned, problems = _clean_deviation(data, partial=False)
         if problems:
             s.fail(f"오류 {len(problems)}건")
             raise errors.ValidationFailed(details=problems)
-    truncated = False
+    type_code = require_write(actor_id, document_id)[0]  # ROLE-R07(r13)
+    truncated, warning = False, None
     with step("DOC-DVC-01b", "DOC", "확인자 기본값(담당자 + HACCP팀장)") as s:
         if "checker_ids" in data:
             s.skip("checker_ids 보냄")
         else:
-            try:
-                type_code = document_type(document_id)
-            except errors.DocumentNotFound:
-                type_code = None  # 아래 INSERT가 404로 막는다
-            if type_code is None:
-                s.skip("문서 없음")
-            else:
-                wanted = sorted(roles.owners(type_code))
-                wanted += [sid for sid in sorted(roles.leaders()) if sid not in wanted]
-                truncated = len(wanted) > DEVIATION_MAX_CHECKERS
-                cleaned["checker_ids"] = wanted[:DEVIATION_MAX_CHECKERS]
-                s.note(f"{len(cleaned['checker_ids'])}명" + (" (10명까지만)" if truncated else ""))
+            wanted = sorted(roles.owners(type_code))
+            wanted += [sid for sid in sorted(roles.leaders()) if sid not in wanted]
+            truncated = len(wanted) > DEVIATION_MAX_CHECKERS
+            cleaned["checker_ids"] = wanted[:DEVIATION_MAX_CHECKERS]
+            s.note(f"{len(cleaned['checker_ids'])}명" + (" (10명까지만)" if truncated else ""))
+    with step("DOC-DVC-01c", "DOC", "확인자 0명 경고(r14)") as s:
+        if "checker_ids" in data:
+            s.skip("checker_ids 보냄")
+        elif cleaned["checker_ids"]:
+            s.skip("확인자 있음")
+        else:
+            warning = "config_invalid" if roles.config_error() else "no_holders"
+            s.note(warning)  # 저장은 계속한다(작성을 막지 않음 — ROLE-C07과 같은 원칙)
     now = timezone.now()
     with transaction.atomic():
         with step("DOC-DVC-02", "DOC", "개선조치 저장(INSERT … WHERE 문서 있음)") as s:
@@ -1901,6 +1928,8 @@ def create_deviation(actor_id, document_id, data):
     detail = _deviation_detail(deviation_id)
     if truncated:
         detail["checker_default_truncated"] = True
+    if warning:
+        detail["checker_warning"] = warning
     return detail
 
 
@@ -1934,8 +1963,12 @@ def _live_deviation(deviation_id, expected_version):
     )
 
 
+@roles.scope()
 def update_deviation(actor_id, deviation_id, expected_version, patch):
-    """개선조치 수정(F20). 문서를 잠그지 않고 개선조치 자기 version으로 충돌을 감지한다."""
+    """개선조치 수정(F20). 문서를 잠그지 않고 개선조치 자기 version으로 충돌을 감지한다.
+
+    권한: ROLE-R07(r13) 또는 그 개선조치의 지정 확인자(r14 DR-24 Q6 b — 수정만).
+    """
     with step("DOC-DVU-01", "DOC", "형식 검사") as s:
         cleaned, problems = _clean_deviation(patch, partial=True)
         if not cleaned and not problems:
@@ -1943,6 +1976,7 @@ def update_deviation(actor_id, deviation_id, expected_version, patch):
         if problems:
             s.fail(f"오류 {len(problems)}건")
             raise errors.ValidationFailed(details=problems)
+    _require_deviation_write(actor_id, deviation_id, allow_checker=True)
     now = timezone.now()
     fields = {k: v for k, v in cleaned.items() if k != "checker_ids"}
     with transaction.atomic():
@@ -1970,8 +2004,10 @@ def update_deviation(actor_id, deviation_id, expected_version, patch):
     return _deviation_detail(deviation_id)
 
 
+@roles.scope()
 def delete_deviation(actor_id, deviation_id, expected_version):
-    """개선조치 삭제(논리, F21)."""
+    """개선조치 삭제(논리, F21). 권한: ROLE-R07(r13 — 지정 확인자 예외 없음)."""
+    _require_deviation_write(actor_id, deviation_id)
     now = timezone.now()
     with transaction.atomic():
         with step("DOC-DVD-02", "DOC", "삭제 표시(조건부 UPDATE)") as s:
@@ -2315,6 +2351,105 @@ def document_type(document_id):
 
 
 SUBMITTABLE = LOCKABLE  # 상신 가능한 문서 상태(작성완료)
+
+
+# ---------------------------------------------------------------- P14 r13 작성 권한(ROLE-R07·R08)
+# 흐름 p14-s2-flows.md 3.13 DOC-WRT. 쓰기마다 "요청 형식" 뒤, 상태·버전 검사(트랜잭션) 앞에서
+# 판단한다(404 → 403 → 409). 작성 요구 진입점·주기 만들기(get_or_create_document)는
+# 거치지 않는다(R06).
+
+_TARGET_SQL = (
+    "SELECT d.document_id, t.type_code, json_extract(s.values_json, '$.inspector'), s.section_id"
+    " FROM document d JOIN document_template t ON t.template_id = d.template_id"
+    " LEFT JOIN doc_section s ON s.document_id = d.document_id AND s.section_def = 'info'"
+)
+
+
+def _write_targets(document_ids):
+    """DOC-WRT-01 몸통: {document_id: (type_code, inspector_id, info_section_id)}. SQL 1.
+
+    없거나 삭제된 문서는 빠진다(호출자가 404로).
+    """
+    ids = [i for i in document_ids if isinstance(i, int) and not isinstance(i, bool)]
+    if not ids:
+        return {}
+    marks = ", ".join(["%s"] * len(ids))
+    with connection_cursor() as cursor:
+        cursor.execute(
+            _TARGET_SQL + f" WHERE d.deleted_at IS NULL AND d.document_id IN ({marks})", ids
+        )
+        return {row[0]: (row[1], row[2], row[3]) for row in cursor.fetchall()}
+
+
+def _check_write(actor_id, target, deviation_id=None):
+    """DOC-WRT-02(·02b): ROLE-R07. 아니면 403 ROLE_REQUIRED. 반환: 통과한 역할 이름.
+
+    deviation_id(개선조치 수정만 — r14 DR-24 Q6 b): 역할·점검자가 아니어도 그 개선조치의 지정
+    확인자면 통과.
+    """
+    type_code, inspector_id, _ = target
+    with step("DOC-WRT-02", "DOC", "설정 상태 → 권한(ROLE-R07)") as s:
+        role = roles.write_role(actor_id, type_code, inspector_id)
+        if role is not None:
+            s.note(f"{type_code}: {role}")
+            return role
+        if deviation_id is None:
+            raise roles.RoleRequired(roles.WRITE_REQUIRED, roles.WRITE_MESSAGE)
+        s.skip("역할·점검자 아님 → 지정 확인자 확인(02b)")
+    with step("DOC-WRT-02b", "DOC", "개선조치 지정 확인자(r14)") as s:
+        if DeviationChecker.objects.filter(deviation_id=deviation_id, staff_id=actor_id).exists():
+            s.note("checker")
+            return "checker"
+        raise roles.RoleRequired(roles.WRITE_REQUIRED + ("checker",), roles.WRITE_MESSAGE)
+
+
+def require_write(actor_id, document_id):
+    """DOC-WRT-01·02: 문서 쓰기 권한(ROLE-R07). 없거나 삭제된 문서면 404. 반환: target."""
+    with step("DOC-WRT-01", "DOC", "양식 유형·점검자") as s:
+        target = _write_targets([document_id]).get(document_id)
+        if target is None:
+            raise errors.DocumentNotFound()
+        s.note(f"{target[0]}, 점검자 {target[1]}")
+    _check_write(actor_id, target)
+    return target
+
+
+def _require_deviation_write(actor_id, deviation_id, allow_checker=False):
+    """DOC-WRT-01·02(·02b): 개선조치 수정·삭제 — 없거나 삭제된 개선조치·문서면 404."""
+    with step("DOC-WRT-01", "DOC", "양식 유형·점검자(개선조치의 문서)") as s:
+        with connection_cursor() as cursor:
+            cursor.execute(
+                _TARGET_SQL + " JOIN deviation_action a ON a.document_id = d.document_id"
+                " WHERE a.deviation_id = %s AND a.deleted_at IS NULL AND d.deleted_at IS NULL",
+                [deviation_id],
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise errors.DeviationNotFound()
+        target = (row[1], row[2], row[3])
+        s.note(f"{target[0]}, 점검자 {target[1]}")
+    _check_write(actor_id, target, deviation_id if allow_checker else None)
+
+
+def _inspector_changed(updates, target):
+    """수정 본문이 info.inspector 값을 바꾸는가(같은 값이면 R08 안 봄 — ROLE-TC-45)."""
+    _, current, info_section_id = target
+    for item in updates:
+        if not isinstance(item, dict) or item.get("section_id") != info_section_id:
+            continue
+        values = item.get("values")
+        if isinstance(values, dict) and "inspector" in values and values["inspector"] != current:
+            return True
+    return False
+
+
+def _require_inspector_setter(actor_id, type_code):
+    """DOC-WRT-03: ROLE-R08(점검자 지정) — 설정 오류 409, 아니면 403."""
+    with step("DOC-WRT-03", "DOC", "점검자 바뀜 → 권한(ROLE-R08)") as s:
+        roles.require_inspector_setter(actor_id, type_code)
+        s.note(type_code)
+
+
 CORRECTABLE = ("approved",)
 
 
@@ -2334,9 +2469,14 @@ def document_roles(document, actor_id=None):
         usable = actor_id is not None and roles.config_error() is None
         may_submit = usable and roles.can_submit(actor_id, type_code)  # R01 + 작성 권한자(DR-20)
         may_correct = usable and (roles.is_owner(actor_id, type_code) or roles.is_leader(actor_id))
+        info = next((r["values"] for r in document["sections"] if r["section_def"] == "info"), {})
         permissions = {
             "submit": may_submit and line["ok"] and document["status"] in SUBMITTABLE,
             "start_correction": may_correct and document["status"] in CORRECTABLE,  # R04
+            # r13: 역할로 쓸 수 있나(상태 무관 — 버튼별 상태는 화면이). 설정 오류면 true(C07)
+            "write": roles.can_write(actor_id, type_code, (info or {}).get("inspector")),
+            "assign_inspector": type_code in INSPECTOR_TYPES
+            and roles.can_assign_inspector(actor_id, type_code),  # R08
         }
         s.note(str(permissions))
     return {"owner_ids": owner_ids, "approval_line": line, "permissions": permissions}
@@ -2522,6 +2662,7 @@ def _set_inspector(actor_id, document_id, expected_version, inspector_id, now):
     return {"changed": True, "version": expected_version + 1}
 
 
+@roles.scope()
 def batch_set_inspector(actor_id, items, inspector_id):
     """F25: 점검자 일괄 지정(D03 info.inspector). 문서마다 세이브포인트, 같은 값은 "변화 없음".
 
@@ -2556,11 +2697,17 @@ def batch_set_inspector(actor_id, items, inspector_id):
                 wrong, f"점검자 일괄 지정은 {'·'.join(INSPECTOR_TYPES)} 양식만 할 수 있습니다."
             )
     now = timezone.now()
+
+    def one(pair):
+        if pair[0] in types:  # 없는 문서는 _set_inspector가 404로(404 → 403 순서)
+            _require_inspector_setter(actor_id, types[pair[0]])  # ROLE-R08(r13) — 문서마다
+        return _set_inspector(actor_id, pair[0], pair[1], inspector_id, now)
+
     with step("DOC-BIN-03", "DOC", "트랜잭션") as tx:
         with transaction.atomic():
             results = batch.run_each(
                 pairs,
-                lambda pair: _set_inspector(actor_id, pair[0], pair[1], inspector_id, now),
+                one,
                 ident=lambda pair: {"document_id": pair[0]},
                 layer="DOC",
                 item_step="DOC-BIN-04",
@@ -2630,8 +2777,13 @@ def _skip_failure(document_id, expected_version):
         )
 
 
-def _skip_one(actor_id, document_id, expected_version, reason, now):
-    """한 문서: 조건부 UPDATE(상태·record_key·양식 skippable·버전을 한 문장으로)."""
+def _skip_one(actor_id, document_id, expected_version, reason, now, targets):
+    """한 문서: 조건부 UPDATE(상태·record_key·양식 skippable·버전을 한 문장으로).
+
+    targets(DOC-WRT-01 결과)에 있으면 ROLE-R07(r13)을 먼저 — 없는 문서는 UPDATE 실패로 404.
+    """
+    if document_id in targets:
+        _check_write(actor_id, targets[document_id])
     with step("DOC-SKP-05", "DOC", "작성 안 함(조건부 UPDATE)") as s:
         changed = Document.objects.filter(
             pk=document_id,
@@ -2654,6 +2806,7 @@ def _skip_one(actor_id, document_id, expected_version, reason, now):
     return {"status": "skipped", "version": expected_version + 1}
 
 
+@roles.scope()
 def skip_documents(actor_id, items, reason):
     """F27: 작성 안 함(일괄, 한 건도 items 1개). 문서마다 세이브포인트(P7 F25와 같은 결과 모양).
 
@@ -2662,12 +2815,15 @@ def skip_documents(actor_id, items, reason):
     with step("DOC-SKP-02", "DOC", "사유·항목 형식"):
         pairs = batch.version_items(items, "items")
         reason = _clean_skip_reason(reason)
+    with step("DOC-WRT-01", "DOC", "양식 유형·점검자(항목 전부)") as s:
+        targets = _write_targets([document_id for document_id, _ in pairs])
+        s.note(f"{len(targets)}/{len(pairs)}건")
     now = timezone.now()
     with step("DOC-SKP-03", "DOC", "트랜잭션") as tx:
         with transaction.atomic():
             results = batch.run_each(
                 pairs,
-                lambda pair: _skip_one(actor_id, pair[0], pair[1], reason, now),
+                lambda pair: _skip_one(actor_id, pair[0], pair[1], reason, now, targets),
                 ident=lambda pair: {"document_id": pair[0]},
                 layer="DOC",
                 item_step="DOC-SKP-04",
@@ -2679,6 +2835,8 @@ def skip_documents(actor_id, items, reason):
 
 def unskip_document(actor_id, document_id, expected_version):
     """F28: 되돌리기 skipped → draft. 작성 안 함 기록을 비우고 값은 그대로(확인 창 없음 — S1-Q5)."""
+    with roles.scope():
+        require_write(actor_id, document_id)  # ROLE-R07(r13)
     now = timezone.now()
     with transaction.atomic():
         with step("DOC-USK-02", "DOC", "되돌리기(조건부 UPDATE)") as s:

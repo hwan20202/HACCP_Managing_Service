@@ -353,7 +353,7 @@ class SkipTests(P8Case):
             self.assertEqual(current["skip"]["by"], 3)
             # 값은 그대로
             self.assertEqual(checks_row(current)["values"], checks_row(detail)["values"])
-        ids = list(steps)
+        ids = [s for s in steps if not s.startswith("ROLE-CFG")]  # 역할 설정 읽기(테스트는 매번)
         batch_flow = flows.BATCH["DOC-SKP"]
         self.assertEqual(
             ids,

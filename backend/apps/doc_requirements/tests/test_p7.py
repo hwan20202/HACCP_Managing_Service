@@ -111,6 +111,7 @@ class IncomingBundleTests(TestCase):
                     "my_pending": 0,
                 },
                 "approval_line": roles.approval_line("D03"),
+                "permissions": {"assign_inspector": True},  # P14 r13: 직원 1 = 팀장(R08)
             },
         )
 
@@ -121,8 +122,8 @@ class IncomingBundleTests(TestCase):
                 self.assertEqual((res.status_code, res.json()["code"]), (400, "VALIDATION_ERROR"))
         res = self.client.get("/api/v1/incoming-inspections")
         self.assertEqual(res.status_code, 400)
-        res = self.get(staff=None)
-        self.assertEqual((res.status_code, res.json()["code"]), (400, "STAFF_HEADER_MISSING"))
+        res = self.get(staff=None)  # P14 r14(DR-24 Q7 b): 헤더 선택 — 사용자 없음으로 200
+        self.assertEqual(res.status_code, 200, res.content)
 
     def test_tc094_my_slot_done(self):
         m = d03("submitted_partial", day=DAY)

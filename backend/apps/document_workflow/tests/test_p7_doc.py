@@ -188,16 +188,16 @@ class BatchInspectorTests(P7DocCase):
             doc.batch_set_inspector(3, items, 4)
         finally:
             trace.stop(token)
-        steps = [s.step_id for s in record.steps]
+        steps = [s.step_id for s in record.steps if not s.step_id.startswith("ROLE-CFG")]
         self.assertEqual(
             steps,
             ["DOC-BIN-02", "DOC-BIN-03"]
-            + ["DOC-BIN-04", "DOC-BIN-05", "DOC-BIN-06"]
-            + ["DOC-BIN-04", "DOC-BIN-05", "DOC-BIN-05a", "DOC-BIN-07"],
+            + ["DOC-BIN-04", "DOC-WRT-03", "DOC-BIN-05", "DOC-BIN-06"]  # P14 r13: R08 문서마다
+            + ["DOC-BIN-04", "DOC-WRT-03", "DOC-BIN-05", "DOC-BIN-05a", "DOC-BIN-07"],
         )
         same_step = [s for s in record.steps if s.step_id == "DOC-BIN-05a"][0]
         self.assertEqual(same_step.result, "pass")  # 같은 값 = 성공
-        self.assertTrue(doc_flows.matches("DOC-BIN", ["DOC-BIN-01", *steps[:5], "DOC-BIN-07"]))
+        self.assertTrue(doc_flows.matches("DOC-BIN", ["DOC-BIN-01", *steps[:6], "DOC-BIN-07"]))
 
 
 # ---------------------------------------------------------------- 7.5 조회

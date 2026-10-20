@@ -82,7 +82,8 @@ def seed_workflow(today=None):
     made["scenarios"] = 5
     # 결재함 페이지 확인용: 21회차 — staff 1(담당자이면서 팀장)은 회차마다 칸 2개라 대기 42줄
     for n in range(21):
-        submit(new(f"WF 결재함 페이지 {n + 1:02d}", n % 9, author=(n % 5) + 1))
+        # P14 r13(ROLE-R07): 작성자는 CCP_MONITORING을 쓸 수 있는 사람(담당자 1·3, 팀장 5)만
+        submit(new(f"WF 결재함 페이지 {n + 1:02d}", n % 9, author=(1, 3, 5)[n % 3]))
     made["paging"] = 21
     # WF-PS-05용 어긋난 데이터: draft 문서에 진행 중 회차(칸 없음). 결재 영역에 경고가 보여야 정상.
     # P4: 작성완료 문서여야 상신 잠금(DOC-LCK)을 통과해 회차 생성(APR-OPN)에서 막힌다.

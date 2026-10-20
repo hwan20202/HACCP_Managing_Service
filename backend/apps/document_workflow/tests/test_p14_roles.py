@@ -168,7 +168,7 @@ class StaffChangeTests(RoleCase):
         self.assertEqual(self.slots(out["request"]["request_id"])[1]["candidate_ids"], [1])
         from apps.documents import services as doc
 
-        detail = doc.create_deviation(4, out["document"]["document_id"], {"description": "x"})
+        detail = doc.create_deviation(OWNER, out["document"]["document_id"], {"description": "x"})
         self.assertEqual(detail["checker_ids"], [1, 3])  # 담당자 {1, 3} + 팀장 {1}
 
     def test_all_leaders_inactive_is_409(self):
