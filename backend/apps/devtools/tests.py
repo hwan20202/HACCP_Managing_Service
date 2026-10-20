@@ -329,3 +329,34 @@ class S3FixtureTests(TestCase):
         self.assertEqual(
             [statuses[day] for day in sorted(statuses)], ["completed", "skipped", "draft"]
         )
+
+
+class SeedPrintTests(TestCase):
+    """P12 S5 출력 확인용 시드: CCP-1P 승인(개선조치 확인), 2B 결재중, 3P 정정 중. 다시 실행하면 그대로."""
+
+    def test_states_and_print(self):
+        from apps.devtools.seed_print import seed_print
+        from apps.document_workflow import printing
+        from apps.document_workflow.tests.base import invariant_violations
+        from apps.documents import services as doc
+
+        out = seed_print("2026-10-12")
+        self.assertTrue(out.pop("created"))
+        status = {code: doc.get_document(i)["status"] for code, i in out.items()}
+        self.assertEqual(
+            status, {"CCP-1P": "approved", "CCP-2B": "submitted", "CCP-3P": "correcting"}
+        )
+        self.assertEqual(invariant_violations(), [])
+        p1 = printing.print_sheet(out["CCP-1P"])
+        self.assertEqual([b["staff_id"] for b in p1["boxes"]], [3, 5])
+        self.assertEqual(p1["document"]["deviations"][0]["checked_by"], 5)
+        p2 = printing.print_sheet(out["CCP-2B"])
+        self.assertEqual([b["staff_id"] for b in p2["boxes"]], [3, None])
+        self.assertEqual(p2["document"]["measured_until"], "2026-10-13")
+        p3 = printing.print_sheet(out["CCP-3P"])
+        times = [r["values"]["passed_at"][11:] for r in p3["document"]["sections"]["checks"]]
+        self.assertIn("12:40", times)  # 승인본(지금 값은 12:45)
+        self.assertEqual(len(p3["document"]["deviations"]), 1)
+        again = seed_print("2026-10-12")
+        self.assertFalse(again.pop("created"))
+        self.assertEqual(again, out)

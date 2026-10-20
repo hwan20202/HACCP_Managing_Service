@@ -1,0 +1,103 @@
+/* P12 인쇄용 페이지 (PRT-SC-01~02) — A4 세로, 종이 양식(표준 PDF 93~95쪽·캔디류 3P) 칸 배치 */
+@page {
+  size: A4 portrait;
+  margin: 10mm 10mm 12mm;
+  @bottom-center { content: counter(page) " / " counter(pages); font-size: 9pt; }
+}
+:root {
+  --ink: #111;
+  --line: #222;
+  --shade: #ececec;
+  --paper: #fff;
+  --desk: #e7e9ee;
+  --accent: #2557d6;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--desk);
+  color: var(--ink);
+  font-family: "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  font-size: 9pt;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+/* 화면 전용 버튼 줄 */
+.prt-toolbar {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px; background: #fff; border-bottom: 1px solid #cfd3da;
+}
+.prt-toolbar-title { font-weight: 700; font-size: 14px; }
+.prt-spacer { flex: 1; }
+.prt-btn {
+  font: inherit; font-size: 14px; padding: 6px 16px; border-radius: 6px;
+  border: 1px solid #b8bec9; background: #fff; cursor: pointer;
+}
+.prt-btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.prt-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+.prt-root { padding: 16px 0 40px; }
+.prt-sheet {
+  width: 190mm; margin: 0 auto; background: var(--paper);
+  padding: 0; box-shadow: 0 2px 12px rgba(0, 0, 0, .15);
+}
+.prt-msg {
+  max-width: 480px; margin: 80px auto; padding: 24px; text-align: center;
+  background: #fff; border-radius: 8px; font-size: 15px; line-height: 1.6;
+}
+.prt-msg small { display: block; color: #666; margin-top: 6px; font-size: 12px; }
+
+/* 종이 표 */
+table.prt { width: 100%; border-collapse: collapse; table-layout: fixed; }
+table.prt + table.prt { margin-top: -1px; }
+.prt th, .prt td {
+  border: 1px solid var(--line); padding: 1.3mm 1.4mm; vertical-align: middle;
+  text-align: center; line-height: 1.35; word-break: keep-all; overflow-wrap: anywhere;
+}
+.prt th { background: var(--shade); font-weight: 700; }
+.prt td.l, .prt th.l { text-align: left; }
+.prt .pre { white-space: pre-line; text-align: left; }
+.prt .sm { font-size: 8pt; }
+.prt td.pre.sm { font-size: 7.5pt; line-height: 1.22; padding-top: 1mm; padding-bottom: 1mm; }
+/* 3P(캔디류)는 종이 1장에 맞게 더 촘촘히 */
+[data-type="CCP-3P"] .prt th, [data-type="CCP-3P"] .prt td { padding-top: 1mm; padding-bottom: 1mm; }
+[data-type="CCP-3P"] .rows td { height: 7mm; }
+[data-type="CCP-3P"] .sum td { height: 5.5mm; }
+[data-type="CCP-3P"] .guide3p td { font-size: 8pt; }
+.prt .muted { color: #555; }
+.prt .bold { font-weight: 700; }
+.prt .bad { font-weight: 700; text-decoration: underline; }
+.prt .cap { background: var(--shade); font-weight: 700; }
+.prt tr { break-inside: avoid; }
+.prt thead { display: table-header-group; }
+
+/* 머리: 제목 · 기록확인 · 결재 칸 */
+.prt-head td.title { padding: 2.5mm 2mm; }
+.prt-head .t1 { font-size: 20pt; font-weight: 800; letter-spacing: .5px; }
+.prt-head .t2 { font-size: 14pt; font-weight: 700; margin-top: 1mm; }
+.prt-head th.vert { width: 9mm; padding: 1mm; font-size: 9pt; }
+.prt-head th.box { width: 24mm; font-size: 9pt; padding: 1.2mm; }
+.prt-head td.sign { height: 15mm; font-size: 9pt; }
+.prt-head td.sign .who { font-weight: 700; }
+
+/* 칸 값 표시 */
+.ox { display: inline-block; min-width: 1.6em; }
+.ox.on { border: 1.2px solid var(--ink); border-radius: 50%; font-weight: 700; }
+.chk { white-space: nowrap; }
+.rows td { height: 7.5mm; }
+.sum td { height: 6mm; }
+.devs td { height: 10mm; }
+
+/* 페이지 전체를 표로 — 쪽마다 머리 반복 */
+table.prt-page { width: 100%; border-collapse: collapse; }
+table.prt-page > thead > tr > td, table.prt-page > tbody > tr > td { padding: 0; border: 0; }
+
+@media print {
+  body { background: #fff; }
+  .prt-toolbar { display: none; }
+  .prt-root { padding: 0; }
+  .prt-sheet { width: auto; box-shadow: none; }
+  .prt-msg { display: none; }
+}

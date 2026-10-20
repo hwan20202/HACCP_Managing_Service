@@ -24,6 +24,9 @@
   // P8 F29 최근 값 제안(D12 공정명 — p8-s0 F5). 화면이 아는 양식 필드 목록
   const RECENT_FIELDS = { D12: ['process_name'] };
   const WEEK_TYPES = ['D10', 'D12'];  // 주 묶음 양식(DOC BUNDLE_UNITS week · REQ WEEK_BUNDLE_TYPES와 같음)
+  // P12 출력: 문서 1건 = 종이 1장인 양식(WF PRINT_SHEETS single)과 출력 가능 상태(작성중·반려·작성 안 함 제외)
+  const PRINT_TYPES = ['CCP-1P', 'CCP-2B', 'CCP-3P'];
+  const PRINTABLE = ['completed', 'submitted', 'approved', 'correcting'];
   // P8 점검표 섹션: 1행 섹션이고 필드에 표시용 키 group(관리 구분)이 있으면 종이처럼 표로(p8-s1-screens 2장)
   const isChecklist = (section) => !section.repeat && section.fields.some((fd) => fd.group);
   const isResult = (fd) => fd.type === 'select' && (fd.options || []).includes('O') && (fd.options || []).includes('X');
@@ -1572,6 +1575,7 @@
               <div class="card-title">${statusCell(d.status, !!fixing)} ${requirementChip(d)}</div>
               <div class="page-actions">
                 <button class="btn btn-secondary btn-sm" id="btnList">${this.detailBack ? '뒤로' : '목록'}</button>
+                ${PRINT_TYPES.includes(d.template.type_code) ? `<button class="btn btn-secondary btn-sm" id="btnPrint" ${PRINTABLE.includes(d.status) ? '' : 'disabled title="작성완료 뒤 출력할 수 있습니다"'}>출력</button>` : ''}
                 ${canEdit ? `<button class="btn btn-primary btn-sm" id="btnEdit" ${api.staffId ? '' : 'disabled'}>수정</button>` : ''}
                 ${canComplete ? `<button class="btn btn-primary te-btn-complete btn-sm" id="btnComplete" ${api.staffId ? '' : 'disabled'}>작성완료</button>` : ''}
                 ${canReopen ? `<button class="btn btn-secondary btn-sm" id="btnReopen" ${api.staffId ? '' : 'disabled'}>작성 재개</button>` : ''}
@@ -1605,6 +1609,8 @@
       this.rerenderTopBar(() => this.showDetail(id));
       const $ = (sel) => this.root.querySelector(sel);
       $('#btnList').addEventListener('click', () => this.goBack());
+      // P12: 새 탭 인쇄용 페이지(PRT-SC-01). 사용자 선택과 무관(읽기 전용)
+      $('#btnPrint')?.addEventListener('click', () => window.open(`/print/?document_id=${d.document_id}`, '_blank'));
       $('#btnEdit')?.addEventListener('click', () => this.openForm({ document: d }));
       $('#btnDelete')?.addEventListener('click', () => this.confirmDelete(d));
       $('#btnComplete')?.addEventListener('click', () => this.confirmComplete(d, schema));

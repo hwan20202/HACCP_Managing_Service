@@ -74,6 +74,10 @@ FLOWS.update(
         "WF-BSB": [*BATCH["WF-BSB"]["head"], *BATCH["WF-BSB"]["items"]["submitted"], "WF-BSB-07"],
         "WF-CFG": ["WF-CFG-01", "WF-CFG-02", "DOC-TPL-01"],
         # P10 상신 취소(p10-s2-spec 5장): API 사용자 확인 → [APR A7 → DOC F23] 한 트랜잭션
+        # P12 출력(p12-s4-impl.md): API 조건 → 종이 종류 → [DOC N9 → APR A12] → 값 출처 → 조립
+        "WF-PRT": ["WF-PRT-00", "WF-PRT-01", "WF-PRT-02", "DOC-PRT-01"]
+        + ["APR-PRT-01", "APR-PRT-02", "WF-PRT-03", "WF-PRT-04"],
+        "WF-PRT-NOT-PRINTABLE": ["WF-PRT-00", "WF-PRT-01", "WF-PRT-02", "DOC-PRT-01"],
         "WF-CAN": ["WF-CAN-01", "WF-CAN-01b", "WF-CAN-02", "WF-CAN-03"]
         + [f"APR-CAN-0{n}" for n in range(0, 4)]
         + ["WF-CAN-04", "DOC-ULK-00", "DOC-ULK-01", "DOC-ULK-02", "WF-CAN-05"],

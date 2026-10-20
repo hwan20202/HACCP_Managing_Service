@@ -1,10 +1,20 @@
-from apps.core.views import home, live, prototype_data, prototype_standard, ready, system_test
 from django.conf import settings
 from django.urls import include, path
+
+from apps.core.views import (
+    home,
+    live,
+    print_page,
+    prototype_data,
+    prototype_standard,
+    ready,
+    system_test,
+)
 
 urlpatterns = [
     path("", home, name="home"),
     path("test/", system_test, name="system-test"),
+    path("print/", print_page, name="print-page"),  # P12 출력
     path("prototype/data.js", prototype_data, name="prototype-data"),
     path("setup_standard/<str:filename>", prototype_standard, name="prototype-standard"),
     path("health/live/", live, name="health-live"),

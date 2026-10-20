@@ -2,12 +2,13 @@
 
 import json
 
+from django.conf import settings
 from django.db import connection
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 
 from apps.approvals import services as apr
-from apps.document_workflow import print_forms, printing
+from apps.document_workflow import flows, print_forms, printing
 from apps.document_workflow import services as wf
 from apps.documents import services as doc
 from apps.documents.tests.p4 import (
@@ -273,3 +274,30 @@ class ApiTests(PrintTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["key"], {"document_id": document_id})
         self.assertEqual(self.client.post("/api/v1/print/sheet").status_code, 405)
+
+
+@override_settings(
+    ROOT_URLCONF="apps.devtools.test_urls",
+    MIDDLEWARE=[*settings.MIDDLEWARE, "apps.devtools.middleware.TraceMiddleware"],
+)
+class PrintTraceTests(PrintTestCase):
+    """개발 콘솔 trace 단계가 흐름 WF-PRT(성공)·WF-PRT-NOT-PRINTABLE(409)과 같다."""
+
+    def ids(self, response):
+        return [s["step_id"] for s in response.json()["trace"]["steps"]]
+
+    def test_flows(self):
+        ok = self.get({"document_id": approved_ccp1p()})
+        self.assertTrue(flows.matches("WF-PRT", self.ids(ok)), self.ids(ok))
+        draft = self.get({"document_id": new_ccp("CCP-2B", "2B")["document"]["document_id"]})
+        self.assertEqual(draft.status_code, 409)
+        self.assertTrue(flows.matches("WF-PRT-NOT-PRINTABLE", self.ids(draft)), self.ids(draft))
+
+
+class PrintPageTests(SimpleTestCase):
+    def test_page_without_login_or_dev_settings(self):
+        response = self.client.get("/print/", {"document_id": 1})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "print/print.js")
+        self.assertContains(response, 'id="prtPrint"')
+        self.assertEqual(self.client.post("/print/").status_code, 405)

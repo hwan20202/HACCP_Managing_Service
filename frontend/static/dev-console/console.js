@@ -58,6 +58,9 @@
     batchApprove: { label: 'WF 일괄 승인 (WF-A03)', method: 'POST', flow: 'WF-BAP', uses: ['body', 'docId'], path: () => 'approvals/batch-decision', docs: (s) => idList(s.docId) },
     batchSubmit: { label: 'WF 일괄 상신 (WF-A04)', method: 'POST', flow: 'WF-BSB', uses: ['body', 'docId'], path: () => 'documents/batch-submit', docs: (s) => idList(s.docId) || bodyDocs(s) },
     batchConfig: { label: 'WF 일괄 설정 (WF-A05)', method: 'GET', flow: 'WF-CFG', uses: [], path: () => 'workflow/batch-config' },
+    // ---- P12 출력 — print/p12-s4-impl.md 2장(WF-A06, 읽기 전용·헤더 없음)
+    printSheet: { label: '출력 데이터 (WF-A06)', method: 'GET', uses: ['id'], path: (s) => `print/sheet?document_id=${s.id}`, doc: (s) => s.id,
+      flow: (record) => ((record.data && record.data.code) ? 'WF-PRT-NOT-PRINTABLE' : 'WF-PRT') },
     batchInspector: { label: '점검자 일괄 지정 (F25·A20)', method: 'POST', flow: 'DOC-BIN', uses: ['body', 'docId'], path: () => 'documents/batch-inspector', docs: (s) => idList(s.docId) || bodyDocs(s) },
     brief: { label: '문서 요약 여러 건 (F26·A21)', method: 'GET', flow: 'DOC-BRF', uses: ['query'], path: (s) => `documents/brief${s.query ? `?${s.query}` : ''}` },
     incoming: { label: 'REQ 입고일 묶음 (F05·A03)', method: 'GET', flow: 'REQ-BDL', uses: ['query'], path: (s) => `incoming-inspections${s.query ? `?${s.query}` : ''}` },
@@ -1538,6 +1541,30 @@
       } }),
   );
 
+  // ---------------------------------------------------------------- P12 출력 (print/p12-s4-impl.md · p12-s1-screens 8장)
+  const PRINT_HINT = 'seed_dev_print로 출력 확인용 CCP 문서를 넣으세요';
+  async function printDoc(code, status, pred = () => true) {
+    try { return await p4Doc(code, status, pred); } catch (e) { throw new Error(`${code} ${status} 문서가 없습니다. ${PRINT_HINT}.`); }
+  }
+  const p12 = (preset) => ({ unit: 'P12', ...preset });
+  PRESETS.push(
+    p12({ id: 'PRT-PS-01', label: 'CCP 단건 출력(승인)', expect: '200 · WF-PRT 도식 일치(00~04, 안쪽 DOC-PRT-01·APR-PRT-01·02) · boxes 담당자·HACCP팀장 둘 다 이름·날짜, deviations 확인 칸(checked_by) · ④ 변화 없음(쓰기 없음) · [새 탭] /print/?document_id= 로 종이 확인',
+      prepare: async () => {
+        const d = await printDoc('CCP-1P', 'approved', (x) => x.deviations.some((v) => v.checked_by));
+        return { func: 'printSheet', id: String(d.document_id) };
+      } }),
+    p12({ id: 'PRT-PS-02', label: '정정 중 출력 = 승인본', expect: '200 · WF-PRT 도식 일치 · WF-PRT-03 "정정 중 → 승인본" · sections 값이 지금 문서 값이 아니라 승인 회차 값(시드: 12:40, 지금 12:45), 정정 표시 없음, 정정 중 추가 개선조치는 deviations에 있음 · ④ 변화 없음',
+      prepare: async () => {
+        const d = await printDoc('CCP-3P', 'correcting');
+        return { func: 'printSheet', id: String(d.document_id) };
+      } }),
+    p12({ id: 'PRT-PS-08', label: '출력 불가(작성중)', expect: '409 NOT_PRINTABLE_STATUS · WF-PRT-NOT-PRINTABLE(00~02, DOC-PRT-01) — APR 단계 없음 · ④ 변화 없음',
+      prepare: async () => {
+        const d = await printDoc('CCP-1P', 'draft');
+        return { func: 'printSheet', id: String(d.document_id) };
+      } }),
+  );
+
   function preparedText(m) {
     if (m.document_id === null) return `새 LOT ${esc(m.lot_number)} · 문서 없음(작성 요구 안 부름)`;
     if (m.lot_number === '-') return `문서 #${esc(m.document_id)}(${esc(m.status)})`;
@@ -1609,7 +1636,7 @@
     $('#dcStaff').addEventListener('change', (e) => api.setStaff(e.target.value));
     $('#dcFunc').innerHTML = Object.entries(FUNCS).map(([k, f]) => `<option value="${k}">${esc(f.label)}</option>`).join('');
     const group = (unit, label) => `<optgroup label="${label}">${PRESETS.filter((p) => (p.unit || p.id.split('-')[0]) === unit).map((p) => `<option value="${p.id}">${p.id} ${esc(p.label)}</option>`).join('')}</optgroup>`;
-    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)') + group('FILE', '파일 업로드 (스프린트 3)') + group('P8', '점검표·작성 안 함 (P8)') + group('P9', '주기형 작성 요구 (P9)') + group('P10', '문서함·결재함 (P10)');
+    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)') + group('FILE', '파일 업로드 (스프린트 3)') + group('P8', '점검표·작성 안 함 (P8)') + group('P9', '주기형 작성 요구 (P9)') + group('P10', '문서함·결재함 (P10)') + group('P12', '출력 (P12)');
     $('#dcFunc').addEventListener('change', () => { state.preset = null; toggleInputs(); });
     ['#dcId', '#dcQuery', '#dcBody', '#dcDocId'].forEach((sel) => $(sel).addEventListener('input', () => { if (state.preset && state.preset.script) state.preset = null; }));
     $('#dcLoadPreset').addEventListener('click', loadPreset);
