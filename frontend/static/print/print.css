@@ -86,12 +86,19 @@ table.prt + table.prt { margin-top: -1px; }
 .prt-head td.sign .who { font-weight: 700; }
 
 /* 칸 값 표시 */
-.ox { display: inline-block; min-width: 1.6em; }
-.ox.on { border: 1.2px solid var(--ink); border-radius: 50%; font-weight: 700; }
+/* 동그라미 테두리는 모든 칸에 같은 두께(투명)로 둬서 값이 있는 행만 높아지지 않게(R4) */
+.ox { display: inline-block; min-width: 1.6em; border: 1.2px solid transparent; border-radius: 50%; }
+.ox.on { border-color: var(--ink); font-weight: 700; }
 .chk { white-space: nowrap; }
 .rows td { height: 7.5mm; }
-.prt td.merge { border-top: 0; border-bottom: 0; vertical-align: top; padding-top: 3mm; }
+.prt td.merge { border-top: 0; border-bottom: 0; }
 .prt td.merge.last { border-bottom: 1px solid var(--line); }
+.prt td.merge.first { position: relative; }
+.prt .merge-body { position: absolute; top: 2.5mm; left: 1mm; right: 1mm; text-align: center; line-height: 1.35; }
+.prt td.signer { white-space: nowrap; }
+.prt td.signer .tight { font-size: 7.5pt; letter-spacing: -.2px; }
+.prt td.signer .tighter { font-size: 6.5pt; letter-spacing: -.3px; }
+.rows td:nth-child(2) { white-space: nowrap; }
 .sum td { height: 6mm; }
 .devs td { height: 10mm; }
 

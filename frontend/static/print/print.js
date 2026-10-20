@@ -13,7 +13,14 @@
   const pad = (list, n) => list.concat(Array(Math.max(0, n - list.length)).fill(null));
   // 종이의 "왼쪽 합친 칸"(품명·중량). rowspan은 쪽을 못 나눠 표가 통째로 다음 쪽으로 밀리므로
   // 행마다 칸을 두고 첫 행에만 내용, 사이 가로선은 지운다(매트릭스 1P-05).
-  const merged = (i, count, html) => `<td class="merge${i === 0 ? ' first' : ''}${i === count - 1 ? ' last' : ''}">${i === 0 ? html : ''}</td>`;
+  // 내용은 첫 행 칸 위에 겹쳐 그려(position:absolute) 행 높이를 바꾸지 않는다(행 높이 고르게 — 매트릭스 R1)
+  const merged = (i, count, html) => `<td class="merge${i === 0 ? ' first' : ''}${i === count - 1 ? ' last' : ''}">${i === 0 ? `<div class="merge-body">${html}</div>` : ''}</td>`;
+  // 서명 칸: 한 줄 고정, 긴 이름은 글씨만 작게(R3)
+  const sign = (id) => {
+    const name = who(id);
+    const size = name.length > 8 ? 'tighter' : name.length > 6 ? 'tight' : '';
+    return name ? `<span class="${size}">${esc(name)}</span>` : '';
+  };
 
   let people = {};
   const who = (id) => (id === null || id === undefined ? '' : people[String(id)] || `staff ${id}`);
@@ -116,17 +123,20 @@
     const left = `<div class="bold">${esc(doc.info.item_name)}</div><br>중량<br>( ${esc(num(doc.info.batch_qty_kg))} kg)`;
     const body = rows.map((r, i) => {
       const v = r ? r.values : {};
-      const phase = v.phase === firstPhase || v.phase === lastPhase ? `<div class="sm">${esc(v.phase)}</div>` : '';
+      // 다른 날 행(MM-DD HH:MM)은 칸이 좁아 구분을 줄여 씀: 작업시작 전 → 시작, 작업종료 후 → 종료
+      const otherDay = !!v.measured_at && v.measured_at.slice(0, 10) !== doc.work_date;
+      const label = otherDay ? { [firstPhase]: '시작', [lastPhase]: '종료' }[v.phase] : v.phase;
+      const phase = v.phase === firstPhase || v.phase === lastPhase ? `<span class="sm">${esc(label)}</span> ` : '';
       return `<tr>${merged(i, rows.length, left)}
         <td>${r ? `${phase}${esc(clock(v.measured_at, doc.work_date))}` : ':'}</td>
         <td>${esc(num(v.gauss))}</td>
         <td>${ox(v.rod_cleaned, ['O', 'X'])}</td>
         <td>${verdict(v.verdict)}</td>
-        <td>${r ? esc(who(r.recorded_by)) : ''}</td>
+        <td class="signer">${r ? sign(r.recorded_by) : ''}</td>
         <td class="l sm">${esc(v.note)}</td></tr>`;
     }).join('');
     return `<table class="prt rows">
-      <colgroup><col style="width:22mm"><col style="width:24mm"><col><col style="width:22mm"><col style="width:31mm"><col style="width:22mm"><col style="width:30mm"></colgroup>
+      <colgroup><col style="width:22mm"><col style="width:30mm"><col><col style="width:22mm"><col style="width:28mm"><col style="width:25mm"><col style="width:26mm"></colgroup>
       <thead><tr><th>품명</th><th>측정시간</th><th>자력(가우스)</th><th>자석봉 청소</th><th>판정</th><th>작업자서명</th><th>비고</th></tr></thead>
       <tbody>${body}</tbody></table>`;
   }
@@ -141,11 +151,11 @@
         <td>${r ? `${esc(v.temp_c)} ℃` : '℃'}</td>
         <td>${r ? esc(minutesHm(v.dry_minutes)) : '시간 &nbsp; 분'}</td>
         <td>${verdict(v.verdict)}</td>
-        <td>${r ? esc(who(r.recorded_by)) : ''}</td>
+        <td class="signer">${r ? sign(r.recorded_by) : ''}</td>
         <td class="l sm">${esc(v.note)}</td></tr>`;
     }).join('');
     return `<table class="prt rows">
-      <colgroup><col style="width:22mm"><col style="width:24mm"><col><col style="width:24mm"><col style="width:31mm"><col style="width:22mm"><col style="width:30mm"></colgroup>
+      <colgroup><col style="width:22mm"><col style="width:30mm"><col><col style="width:24mm"><col style="width:28mm"><col style="width:25mm"><col style="width:26mm"></colgroup>
       <thead><tr><th>품명</th><th>측정시간</th><th>건조온도<br>(판넬온도)</th><th>건조시간</th><th>판정</th><th>서명</th><th>비고</th></tr></thead>
       <tbody>${body}</tbody></table>`;
   }
@@ -164,7 +174,7 @@
         <td>${r ? `<span class="sm">(${esc(v.phase)})</span> ${esc(clock(v.passed_at, doc.work_date))}` : ':'}</td>
         ${keys.map((k) => `<td>${esc(v[k])}</td>`).join('')}
         <td class="${v.verdict === '부적합' ? 'bad' : ''}">${esc(v.verdict)}</td>
-        <td>${r ? esc(who(r.recorded_by)) : ''}</td></tr>`;
+        <td class="signer">${r ? sign(r.recorded_by) : ''}</td></tr>`;
     }).join('');
     const sums = pad(doc.sections.summary || [], MIN_SUMMARY);
     const sumBody = sums.map((r) => {
@@ -172,7 +182,7 @@
       return `<tr><td>${esc(v.item_name)}</td><td>${esc(num(v.passed_qty))}</td><td class="${Number(v.detected_qty) > 0 ? 'bad' : ''}">${esc(num(v.detected_qty))}</td><td class="l sm">${esc(v.note)}</td></tr>`;
     }).join('');
     return `<table class="prt rows">
-      <colgroup><col style="width:22mm"><col style="width:26mm"><col><col><col><col><col><col style="width:16mm"><col style="width:22mm"></colgroup>
+      <colgroup><col style="width:22mm"><col style="width:30mm"><col><col><col><col><col><col style="width:16mm"><col style="width:25mm"></colgroup>
       <thead>
         <tr><th colspan="9" class="cap">금속검출기 감도 모니터링(판정 - ${esc(judge.replace('○', 'O'))})</th></tr>
         <tr><th>품 명</th><th>통과시간</th>${head}<th>판 정</th><th>서 명</th></tr>
