@@ -11,6 +11,9 @@
   const esc = (v) => String(v === undefined || v === null ? '' : v)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const pad = (list, n) => list.concat(Array(Math.max(0, n - list.length)).fill(null));
+  // 종이의 "왼쪽 합친 칸"(품명·중량). rowspan은 쪽을 못 나눠 표가 통째로 다음 쪽으로 밀리므로
+  // 행마다 칸을 두고 첫 행에만 내용, 사이 가로선은 지운다(매트릭스 1P-05).
+  const merged = (i, count, html) => `<td class="merge${i === 0 ? ' first' : ''}${i === count - 1 ? ' last' : ''}">${i === 0 ? html : ''}</td>`;
 
   let people = {};
   const who = (id) => (id === null || id === undefined ? '' : people[String(id)] || `staff ${id}`);
@@ -110,38 +113,40 @@
     const rows = pad(doc.sections.rounds || [], MIN_ROWS);
     const firstPhase = '작업시작 전';
     const lastPhase = '작업종료 후';
-    const left = `<td rowspan="${rows.length}"><div class="bold">${esc(doc.info.item_name)}</div><br>중량<br>( ${esc(num(doc.info.batch_qty_kg))} kg)</td>`;
+    const left = `<div class="bold">${esc(doc.info.item_name)}</div><br>중량<br>( ${esc(num(doc.info.batch_qty_kg))} kg)`;
     const body = rows.map((r, i) => {
       const v = r ? r.values : {};
       const phase = v.phase === firstPhase || v.phase === lastPhase ? `<div class="sm">${esc(v.phase)}</div>` : '';
-      return `<tr>${i === 0 ? left : ''}
+      return `<tr>${merged(i, rows.length, left)}
         <td>${r ? `${phase}${esc(clock(v.measured_at, doc.work_date))}` : ':'}</td>
         <td>${esc(num(v.gauss))}</td>
         <td>${ox(v.rod_cleaned, ['O', 'X'])}</td>
         <td>${verdict(v.verdict)}</td>
-        <td>${r ? esc(who(r.recorded_by)) : ''}</td></tr>`;
+        <td>${r ? esc(who(r.recorded_by)) : ''}</td>
+        <td class="l sm">${esc(v.note)}</td></tr>`;
     }).join('');
     return `<table class="prt rows">
-      <colgroup><col style="width:24mm"><col style="width:28mm"><col><col style="width:28mm"><col style="width:34mm"><col style="width:26mm"></colgroup>
-      <thead><tr><th>품명</th><th>측정시간</th><th>자력(가우스)</th><th>자석봉 청소</th><th>판정</th><th>작업자서명</th></tr></thead>
+      <colgroup><col style="width:22mm"><col style="width:24mm"><col><col style="width:22mm"><col style="width:31mm"><col style="width:22mm"><col style="width:30mm"></colgroup>
+      <thead><tr><th>품명</th><th>측정시간</th><th>자력(가우스)</th><th>자석봉 청소</th><th>판정</th><th>작업자서명</th><th>비고</th></tr></thead>
       <tbody>${body}</tbody></table>`;
   }
 
   function rows2bHtml(doc) {
     const rows = pad(doc.sections.rounds || [], MIN_ROWS);
-    const left = `<td rowspan="${rows.length}"><div class="bold">${esc(doc.info.item_name)}</div></td>`;
+    const left = `<div class="bold">${esc(doc.info.item_name)}</div>`;
     const body = rows.map((r, i) => {
       const v = r ? r.values : {};
-      return `<tr>${i === 0 ? left : ''}
+      return `<tr>${merged(i, rows.length, left)}
         <td>${r ? esc(clock(v.measured_at, doc.work_date)) : ':'}</td>
         <td>${r ? `${esc(v.temp_c)} ℃` : '℃'}</td>
         <td>${r ? esc(minutesHm(v.dry_minutes)) : '시간 &nbsp; 분'}</td>
         <td>${verdict(v.verdict)}</td>
-        <td>${r ? esc(who(r.recorded_by)) : ''}</td></tr>`;
+        <td>${r ? esc(who(r.recorded_by)) : ''}</td>
+        <td class="l sm">${esc(v.note)}</td></tr>`;
     }).join('');
     return `<table class="prt rows">
-      <colgroup><col style="width:24mm"><col style="width:28mm"><col><col style="width:30mm"><col style="width:34mm"><col style="width:26mm"></colgroup>
-      <thead><tr><th>품명</th><th>측정시간</th><th>건조온도<br>(판넬온도)</th><th>건조시간</th><th>판정</th><th>서명</th></tr></thead>
+      <colgroup><col style="width:22mm"><col style="width:24mm"><col><col style="width:24mm"><col style="width:31mm"><col style="width:22mm"><col style="width:30mm"></colgroup>
+      <thead><tr><th>품명</th><th>측정시간</th><th>건조온도<br>(판넬온도)</th><th>건조시간</th><th>판정</th><th>서명</th><th>비고</th></tr></thead>
       <tbody>${body}</tbody></table>`;
   }
 

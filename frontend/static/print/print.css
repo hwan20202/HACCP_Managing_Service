@@ -62,10 +62,13 @@ table.prt + table.prt { margin-top: -1px; }
 .prt .sm { font-size: 8pt; }
 .prt td.pre.sm { font-size: 7.5pt; line-height: 1.22; padding-top: 1mm; padding-bottom: 1mm; }
 /* 3P(캔디류)는 종이 1장에 맞게 더 촘촘히 */
-[data-type="CCP-3P"] .prt th, [data-type="CCP-3P"] .prt td { padding-top: 1mm; padding-bottom: 1mm; }
-[data-type="CCP-3P"] .rows td { height: 7mm; }
-[data-type="CCP-3P"] .sum td { height: 5.5mm; }
+[data-type="CCP-3P"] .prt th, [data-type="CCP-3P"] .prt td { padding-top: .8mm; padding-bottom: .8mm; }
+[data-type="CCP-3P"] .rows td { height: 6.5mm; }
+[data-type="CCP-3P"] .sum td { height: 5mm; }
+[data-type="CCP-3P"] .devs td { height: 7.5mm; }
 [data-type="CCP-3P"] .guide3p td { font-size: 8pt; }
+[data-type="CCP-3P"] .prt-head td.sign { height: 13mm; }
+[data-type="CCP-3P"] td.pre.sm { font-size: 7.2pt; line-height: 1.18; }
 .prt .muted { color: #555; }
 .prt .bold { font-weight: 700; }
 .prt .bad { font-weight: 700; text-decoration: underline; }
@@ -87,6 +90,8 @@ table.prt + table.prt { margin-top: -1px; }
 .ox.on { border: 1.2px solid var(--ink); border-radius: 50%; font-weight: 700; }
 .chk { white-space: nowrap; }
 .rows td { height: 7.5mm; }
+.prt td.merge { border-top: 0; border-bottom: 0; vertical-align: top; padding-top: 3mm; }
+.prt td.merge.last { border-bottom: 1px solid var(--line); }
 .sum td { height: 6mm; }
 .devs td { height: 10mm; }
 
