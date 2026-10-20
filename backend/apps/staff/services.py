@@ -52,7 +52,7 @@ def active_ids():
 def active_people():
     """활성 직원 [{id, staff_code, name}] id 순.
 
-    P14 ROLE-A02 — 화면 사람 표시 "이름(코드)", DR-07.
+    P14 ROLE-A02 — 화면 사람 표시 "이름(코드)", D-185.
     """
     return [
         {"id": sid, "staff_code": code, "name": name}

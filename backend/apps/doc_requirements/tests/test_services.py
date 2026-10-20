@@ -431,7 +431,7 @@ class BoundaryTests(TestCase):
         "apps.documents.services",
         "apps.approvals.services",
         "apps.staff.services",
-        "apps.staff.roles",  # P14 공용 역할 모듈(테이블 없음, ROLE-NFR-01·DR-03)
+        "apps.staff.roles",  # P14 공용 역할 모듈(테이블 없음, ROLE-NFR-01·D-181)
         "apps.core.",
         "django",
         # P9 periodic.py(규칙 파일 읽기·날짜 계산): 표준 라이브러리는 계층과 무관(S4 G1)

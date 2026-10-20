@@ -46,7 +46,7 @@ def batch_documents(request, batch_id):
 @require_http_methods(["GET"])
 @_api
 def incoming_inspections(request):
-    """REQ-A03: 입고일 묶음 조회 ?received_date=YYYY-MM-DD (X-Staff-Id 선택 — r14 DR-24 Q7 b)."""
+    """REQ-A03: 입고일 묶음 조회 ?received_date=YYYY-MM-DD (X-Staff-Id 선택 — r14 D-202 Q7 b)."""
     with step("REQ-BDL-01", "API", "날짜 형식·현재 사용자"):
         raw = request.GET.get("received_date") or ""
         try:

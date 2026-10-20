@@ -166,7 +166,7 @@
     + (correcting ? ` <span class="te-count"><span class="badge te-chip-fix">정정</span> ${correcting}</span>` : '');
   const mmdd = (day) => String(day || '').slice(5);
   // DOC-SC-01 묶음 줄(P7 Q7): 육안검사(D03)는 입고일마다 1줄. 필터 중이면 "D03 필터 n / 전체 m건"(검토 A3 — S5에서 판단)
-  // P14 DOC-SC-10: "▸ 내 칸", 내 칸이 2개면 "▸ 내 칸 2개"(r7 — 예전 "내 차례", DR-24 Q2 b: 칸 사이 순서 없음)
+  // P14 DOC-SC-10: "▸ 내 칸", 내 칸이 2개면 "▸ 내 칸 2개"(r7 — 예전 "내 차례", D-202 Q2 b: 칸 사이 순서 없음)
   const myTurn = (slots) => (slots && slots.length ? ` · <b class="te-my-turn">▸ 내 칸${slots.length > 1 ? ` ${slots.length}개` : ''}</b>` : '');
   const bundleRow = (b) => (b.bundle_unit === 'week' ? weekRow(b) : `
             <tr class="te-row-link te-row-bundle" data-bundle="${b.work_date}">
@@ -1598,7 +1598,7 @@
       const inspector = info && info.values.inspector ? `<span>점검자 <b>${T.personHtml(info.values.inspector)}</b></span>` : '';
       // P14 S1-Q1: [정정 시작]은 담당자·팀장만(서버 permissions.start_correction) — 아니면 비활성 + 이유
       const mayCorrect = !!(d.permissions && d.permissions.start_correction);
-      // P14 r13(DR-23) ROLE-R07: 작성 버튼은 상태로 보이되 permissions.write가 없으면 비활성 + 머리 아래 한 줄(화면 r6 3.3)
+      // P14 r13(D-201) ROLE-R07: 작성 버튼은 상태로 보이되 permissions.write가 없으면 비활성 + 머리 아래 한 줄(화면 r6 3.3)
       const mayWrite = !!(d.permissions && d.permissions.write);
       this.mayWrite = !!api.staffId && mayWrite;  // 섹션·파일·개선조치 영역이 함께 씀
       const writeOff = !api.staffId ? 'disabled title="현재 사용자를 선택하세요"' : (mayWrite ? '' : `disabled title="${esc(T.WRITE_WHY)}"`);
@@ -1943,7 +1943,7 @@
 
     // ================================================= 이탈·개선조치 영역 (P4-S1 (5), F19~F21)
     // 문서 상태와 상관없이 언제든 저장한다. 문서 버전과 무관하게 개선조치 자기 version으로 충돌을 감지한다.
-    // S5 r2(DR-20 B2): 다시 그리기 전에 화면의 새 줄 값을 devDrafts에 담는다 — 안 그러면 [+ 추가]·새 줄 [취소] 때
+    // S5 r2(D-198 B2): 다시 그리기 전에 화면의 새 줄 값을 devDrafts에 담는다 — 안 그러면 [+ 추가]·새 줄 [취소] 때
     // 입력한 글자가 사라지고, 확인자는 기본값(담당자 + 팀장)으로 조용히 다시 체크된다
     syncDevDrafts(el) {
       (el ? [...el.querySelectorAll('tr[data-dev^="n"]')] : []).forEach((tr) => {
@@ -1969,7 +1969,7 @@
         rowOptions.push({ id: x.section_id, label: `${s.label} ${x.values.lot_number || `${i + 1}행`}` });
       }));
       const staffOpts = (sel) => T.staffOptions(sel);
-      // P14 ROLE-FR-12 r12(DR-21): 확인자는 고르지 않는다 — 새 개선조치를 저장할 때 서버가 이 양식 담당자 + HACCP팀장으로
+      // P14 ROLE-FR-12 r12(D-199): 확인자는 고르지 않는다 — 새 개선조치를 저장할 때 서버가 이 양식 담당자 + HACCP팀장으로
       // 자동 지정(DOC-DVC-01b: 담당자 먼저, 각각 id 순, 10명까지). 새 줄에는 그 미리 보기만(서버가 저장 때 다시 계산)
       const defaults = [...(d.owner_ids || [])];
       T.leaderIds().slice().sort((a, b) => a - b).forEach((id) => { if (!defaults.includes(id)) defaults.push(id); });
@@ -1980,7 +1980,7 @@
       const checkerCell = (x, key) => (key.startsWith('n')
         ? `<span class="te-hint" data-checkers-preview="${defaultCheckers.join(',')}">${T.peopleHtml(defaultCheckers, { max: 10, empty: '(없음)' })} · 저장 때 자동</span>`
         : `<span data-checkers="${(x.checker_ids || []).join(',')}">${T.peopleHtml(x.checker_ids || [], { max: 10, empty: '<span class="te-hint">–</span>' })}</span>`);
-      // r13 ROLE-R07: [+ 추가]·저장·삭제는 permissions.write. r14(DR-24 Q6 b): 저장된 줄 [저장](수정)은 내가 그 줄 확인자여도
+      // r13 ROLE-R07: [+ 추가]·저장·삭제는 permissions.write. r14(D-202 Q6 b): 저장된 줄 [저장](수정)은 내가 그 줄 확인자여도
       const me = Number(api.staffId);
       const mayWrite = this.mayWrite;
       const mayEdit = (x) => mayWrite || (!!api.staffId && (x.checker_ids || []).includes(me));
@@ -2031,7 +2031,7 @@
         return {
           section_id: v('section_id') ? num(v('section_id').value) : null, description: v('description').value.trim(),
           actor_id: num(v('actor_id').value), action_result: v('action_result').value.trim() || null,
-        };  // r12(DR-21): checker_ids는 보내지 않음 — 새 개선조치는 서버가 자동 지정, 저장된 확인자는 그대로
+        };  // r12(D-199): checker_ids는 보내지 않음 — 새 개선조치는 서버가 자동 지정, 저장된 확인자는 그대로
       };
       const reload = () => this.showDetail(d.document_id);
       el.querySelector('#devAdd').addEventListener('click', () => { this.syncDevDrafts(el); this.devDrafts.push({}); this.renderDeviations(d, schema, { synced: true }); });
@@ -2051,7 +2051,7 @@
           res = await api.patch(`deviations/${cur.deviation_id}`, { expected_version: cur.version, ...patch });
         }
         if (res.ok && res.data && res.data.checker_warning) {
-          // r14(DR-24 Q5 a): 확인자 기본값 0명 — 저장은 됨, 역할 설정 확인 알림
+          // r14(D-202 Q5 a): 확인자 기본값 0명 — 저장은 됨, 역할 설정 확인 알림
           const why = res.data.checker_warning === 'config_invalid' ? '역할 설정 파일 오류' : '이 양식에 담당자·HACCP팀장이 없음';
           T.toast(`개선조치를 저장했지만 확인자를 정하지 못했습니다(${why}) — 역할 설정을 확인하세요.`, 'error');
           reload();

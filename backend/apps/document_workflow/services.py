@@ -48,7 +48,7 @@ def _line_for(actor_id, document_id):
         s.note(type_code)
     with step("WF-SUB-03", "WF", "설정 상태·권한(ROLE-R01)") as s:
         try:
-            role = roles.require_submitter(actor_id, type_code)  # 담당자·작성 권한자·팀장(DR-20)
+            role = roles.require_submitter(actor_id, type_code)  # 담당자·작성 권한자·팀장(D-198)
         except ApiError as error:
             s.fail(error.code)
             raise

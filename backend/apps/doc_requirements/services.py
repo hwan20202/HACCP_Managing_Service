@@ -379,10 +379,10 @@ def docs_for_batch(batch_id):
 
 
 def _submit_check(actor_id, type_code, status, line):
-    """P14 묶음 문서별 상신 가능 여부(DR-12 S1-Q7). 반환 (can_submit, submit_block)."""
+    """P14 묶음 문서별 상신 가능 여부(D-190 S1-Q7). 반환 (can_submit, submit_block)."""
     if line["reason"] == "config_invalid":
         return False, "config_invalid"
-    if not roles.can_submit(actor_id, type_code):  # ROLE-R01: 담당자·작성 권한자·팀장(DR-20)
+    if not roles.can_submit(actor_id, type_code):  # ROLE-R01: 담당자·작성 권한자·팀장(D-198)
         return False, "role_required"
     if not line["ok"]:
         return False, line["reason"]
@@ -428,7 +428,7 @@ def _bundle_document(brief, approved, progress, submit=(False, None), can_write=
             k: progress[k]
             for k in ("request_id", "attempt", "status", "total", "approved", "pending")
         },
-        "my_slots": _my_slots(progress),  # P14: 내 칸이 2개일 수 있음(DR-05)
+        "my_slots": _my_slots(progress),  # P14: 내 칸이 2개일 수 있음(D-183)
         "can_submit": submit[0],
         "submit_block": submit[1],
         "can_write": can_write,  # r13 ROLE-R07
@@ -530,7 +530,7 @@ def _week_document(brief, progress, submit=(False, None), can_write=False):
             k: progress[k]
             for k in ("request_id", "attempt", "status", "total", "approved", "pending")
         },
-        "my_slots": _my_slots(progress),  # P14: 내 칸이 2개일 수 있음(DR-05)
+        "my_slots": _my_slots(progress),  # P14: 내 칸이 2개일 수 있음(D-183)
         "can_submit": submit[0],
         "submit_block": submit[1],
         "can_write": can_write,  # r13 ROLE-R07

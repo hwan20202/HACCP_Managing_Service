@@ -267,7 +267,7 @@ class ConfigInvalidTests(WriteCase):
 
 
 class CheckerWarningTests(WriteCase):
-    """ROLE-TC-49(r14 DR-24 Q5 a): 확인자 기본값 0명이면 저장 + checker_warning."""
+    """ROLE-TC-49(r14 D-202 Q5 a): 확인자 기본값 0명이면 저장 + checker_warning."""
 
     def test_no_holders(self):
         set_info(self.d03, {"inspector": 2}, actor=2)  # 역할이 0명이 돼도 점검자로 쓸 수 있게

@@ -184,7 +184,7 @@ class TodoTests(TodoTestCase):
     def test_tc005_mine(self):
         # P14: staff 4는 역할 없음 — 점검자로 지정된 문서만 내 문서
         periodic_doc("D12", WED, inspector=4)
-        ccp(12, WED, assignee=4)  # 예전 문서 담당자(assignee_id)는 더 이상 기준 아님(DR-09)
+        ccp(12, WED, assignee=4)  # 예전 문서 담당자(assignee_id)는 더 이상 기준 아님(D-187)
         d03(88, WED)  # 작성자만 staff 3
         periodic_doc("D10", WED, inspector=2)
         out = self.todo(WED, mine="1", actor=4)

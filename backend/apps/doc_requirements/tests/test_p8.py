@@ -68,7 +68,7 @@ class PeriodicBundleTests(TestCase):
                 "my_pending": 1,
             },
         )
-        # P14: 묶음 결재선 요약 — D10 담당자 칸 이름 "작성자"(DR-09)
+        # P14: 묶음 결재선 요약 — D10 담당자 칸 이름 "작성자"(D-187)
         self.assertEqual(
             [(s["role"], s["label"], s["candidate_ids"]) for s in body["approval_line"]["slots"]],
             [("owner", "작성자", [2, 3]), ("leader", "HACCP팀장", [1, 5])],
@@ -95,4 +95,4 @@ class PeriodicBundleTests(TestCase):
             body = response.json()
             self.assertEqual(body["code"], "VALIDATION_ERROR")
             self.assertEqual(body["details"][0]["path"], path)
-        self.assertEqual(self.get(staff=None).status_code, 200)  # P14 r14: 헤더 선택(DR-24 Q7 b)
+        self.assertEqual(self.get(staff=None).status_code, 200)  # P14 r14: 헤더 선택(D-202 Q7 b)

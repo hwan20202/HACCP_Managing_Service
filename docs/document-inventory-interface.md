@@ -11,7 +11,9 @@
 | 재호출 | 같은 LOT·배치로 다시 불러도 문서가 늘지 않음(기존 문서 반환) |
 | 반환 필드 | 여기 적힌 필드는 보장하고 바꾸지 않음. 그 밖의 필드가 더 있을 수 있음(무시해도 됨) |
 | 오류 | `apps.core.http.ApiError` 하위 예외(`code`, `message` — 사용자에게 보여줄 한국어, `details`). 잡지 않으면 호출자 전체 롤백 |
-| 공통 오류 코드 | `VALIDATION_ERROR` 400(입력), `INVALID_STAFF` 403(없는 담당자) |
+| 공통 오류 코드 | `VALIDATION_ERROR` 400(입력), `INVALID_STAFF` 403(없거나 비활성인 **호출한 직원**) |
+| 권한(P14) | 작성 요구 진입점(입고·생산·입고 취소 연쇄 삭제)은 **역할 검사를 하지 않음** — 누가 불러도 됨. 만들어진 문서의 작성자 저장 값은 호출한 직원 그대로이고, 문서 화면에는 "작성 요구(자동) · 실행 ○○"로 보임(D-201). 문서를 쓰는 것은 그 양식의 담당자·작성 권한자·HACCP팀장·점검자 |
+| 실제 함수 모양(2026-10-21 코드) | 2.1 = `require_for_lot(staff_id, lot_id, inspection=None)`, 2.3 = `require_for_batch(staff_id, batch_id)`, 입고 취소 = `delete_lot_documents(staff_id, lot_id)` — 사람·대상은 위치 인자. 수불 쪽 호출은 `apps/inventory/document_bridge.py`. 아래 2장의 이름·인자(`create_incoming_inspection` 등)는 처음 설계 때 모양 |
 | 문서 상태 | `draft` 작성중 / `completed` 작성완료 / `submitted` 결재중 / `approved` 승인 / `rejected` 반려 / `correcting` 정정 중 |
 | 문서 내용 | 문서 테이블을 직접 읽지 말고 2.4~2.6 조회 함수를 씀(직접 읽으면 미승인·정정 중 내용이 나올 수 있음) |
 

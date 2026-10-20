@@ -1,7 +1,7 @@
 """P14 r13·r14 작성 권한 — REQ 쪽 ROLE-TC-31·46·48·50 (p14-s2-spec.md 2.6, 10.6, 11장).
 
 묶음 문서마다 can_write(R07 — 점검자는 문서마다), 묶음 permissions.assign_inspector(R08),
-헤더 없는 묶음 조회(r14 DR-24 Q7 b), [내 문서]의 작성 권한자(r13), 주기 문서 만들기는 누구나(R06).
+헤더 없는 묶음 조회(r14 D-202 Q7 b), [내 문서]의 작성 권한자(r13), 주기 문서 만들기는 누구나(R06).
 """
 
 from django.test import TestCase

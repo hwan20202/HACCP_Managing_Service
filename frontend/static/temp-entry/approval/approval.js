@@ -33,7 +33,7 @@
   // 방어선 오류(WF-S2-Q4): 문서 상태와 회차가 어긋난 데이터
   const MISMATCH_TEXT = '문서 상태가 결재와 맞지 않아 처리하지 못했습니다. 아무것도 바뀌지 않았습니다. 관리자에게 확인을 요청하세요.';
 
-  // P14: 내가 처리할 수 있는 칸 = 후보(직접 지정 칸은 candidate_ids = [결재자]). 겸직자는 칸이 2개일 수 있다(DR-05)
+  // P14: 내가 처리할 수 있는 칸 = 후보(직접 지정 칸은 candidate_ids = [결재자]). 겸직자는 칸이 2개일 수 있다(D-183)
   const isMine = (s) => !!api.staffId && (s.candidate_ids || [s.approver_id]).map(String).includes(api.staffId);
   function mySlots(req) {
     if (!req || req.status !== 'in_progress' || !api.staffId) return [];
@@ -98,7 +98,7 @@
       </table></div>`;
   }
 
-  // 내 칸 줄: my_slots마다 한 줄 — 칸마다 따로 [반려] [승인](DR-08 X-17)
+  // 내 칸 줄: my_slots마다 한 줄 — 칸마다 따로 [반려] [승인](D-186 X-17)
   function myLine(req) {
     return mySlots(req).map((slot) => `
       <div class="te-my-slot" data-approval="${slot.approval_id}">
