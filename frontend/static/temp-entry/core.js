@@ -73,7 +73,8 @@
     async loadStaff() {
       if (this.staff) return this.staff;
       const result = await HaccpApi.get('staff');
-      this.staff = result.ok ? result.data.items : [];
+      // P14: /staff가 [{id, staff_code, name}]으로 바뀜 — 화면은 아직 id 목록으로 씀(P14 S5 전 호환, ISP-01)
+      this.staff = result.ok ? result.data.items.map((x) => (x && typeof x === 'object' ? x.id : x)) : [];
       if (HaccpApi.staffId && !this.staff.includes(Number(HaccpApi.staffId))) HaccpApi.setStaff('');
       return this.staff;
     },

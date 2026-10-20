@@ -15,4 +15,6 @@ urlpatterns = [
         api.cancel_submission,
         name="wf-cancel-submission",
     ),
+    # P12 출력(WF-A06)
+    path("print/sheet", api.print_sheet, name="wf-print-sheet"),
 ]

@@ -911,3 +911,63 @@ def document_progress(document_ids, actor_id):
                     {"approval_id": approval_id, "slot_no": slot_no, "label": label}
                 )
     return result
+
+
+# ------------------------------------------------ P12 A12 출력용 결재 칸 (p12-s2-spec 3.2)
+
+
+def _print_slot(slot):
+    return {
+        "slot_no": slot.slot_no,
+        "label": slot.label,
+        "role": slot.role,
+        "approver_id": slot.approver_id,
+        "state": slot.state,
+        "decided_at": _iso(slot.decided_at),
+    }
+
+
+def print_slots(document_ids):
+    """A12: 문서별 최신 회차(상태 무관)와 유효 승인 회차(A8과 같은 회차)의 칸. SQL 2개.
+
+    반환 {document_id: {latest: {request_id, attempt, status, slots}, approved?: {request_id,
+    attempt, snapshot, slots}}}. 회차가 없는 문서는 빠진다. 쓰기 없음.
+    """
+    ids = _ids(document_ids)
+    if not ids:
+        return {}
+    with step("APR-PRT-01", "APR", "최신 회차·최신 승인 회차"):
+        newest = (
+            ApprovalRequest.objects.filter(document_id=OuterRef("document_id"))
+            .order_by("-attempt")
+            .values("attempt")[:1]
+        )
+        newest_approved = (
+            ApprovalRequest.objects.filter(document_id=OuterRef("document_id"), status="approved")
+            .order_by("-attempt")
+            .values("attempt")[:1]
+        )
+        requests = list(
+            ApprovalRequest.objects.filter(document_id__in=ids)
+            .annotate(latest=Subquery(newest), latest_ok=Subquery(newest_approved))
+            .filter(Q(attempt=F("latest")) | Q(status="approved", attempt=F("latest_ok")))
+        )
+    with step("APR-PRT-02", "APR", "회차의 칸"):
+        slots = {}
+        for slot in Approval.objects.filter(
+            request_id__in=[r.request_id for r in requests]
+        ).order_by("request_id", "slot_no"):
+            slots.setdefault(slot.request_id, []).append(_print_slot(slot))
+    result = {}
+    for req in requests:
+        entry = result.setdefault(req.document_id, {})
+        head = {
+            "request_id": req.request_id,
+            "attempt": req.attempt,
+            "slots": slots.get(req.request_id, []),
+        }
+        if req.attempt == req.latest:
+            entry["latest"] = {**head, "status": req.status}
+        if req.status == "approved" and req.attempt == req.latest_ok:
+            entry["approved"] = {**head, "snapshot": req.snapshot_json}
+    return result
