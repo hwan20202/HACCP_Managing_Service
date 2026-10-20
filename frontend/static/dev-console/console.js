@@ -60,7 +60,20 @@
     batchConfig: { label: 'WF 일괄 설정 (WF-A05)', method: 'GET', flow: 'WF-CFG', uses: [], path: () => 'workflow/batch-config' },
     // ---- P12 출력 — print/p12-s4-impl.md 2장(WF-A06, 읽기 전용·헤더 없음)
     printSheet: { label: '출력 데이터 (WF-A06)', method: 'GET', uses: ['id'], path: (s) => `print/sheet?document_id=${s.id}`, doc: (s) => s.id,
-      flow: (record) => ((record.data && record.data.code) ? 'WF-PRT-NOT-PRINTABLE' : 'WF-PRT') },
+      flow: (record) => {
+        const data = record.data || {};
+        if (data.code) return 'WF-PRT-NOT-PRINTABLE';
+        if (data.kind === 'weekly') return 'WF-PRT-WK-DOC';  // D10 문서 → 그 주
+        if (data.kind === 'monthly') return 'WF-PRT-MON-DOC';  // D11 문서 → 그 달
+        return data.kind === 'receiving' ? 'WF-PRT-RCV-DOC' : 'WF-PRT';  // D03 문서 → 그 입고일 장
+      } },
+    printDay: { label: '출력 데이터 — 묶음 (WF-A06)', method: 'GET', uses: ['query'], path: (s) => `print/sheet?${s.query || 'kind=receiving&type=D03&date='}`,
+      flow: (record) => {
+        const data = record.data || {};
+        if (data.kind === 'weekly') return (data.days || []).some((d) => d.document_id) ? 'WF-PRT-WK' : 'WF-PRT-WK-EMPTY';
+        if (data.kind === 'monthly') return (data.weeks || []).some((w) => w.document_id) ? 'WF-PRT-MON' : 'WF-PRT-MON-EMPTY';
+        return (data.lines || []).length ? 'WF-PRT-RCV' : 'WF-PRT-RCV-EMPTY';
+      } },
     batchInspector: { label: '점검자 일괄 지정 (F25·A20)', method: 'POST', flow: 'DOC-BIN', uses: ['body', 'docId'], path: () => 'documents/batch-inspector', docs: (s) => idList(s.docId) || bodyDocs(s) },
     brief: { label: '문서 요약 여러 건 (F26·A21)', method: 'GET', flow: 'DOC-BRF', uses: ['query'], path: (s) => `documents/brief${s.query ? `?${s.query}` : ''}` },
     incoming: { label: 'REQ 입고일 묶음 (F05·A03)', method: 'GET', flow: 'REQ-BDL', uses: ['query'], path: (s) => `incoming-inspections${s.query ? `?${s.query}` : ''}` },
@@ -1542,7 +1555,7 @@
   );
 
   // ---------------------------------------------------------------- P12 출력 (print/p12-s4-impl.md · p12-s1-screens 8장)
-  const PRINT_HINT = 'seed_dev_print로 출력 확인용 CCP 문서를 넣으세요';
+  const PRINT_HINT = 'seed_dev_print로 출력 확인용 CCP·D03·D10·D12·D11 문서를 넣으세요';
   async function printDoc(code, status, pred = () => true) {
     try { return await p4Doc(code, status, pred); } catch (e) { throw new Error(`${code} ${status} 문서가 없습니다. ${PRINT_HINT}.`); }
   }
@@ -1557,6 +1570,31 @@
       prepare: async () => {
         const d = await printDoc('CCP-3P', 'correcting');
         return { func: 'printSheet', id: String(d.document_id) };
+      } }),
+    p12({ id: 'PRT-PS-03', label: 'D03 입고일 묶음(미작성 줄)', expect: '200 · WF-PRT-RCV 도식 일치(00·05·DOC-RQD·07·DOC-PRT-01·APR-PRT-01·02·06) · kind receiving, lines LOT 번호 순 · 작성중·반려 줄 printable false·values null·approval 비움, 작성완료 줄 값 있고 결재 칸 비움 · boxes 담당자·팀장, box_group 기록확인 · guide 6항목 · ④ 변화 없음 · [새 탭] /print/?kind=receiving&type=D03&date= 로 종이 확인',
+      prepare: async () => {
+        const d = await printDoc('D03', 'draft');
+        return { func: 'printDay', query: `kind=receiving&type=D03&date=${d.work_date}` };
+      } }),
+    p12({ id: 'PRT-PS-04', label: 'D03 문서로 열기(10줄 → 2쪽)', expect: '200 · WF-PRT-RCV-DOC 도식 일치(00~02·DOC-PRT-01 뒤 묶음 단계) · 응답은 그 문서의 입고일 장(key.date = 문서 작업일), 시드 날짜면 lines 10 · [새 탭] /print/?document_id= 로 9줄 + 1줄, 머리 반복, 관리기준·이탈 표는 마지막 쪽',
+      prepare: async () => {
+        const d = await printDoc('D03', 'approved');
+        return { func: 'printSheet', id: String(d.document_id) };
+      } }),
+    p12({ id: 'PRT-PS-05', label: 'D10 주(주말 칸·작성 안 함·정정 중)', expect: '200 · WF-PRT-WK 도식 일치 · kind weekly, key.date = 월요일 · days 월~금 + 문서 있는 토·일, 시드 주면 토 칸 있음 · 작성 안 함·결재중 아닌 출력 불가 칸 values null · 정정 중 칸 = 승인본 값 · boxes 작성자·HACCP팀장 = 그 주 가장 최근 승인자 · inspector_id = 가장 늦은 요일 문서 · latest_dates · ④ 변화 없음 · [새 탭] /print/?kind=weekly&type=D10&date= 로 종이 확인',
+      prepare: async () => {
+        const d = await printDoc('D10', 'skipped');
+        return { func: 'printDay', query: `kind=weekly&type=D10&date=${d.work_date}` };
+      } }),
+    p12({ id: 'PRT-PS-06', label: 'D12 주(요일 결재·공정명)', expect: '200 · WF-PRT-WK 도식 일치 · kind weekly, type D12 · days[].approval = 그날 회차 칸(요일마다 다른 이름), days[].process_name = 그날 공정명(출력 가능 칸만) · inspector_id null(점검자 출력 안 함) · ④ 변화 없음 · [새 탭] /print/?kind=weekly&type=D12&date= 로 종이 확인',
+      prepare: async () => {
+        const d = await printDoc('D12', 'approved');
+        return { func: 'printDay', query: `kind=weekly&type=D12&date=${d.work_date}` };
+      } }),
+    p12({ id: 'PRT-PS-07', label: 'D11 월(4~5주·특이사항)', expect: '200 · WF-PRT-MON 도식 일치 · kind monthly, key.month · weeks = 그 달 월요일 수(4개면 5주 칸 없음) · 주 칸 checked_on · 작성중·작성 안 함 주 values null · remarks = 출력 가능 주만 · boxes 그 달 가장 최근 승인자 · ④ 변화 없음 · [새 탭] /print/?kind=monthly&type=D11&month= 로 종이 확인',
+      prepare: async () => {
+        const d = await printDoc('D11', 'approved');
+        return { func: 'printDay', query: `kind=monthly&type=D11&month=${d.work_date.slice(0, 7)}` };
       } }),
     p12({ id: 'PRT-PS-08', label: '출력 불가(작성중)', expect: '409 NOT_PRINTABLE_STATUS · WF-PRT-NOT-PRINTABLE(00~02, DOC-PRT-01) — APR 단계 없음 · ④ 변화 없음',
       prepare: async () => {

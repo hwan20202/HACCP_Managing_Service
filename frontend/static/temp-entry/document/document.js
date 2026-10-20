@@ -24,8 +24,10 @@
   // P8 F29 최근 값 제안(D12 공정명 — p8-s0 F5). 화면이 아는 양식 필드 목록
   const RECENT_FIELDS = { D12: ['process_name'] };
   const WEEK_TYPES = ['D10', 'D12'];  // 주 묶음 양식(DOC BUNDLE_UNITS week · REQ WEEK_BUNDLE_TYPES와 같음)
-  // P12 출력: 문서 1건 = 종이 1장인 양식(WF PRINT_SHEETS single)과 출력 가능 상태(작성중·반려·작성 안 함 제외)
-  const PRINT_TYPES = ['CCP-1P', 'CCP-2B', 'CCP-3P'];
+  // P12 출력: 출력하는 양식(WF PRINT_SHEETS)과 출력 가능 상태(작성중·반려·작성 안 함 제외).
+  // CCP = 문서 1건 = 종이 1장, D03 = 그 문서의 입고일 장(p12-d03-policy.md 11), D10 = 그 문서의 주(주말 포함 — DP-12)
+  const PRINT_TYPES = ['CCP-1P', 'CCP-2B', 'CCP-3P', 'D03', 'D10', 'D12', 'D11'];  // D11 = 그 달(DP-17)
+  const WEEK_PRINT_TYPES = ['D10', 'D12'];  // 주 묶음 [주 출력](DP-12·13)
   const PRINTABLE = ['completed', 'submitted', 'approved', 'correcting'];
   // P8 점검표 섹션: 1행 섹션이고 필드에 표시용 키 group(관리 구분)이 있으면 종이처럼 표로(p8-s1-screens 2장)
   const isChecklist = (section) => !section.repeat && section.fields.some((fd) => fd.group);
@@ -252,6 +254,9 @@
         .join('');
       // [육안검사 오늘](P7 DOC-SC-01): 오늘 묶음 상세(DOC-SC-10)를 연다(P6a-S1-Q6 목록 필터 대체)
       const d03 = templates.find((t) => t.type_code === 'D03');
+      // P12 D11 [월 출력](S1 7장): 양식 필터가 D11일 때만 [월 ▾] + [월 출력]
+      const d11Ids = templates.filter((t) => t.type_code === 'D11').map((t) => String(t.template_id));
+      const thisMonth = today(0).slice(0, 7);
       this.root.innerHTML = `
         <div class="fade-in" id="teDocList">
           ${this.boxHead()}
@@ -267,6 +272,10 @@
               <label class="te-check" title="정정 중 + 정정 꼬리표가 붙은 작성완료·결재중"><input type="checkbox" id="fCorrecting" ${f.correcting ? 'checked' : ''}> 정정 진행 중 전체</label>
               <button class="btn btn-secondary" id="fSearch">조회</button>
               ${d03 ? '<button class="btn btn-secondary" id="fD03Today" title="오늘 입고된 LOT의 육안검사 묶음 상세">육안검사 오늘</button>' : ''}
+              <span class="te-month-print" id="fMonthWrap" ${d11Ids.includes(String(f.template_id)) ? '' : 'hidden'}>
+                <input type="month" class="form-control" id="fMonth" value="${(f.month || thisMonth)}" max="${thisMonth}" title="출력할 달">
+                <button class="btn btn-secondary" id="fMonthPrint" title="그 달 방충방서점검표(주 문서 4~5주)">월 출력</button>
+              </span>
             </div>
             <div class="te-table-wrap" id="teListBody">${this.skeleton()}</div>
           </div>
@@ -283,6 +292,12 @@
         this.loadList();
       };
       $('#fSearch').addEventListener('click', search);
+      $('#fTemplate').addEventListener('change', () => { $('#fMonthWrap').hidden = !d11Ids.includes($('#fTemplate').value); });
+      $('#fMonthPrint').addEventListener('click', () => {
+        const month = $('#fMonth').value || thisMonth;
+        f.month = month;
+        window.open(`/print/?kind=monthly&type=D11&month=${month}`, '_blank');
+      });
       if (d03) {
         $('#fD03Today').addEventListener('click', () => this.showBundle(today(0), { page: 'list' }));
       }
@@ -609,7 +624,7 @@
           ${btn('bdInspector', '점검자 지정', n.inspector)} ${btn('bdSubmit', '선택 상신', n.submit)} ${btn('bdApprove', '선택 승인', n.approve)}
           <span class="te-hint" id="bdPicked">선택 ${picked.length}건${over ? ` — <span class="te-error-text">한 번에 ${max}건까지</span>` : ''}</span>
           <span style="flex:1"></span>
-          <button class="btn btn-secondary btn-sm" disabled title="입고일 묶음 출력(DOC-SC-12)은 스프린트 3">출력 미리보기 <span class="te-hint">(스프린트 3)</span></button>
+          <button class="btn btn-secondary btn-sm" id="bdPrint" title="이 입고일의 원료/부자재 육안검사일지(작성완료 뒤 문서만 검사 값)">출력</button>
         </div>
         <div class="te-table-wrap"><table class="data-table" id="bdTable">
           <thead><tr><th class="te-check-col"><input type="checkbox" id="bdAll" ${rows.length && picked.length === rows.length ? 'checked' : ''} ${rows.length ? '' : 'disabled'} title="보이는 줄 전체"></th>
@@ -651,6 +666,7 @@
         onDone: () => { this.bundle.selected = new Set(); this.showBundle(this.bundle.day, this.bundle.origin); },
         openDoc: (id) => { this.bundle.selected = new Set(); this.openFromBundle(id); },
       };
+      $('#bdPrint').addEventListener('click', () => window.open(`/print/?kind=receiving&type=D03&date=${this.bundle.day}`, '_blank'));
       $('#bdApprove').addEventListener('click', () => B.openApprove(picked, { origin: 'bundle', ...after }));
       $('#bdSubmit').addEventListener('click', () => B.openSubmit(picked, data.default_slots, after));
       $('#bdInspector').addEventListener('click', () => B.guardOpen(async () => this.openInspector(picked, after, max)));
@@ -752,7 +768,9 @@
           ${btn('wkInspector', '점검자 지정', n.inspector)} ${btn('wkSubmit', '선택 상신', n.submit)} ${btn('wkApprove', '선택 승인', n.approve)} ${btn('wkSkip', '작성 안 함', n.skip)}
           <span class="te-hint" id="wkPicked">선택 ${picked.length}건${over ? ` — <span class="te-error-text">한 번에 ${max}건까지</span>` : ''}</span>
           <span style="flex:1"></span>
-          <button class="btn btn-secondary btn-sm" disabled title="주 출력(PRT-SC-04·05)은 P12">주 출력 <span class="te-hint">(P12)</span></button>
+          ${WEEK_PRINT_TYPES.includes(data.type_code)
+            ? `<button class="btn btn-secondary btn-sm" id="wkPrint" ${this.week.start > today() ? 'disabled title="아직 오지 않은 주입니다"' : 'title="이 주의 점검표(주말 문서가 있으면 그 요일 칸 포함)"'}>주 출력</button>`
+            : '<button class="btn btn-secondary btn-sm" disabled title="주 출력은 다음 단계(P12)">주 출력 <span class="te-hint">(P12)</span></button>'}
         </div>
         <div class="te-table-wrap"><table class="data-table" id="wkTable">
           <thead><tr><th class="te-check-col"><input type="checkbox" id="wkAll" ${rows.length && picked.length === rows.length ? 'checked' : ''} ${rows.length ? '' : 'disabled'} title="문서 있는 날 전체"></th>
@@ -761,6 +779,7 @@
         </table></div>
         ${data.weekend.length ? `<div class="te-bundle-missing" id="wkWeekend">주말 문서 ${data.weekend.length}건 별도: ${data.weekend.map((x) => `<a href="#" class="te-lot-link" data-open-doc="${x.document.document_id}">${mmdd(x.work_date)} (${WEEKDAY[x.weekday % 7]}) #${x.document.document_id}</a>`).join(', ')}</div>` : ''}`;
       const $ = (sel) => body.querySelector(sel);
+      $('#wkPrint')?.addEventListener('click', () => window.open(`/print/?kind=weekly&type=${encodeURIComponent(data.type_code)}&date=${this.week.start}`, '_blank'));
       body.querySelectorAll('[data-pick]').forEach((c) => c.addEventListener('change', () => {
         const id = Number(c.dataset.pick);
         if (c.checked) selected.add(id); else selected.delete(id);
@@ -1575,7 +1594,7 @@
               <div class="card-title">${statusCell(d.status, !!fixing)} ${requirementChip(d)}</div>
               <div class="page-actions">
                 <button class="btn btn-secondary btn-sm" id="btnList">${this.detailBack ? '뒤로' : '목록'}</button>
-                ${PRINT_TYPES.includes(d.template.type_code) ? `<button class="btn btn-secondary btn-sm" id="btnPrint" ${PRINTABLE.includes(d.status) ? '' : 'disabled title="작성완료 뒤 출력할 수 있습니다"'}>출력</button>` : ''}
+                ${PRINT_TYPES.includes(d.template.type_code) ? `<button class="btn btn-secondary btn-sm" id="btnPrint" ${PRINTABLE.includes(d.status) ? (d.template.type_code === 'D03' ? `title="입고일 ${d.work_date} 육안검사일지(그날 D03 전체)"` : WEEK_PRINT_TYPES.includes(d.template.type_code) ? 'title="이 문서가 들어간 주의 점검표"' : d.template.type_code === 'D11' ? 'title="이 문서가 들어간 달의 방충방서점검표"' : '') : 'disabled title="작성완료 뒤 출력할 수 있습니다"'}>출력</button>` : ''}
                 ${canEdit ? `<button class="btn btn-primary btn-sm" id="btnEdit" ${api.staffId ? '' : 'disabled'}>수정</button>` : ''}
                 ${canComplete ? `<button class="btn btn-primary te-btn-complete btn-sm" id="btnComplete" ${api.staffId ? '' : 'disabled'}>작성완료</button>` : ''}
                 ${canReopen ? `<button class="btn btn-secondary btn-sm" id="btnReopen" ${api.staffId ? '' : 'disabled'}>작성 재개</button>` : ''}

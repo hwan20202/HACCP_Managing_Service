@@ -15,6 +15,10 @@
 .te-filters .form-group { margin: 0; }
 .te-filters .form-control { min-width: 8rem; }
 .te-check { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.82rem; color: var(--text-secondary); }
+/* P12 D11 [월 출력](문서함 전체 문서 — 양식 D11 필터일 때) */
+.te-month-print { display: inline-flex; align-items: center; gap: 0.4rem; }
+.te-month-print[hidden] { display: none; }
+.te-month-print input[type=month] { width: 9.5rem; }
 .te-table-wrap { overflow-x: auto; }
 .te-row-link { cursor: pointer; }
 .te-row-link:hover td { background: var(--bg-card-hover); }
