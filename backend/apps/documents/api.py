@@ -48,7 +48,14 @@ def _actor(request, step_id):
 @require_http_methods(["GET"])
 @_api
 def staff_list(request):
-    return json_response({"items": services.list_staff()})
+    # P14 S5 r1(Q1 b): ?include_inactive=1이면 비활성 포함 + is_active(명세 10.2)
+    value = request.GET.get("include_inactive")
+    if value not in (None, "", "0", "1"):
+        raise ApiError(
+            "조회 조건을 확인하세요.",
+            [{"path": "include_inactive", "code": "invalid", "message": "0 또는 1"}],
+        )
+    return json_response({"items": services.list_staff(include_inactive=value == "1")})
 
 
 @require_http_methods(["GET"])

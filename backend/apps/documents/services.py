@@ -407,9 +407,14 @@ def _detail(document_id):
 # ---------------------------------------------------------------- F01~F03 조회
 
 
-def list_staff():
-    """활성 직원 [{id, staff_code, name}](P14 ROLE-A02 — 예전에는 id 목록, DR-07)."""
+def list_staff(include_inactive=False):
+    """활성 직원 [{id, staff_code, name}](P14 ROLE-A02 — 예전에는 id 목록, DR-07).
+
+    include_inactive면 비활성 포함 + is_active(S5 r1 Q1 b — 지난 기록의 사람 표시용).
+    """
     with step("DOC-STF-01", "DOC", "staff 목록"):
+        if include_inactive:
+            return staff_services.all_people()
         return staff_services.active_people()
 
 
@@ -2326,14 +2331,12 @@ def document_roles(document, actor_id=None):
         owner_ids = sorted(roles.owners(type_code))
         line = roles.approval_line(type_code)
     with step("DOC-GET-05", "DOC", "권한(현재 사용자)") as s:
-        allowed = (
-            actor_id is not None
-            and roles.config_error() is None
-            and (roles.is_owner(actor_id, type_code) or roles.is_leader(actor_id))
-        )
+        usable = actor_id is not None and roles.config_error() is None
+        may_submit = usable and roles.can_submit(actor_id, type_code)  # R01 + 작성 권한자(DR-20)
+        may_correct = usable and (roles.is_owner(actor_id, type_code) or roles.is_leader(actor_id))
         permissions = {
-            "submit": allowed and line["ok"] and document["status"] in SUBMITTABLE,
-            "start_correction": allowed and document["status"] in CORRECTABLE,
+            "submit": may_submit and line["ok"] and document["status"] in SUBMITTABLE,
+            "start_correction": may_correct and document["status"] in CORRECTABLE,  # R04
         }
         s.note(str(permissions))
     return {"owner_ids": owner_ids, "approval_line": line, "permissions": permissions}

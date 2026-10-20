@@ -18,14 +18,16 @@
 
   // P10(p10-s1-screens 2장): 문서함·결재함의 화면 id. 예전 temp-doc·temp-approval(북마크·콘솔 링크)도 같은 화면으로
   const PAGE_ALIAS = { 'temp-doc': 'doc-box', 'temp-approval': 'approval-box' };
-  const BOX_PAGES = ['doc-box', 'approval-box'];
+  const BOX_PAGES = ['doc-box', 'approval-box', 'role-view'];  // P14: 역할 보기도 같은 섹션(S1-Q3)
   const pageOf = (page) => PAGE_ALIAS[page] || page;
 
   const TempEntry = {
     screens: {},
     PAGE_ALIAS,
     pageOf,
-    staff: null,
+    staff: null,      // P14 ROLE-A02: 활성 직원 [{id, staff_code, name}] — 고르는 칸·현재 사용자(DR-07)
+    people: {},       // id → 직원(비활성 포함 — 지난 기록 표시, S5 r1 Q1 b)
+    roles: null,      // P14 ROLE-A01 GET /roles(헤더 없이 — 팀장·양식 담당자, 현재 사용자 선택의 역할 표시)
     container: null,
     config,
     STATUS,
@@ -72,17 +74,86 @@
 
     async loadStaff() {
       if (this.staff) return this.staff;
-      const result = await HaccpApi.get('staff');
-      this.staff = result.ok ? result.data.items : [];
-      if (HaccpApi.staffId && !this.staff.includes(Number(HaccpApi.staffId))) HaccpApi.setStaff('');
+      const [result, roles] = await Promise.all([HaccpApi.get('staff?include_inactive=1', { staffId: '' }), HaccpApi.get('roles', { staffId: '' })]);
+      const everyone = result.ok ? result.data.items : [];
+      this.people = Object.fromEntries(everyone.map((p) => [p.id, p]));
+      this.staff = everyone.filter((p) => p.is_active !== false);
+      this.roles = roles.ok ? roles.data : null;
+      if (HaccpApi.staffId && !this.staff.some((p) => p.id === Number(HaccpApi.staffId))) HaccpApi.setStaff('');
       return this.staff;
+    },
+
+    // ---------- P14 사람·역할 표시(p14-s1-screens 3장) ----------
+    ROLE_NAMES: { owner: '담당자', leader: 'HACCP팀장' },
+    staffIds() { return (this.staff || []).map((p) => p.id); },
+    // "이름(코드)", 비활성이면 "이름(코드) 비활성"(3.1). 직원 표에 없는 id(옛 데이터)만 #id
+    person(id) {
+      if (id === null || id === undefined || id === '') return '-';
+      const p = this.people[Number(id)];
+      if (!p) return `#${id}`;
+      return `${p.name}(${p.staff_code})${p.is_active === false ? ' 비활성' : ''}`;
+    },
+    personHtml(id) {
+      if (id === null || id === undefined || id === '') return '<span class="te-hint">-</span>';
+      const p = this.people[Number(id)];
+      if (!p) return `<span class="te-person te-person-unknown" data-person="${this.esc(id)}" title="직원 표에 없음(옛 데이터)">#${this.esc(id)}</span>`;
+      const off = p.is_active === false;
+      return `<span class="te-person${off ? ' te-person-off' : ''}" data-person="${p.id}">${this.esc(p.name)}<span class="te-person-code">(${this.esc(p.staff_code)})</span>${off ? ' <span class="te-person-inactive">비활성</span>' : ''}</span>`;
+    },
+    // 여러 명: 3명까지 이름, 넘으면 "외 n명"(마우스를 올리면 전체)
+    peopleHtml(ids, { max = 3, empty = '<span class="te-hint">(없음)</span>' } = {}) {
+      const list = (ids || []).map((x) => (typeof x === 'object' && x ? x.id : x));
+      if (!list.length) return empty;
+      const shown = list.slice(0, max).map((id) => this.personHtml(id)).join(', ');
+      const rest = list.length - max;
+      return rest > 0 ? `${shown} <span class="te-more" title="${this.esc(list.map((id) => this.person(id)).join(', '))}">외 ${rest}명</span>` : shown;
+    },
+    staffOptions(selected, { blank = '-' } = {}) {
+      return [`<option value="">${this.esc(blank)}</option>`].concat((this.staff || []).map((p) =>
+        `<option value="${p.id}" ${String(selected) === String(p.id) ? 'selected' : ''}>${this.esc(`${p.name}(${p.staff_code})`)}</option>`)).join('');
+    },
+    isLeader(id) {
+      return !!(this.roles && id && this.roles.leaders.some((p) => p.id === Number(id)));
+    },
+    ownerForms(id) {
+      return this.roles && id ? this.roles.forms.filter((f) => f.owners.some((p) => p.id === Number(id))).map((f) => f.type_code) : [];
+    },
+    // r4(DR-20): 작성 권한자 양식 — 상신만
+    writerForms(id) {
+      return this.roles && id ? this.roles.forms.filter((f) => (f.writers || []).some((p) => p.id === Number(id))).map((f) => f.type_code) : [];
+    },
+    ownersOf(typeCode) {
+      const form = this.roles && this.roles.forms.find((f) => f.type_code === typeCode);
+      return form ? form.owners.map((p) => p.id) : [];
+    },
+    leaderIds() { return this.roles ? this.roles.leaders.map((p) => p.id) : []; },
+    // 현재 사용자 선택(S1-Q4): 목록 = 역할 요약, 가장 높은 역할 = HACCP팀장 > 담당자 n
+    roleSummary(id) {
+      const parts = [];
+      if (this.isLeader(id)) parts.push('HACCP팀장');
+      const n = this.ownerForms(id).length;
+      if (n) parts.push(`담당자 ${n}`);
+      const w = this.writerForms(id).length;
+      if (w) parts.push(`작성 ${w}`);  // r4: 작성 권한자 양식 수
+      return parts.join(' · ');
+    },
+    // 칸 표시(3.2): 칸 이름이 역할 이름과 다르면 역할을 괄호로(D10 "작성자 (담당자)")
+    slotLabel(slot) {
+      const role = slot && this.ROLE_NAMES[slot.role];
+      const label = (slot && slot.label) || role || '-';
+      return role && label !== role ? `${label} (${role})` : label;
+    },
+    roleLink(text = '역할 보기') {
+      return `<a href="#" class="te-role-link" data-role-view>${this.esc(text)}</a>`;
     },
 
     // ---------- 공통 화면 요소 ----------
     topBar(title, desc, documentId, { temp = true } = {}) {
       const options = ['<option value="">선택하세요</option>']
-        .concat((this.staff || []).map((id) =>
-          `<option value="${id}" ${String(id) === HaccpApi.staffId ? 'selected' : ''}>staff ${id}</option>`))
+        .concat((this.staff || []).map((p) => {
+          const role = this.roleSummary(p.id);
+          return `<option value="${p.id}" ${String(p.id) === HaccpApi.staffId ? 'selected' : ''}>${this.esc(`${p.name}(${p.staff_code})${role ? ` · ${role}` : ''}`)}</option>`;
+        }))
         .join('');
       const consoleLink = config.devConsole
         ? `<a class="btn btn-secondary btn-sm" target="_blank" rel="noopener"
@@ -203,6 +274,15 @@
   };
 
   window.TempEntry = TempEntry;
+
+  // P14: [역할 보기] 링크(결재 영역·모달·폼 어디서든) — 열린 모달을 닫고 역할 보기 화면으로
+  document.addEventListener('click', (e) => {
+    const link = e.target.closest && e.target.closest('[data-role-view]');
+    if (!link) return;
+    e.preventDefault();
+    document.querySelectorAll('.te-modal-wrap').forEach((w) => w.remove());
+    TempEntry.open('role-view');
+  });
 
   // 쓰기 호출이 성공하면 배지를 다시 센다(여러 호출이 이어지면 한 번만)
   let badgeTimer = null;

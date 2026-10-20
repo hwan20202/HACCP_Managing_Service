@@ -354,3 +354,66 @@ class ApiGuardTests(RoleCase):
         )
         self.assertEqual(response.status_code, 400, response.content)
         self.assertIn("unknown_key", {d["code"] for d in response.json()["details"]})
+
+
+class WriterTests(RoleCase):
+    """ROLE-TC-39·40(r11, DR-20): 작성 권한자는 상신·재상신만.
+
+    결재 후보 아님, 정정·남의 취소 안 됨.
+
+    이 테스트의 설정: CCP_MONITORING·HYGIENE_CHECK 작성 권한자 = DEV-004(기본 설정에서는 역할 없음).
+    """
+
+    WRITER = NO_ROLE  # 4
+
+    def setUp(self):
+        data = default_roles()
+        for type_code in ("CCP_MONITORING", "HYGIENE_CHECK"):
+            data["forms"][type_code]["writers"] = ["DEV-004"]
+        self.use_roles(data)
+
+    def test_tc39_writer_submits_not_candidate(self):
+        out = self.submit(actor=self.WRITER)
+        slots = self.slots(out["request"]["request_id"])
+        self.assertEqual(
+            [(s["role"], s["candidate_ids"]) for s in slots],
+            [("owner", [1, 3]), ("leader", [1, 5])],
+        )  # 작성 권한자(4)는 후보 아님
+        self.assertEqual(out["request"]["requested_by"], self.WRITER)
+        document, _ = make_document(self.t["hygiene"], status="completed")
+        hygiene = wf.submit(self.WRITER, document.document_id, version_of(document.document_id))
+        self.assertEqual(
+            [(s["role"], s["candidate_ids"]) for s in self.slots(hygiene["request"]["request_id"])],
+            [("owner", [2, 3])],
+        )
+        # 재상신(자기 상신 취소 = 상신자라서 R02 → 작성완료 → 다시 상신)
+        wf.cancel_submission(self.WRITER, out["request"]["request_id"])
+        document_id = out["document"]["document_id"]
+        again = wf.submit(self.WRITER, document_id, version_of(document_id))
+        self.assertEqual(again["request"]["attempt"], 2)
+        with self.assertRaises(apr_errors.NotYourSlot):
+            wf.decide(self.WRITER, slot_ids(again["request"])[1], "approved")
+
+    def test_tc40_writer_cannot_correct_or_cancel_others(self):
+        out = self.submit()  # 담당자(3)가 상신
+        with self.assertRaises(apr_errors.NotRequester):
+            wf.cancel_submission(self.WRITER, out["request"]["request_id"])
+        ids = slot_ids(out["request"])
+        wf.decide(OWNER, ids[1], "approved")
+        wf.decide(LEADER, ids[2], "approved")
+        from apps.documents import services as doc
+
+        document_id = out["document"]["document_id"]
+        before = db_state(document_id)
+        with self.assertRaises(roles.RoleRequired) as caught:
+            doc.start_correction(self.WRITER, document_id, version_of(document_id), "재확인")
+        self.assertEqual(caught.exception.details[0]["required"], ["owner", "leader"])
+        self.assertEqual(db_state(document_id), before)
+
+    def test_tc41_required_lists_writer(self):
+        self.use_roles(default_roles())  # 4 = 역할 없음
+        document_id = new_document(self.t)
+        with self.assertRaises(roles.RoleRequired) as caught:
+            wf.submit(NO_ROLE, document_id, version_of(document_id))
+        self.assertEqual(caught.exception.details[0]["required"], ["owner", "writer", "leader"])
+        self.assertIn("작성 권한자", caught.exception.message)

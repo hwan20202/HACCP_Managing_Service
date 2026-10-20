@@ -94,7 +94,8 @@ const App = {
     document.getElementById('breadcrumb').textContent = breadcrumbs[page] || page;
     // [임시 진입점 T3] 개발 검증 탭은 temp-entry 모듈이 그린다 (dev-notes/common/temp-entry.md).
     // P10: 문서함·결재함(doc-box·approval-box)도 같은 모듈 — 예전 temp-doc·temp-approval은 TempEntry가 바꿔 엶
-    if ((page.startsWith('temp-') || page === 'doc-box' || page === 'approval-box') && window.TempEntry) { TempEntry.mount(page, container); return; }
+    // P14: 역할 보기(role-view)도 같은 모듈
+    if ((page.startsWith('temp-') || page === 'doc-box' || page === 'approval-box' || page === 'role-view') && window.TempEntry) { TempEntry.mount(page, container); return; }
 
 
     let html = '';

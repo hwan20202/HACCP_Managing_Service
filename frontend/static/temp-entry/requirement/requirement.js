@@ -116,7 +116,7 @@
         <td>${x.document_id ? `<a href="#" data-open-doc="${x.document_id}">#${x.document_id}</a> ${T.statusBadge(x.status)}` : '<span class="te-hint">–</span>'}</td>
       </tr>`).join('');
     return `<div class="te-req-result" id="teReqResult">
-      <div class="te-req-result-head"><b>주기 생성 결과</b> <span>${esc(range)} · 실행 staff ${esc(body.actor_id)}</span>
+      <div class="te-req-result-head"><b>주기 생성 결과</b> <span>${esc(range)} · 실행 ${T.personHtml(body.actor_id)}</span>
         <span id="prdTotals">만듦 ${t.created} · 이미 있음 ${t.existing} · 대상 아님 ${t.skipped_rule} · <span class="${t.failed ? 'te-prd-failcount' : ''}">실패 ${t.failed}</span></span>
         <span class="te-hint">${esc(r.at)} · ${r.ms}ms</span> ${traceLink}</div>
       ${t.failed ? `<div class="te-prd-failnote" id="prdFailNote">실패 ${t.failed}건 — 나머지는 만들어졌습니다.</div>` : ''}
@@ -350,7 +350,7 @@
           <div class="te-field"><label>양식</label>
             ${rules.length ? rules.map((x) => `<label class="te-check"><input type="checkbox" name="prd_type" value="${esc(x.type_code)}" checked> ${esc(x.type_code)} ${esc(x.name || '(사용 중인 양식 없음)')} <span class="te-hint">(${esc(ruleText(x))})</span></label>`).join('')
               : '<p class="te-hint">켜진 주기 규칙이 없습니다(periodic_rules.json).</p>'}</div>
-          <div class="te-field"><label>실행자</label><div class="te-ro-block">staff ${esc(api.staffId)} (현재 사용자)</div></div>
+          <div class="te-field"><label>실행자</label><div class="te-ro-block">${T.personHtml(api.staffId)} (현재 사용자)</div></div>
           <p class="te-status-note">이미 있는 날은 건드리지 않습니다. 미래 날짜는 만들 수 없습니다.</p>`,
         onSubmit: async (wrap) => {
           const v = (name) => wrap.querySelector(`[name="${name}"]`);

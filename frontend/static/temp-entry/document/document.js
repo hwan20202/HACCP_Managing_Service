@@ -160,6 +160,8 @@
     + (correcting ? ` <span class="te-count"><span class="badge te-chip-fix">정정</span> ${correcting}</span>` : '');
   const mmdd = (day) => String(day || '').slice(5);
   // DOC-SC-01 묶음 줄(P7 Q7): 육안검사(D03)는 입고일마다 1줄. 필터 중이면 "D03 필터 n / 전체 m건"(검토 A3 — S5에서 판단)
+  // P14 DOC-SC-10: "▸ 내 차례" 뒤에 내 칸이 2개면 "2칸"
+  const myTurn = (slots) => (slots && slots.length ? ` · <b class="te-my-turn">▸ 내 차례${slots.length > 1 ? ` ${slots.length}칸` : ''}</b>` : '');
   const bundleRow = (b) => (b.bundle_unit === 'week' ? weekRow(b) : `
             <tr class="te-row-link te-row-bundle" data-bundle="${b.work_date}">
               <td><span class="badge te-chip-bundle">묶음</span></td>
@@ -167,6 +169,7 @@
               <td>입고일 ${mmdd(b.work_date)} · ${b.count !== b.total ? `${esc(b.type_code)} 필터 ${b.count} / 전체 ${b.total}건` : `${esc(b.type_code)} ${b.count}건`}</td>
               <td>${b.work_date}</td>
               <td><span class="te-hint">–</span></td>
+              <td>${T.peopleHtml(T.ownersOf(b.type_code))}</td>
               <td>${statusSummary(b.status_counts, b.correcting_count)}</td>
               <td>${b.requirement ? `<span class="te-req">${REQUIREMENT[b.requirement]}</span>` : '<span class="te-hint">–</span>'}</td>
               <td><span class="te-hint">–</span></td>
@@ -179,6 +182,7 @@
               <td>${b.count !== b.total ? `필터 ${b.count} / 전체 ${b.total}일` : `${b.count}일`}</td>
               <td class="te-nowrap">${mmdd(b.work_date)}~${mmdd(b.period_end)}</td>
               <td><span class="te-hint">–</span></td>
+              <td>${T.peopleHtml(T.ownersOf(b.type_code))}</td>
               <td>${statusSummary(b.status_counts, b.correcting_count)}</td>
               <td><span class="te-req">${REQUIREMENT[b.requirement] || '–'}</span></td>
               <td><span class="te-hint">–</span></td>
@@ -260,7 +264,7 @@
               <div class="form-group"><label class="form-label">상태</label><select class="form-control" id="fStatus">${statusOptions}</select></div>
               <div class="form-group"><label class="form-label">대상</label><input class="form-control" id="fTarget" maxlength="50" placeholder="LOT·배치 번호" value="${esc(f.target)}"></div>
               <label class="te-check"><input type="checkbox" id="fMine" ${f.mine ? 'checked' : ''}> 내가 작성</label>
-              <label class="te-check"><input type="checkbox" id="fAssigned" ${f.assigned ? 'checked' : ''}> 내 담당</label>
+              <label class="te-check" title="내가 담당자인 양식의 문서(역할 설정)"><input type="checkbox" id="fAssigned" ${f.assigned ? 'checked' : ''}> 내 담당 양식</label>
               <label class="te-check" title="정정 중 + 정정 꼬리표가 붙은 작성완료·결재중"><input type="checkbox" id="fCorrecting" ${f.correcting ? 'checked' : ''}> 정정 진행 중 전체</label>
               <button class="btn btn-secondary" id="fSearch">조회</button>
               ${d03 ? '<button class="btn btn-secondary" id="fD03Today" title="오늘 입고된 LOT의 육안검사 묶음 상세">육안검사 오늘</button>' : ''}
@@ -314,7 +318,7 @@
             <div class="te-filters te-todo-bar">
               <div class="form-group"><label class="form-label">기준일</label><input type="date" class="form-control" id="tdDate" value="${s.date}" max="${seoulDay()}"></div>
               <span class="te-hint" id="tdDow">(${dow(s.date)})</span>
-              <label class="te-check" title="내가 점검자·담당자인 문서만(작성자는 보지 않음). 문서 없음 줄은 빠짐"><input type="checkbox" id="tdMine" ${s.mine ? 'checked' : ''}> 내 담당만</label>
+              <label class="te-check" title="내가 담당자이거나 점검자로 지정된 문서(작성자는 보지 않음). 문서 없음 줄은 빠짐"><input type="checkbox" id="tdMine" ${s.mine ? 'checked' : ''}> 내 문서</label>
               <span style="flex:1"></span>
               <span class="te-hint" id="tdSummary"></span>
               <span id="tdOlderSlot"></span>
@@ -336,7 +340,6 @@
       let target = esc(r.target_summary || '-');
       if (r.requirement === 'periodic') target = '<span class="te-req">⚙ 주기</span>';
       if (r.bundle) target = `입고 ${mmdd(r.bundle.received_date)} <span class="te-hint">(D03 ${r.bundle.count}건)</span>`;
-      const who = r.inspector_id || r.assignee_id;
       let button = `<button class="btn btn-secondary btn-sm" data-open="${r.document_id}">열기</button>`;
       if (r.kind === 'missing') button = `<button class="btn btn-primary btn-sm" data-make="${esc(r.type_code)}" data-day="${r.work_date}" ${api.staffId ? '' : 'disabled'}>만들기</button>`;
       else if (r.bundle) button = `<button class="btn btn-secondary btn-sm" data-bundle-day="${r.bundle.received_date}">열기</button>`;
@@ -346,7 +349,7 @@
           <td>${esc(r.type_code)} ${esc(r.template_name || '')}${tags}</td>
           <td>${target}</td>
           <td>${r.kind === 'missing' ? TODO_STATUS_NOTE.missing : T.statusBadge(r.status)}</td>
-          <td>${who ? `staff ${esc(who)}` : '<span class="te-hint">–</span>'}</td>
+          <td title="점검자/담당자">${r.inspector_id ? T.personHtml(r.inspector_id) : (r.kind === 'missing' ? '<span class="te-hint">–</span>' : T.peopleHtml(r.owner_ids, { empty: '<span class="te-hint">–</span>' }))}</td>
           <td>${button}</td>
         </tr>`;
     },
@@ -440,7 +443,7 @@
       const body = this.root.querySelector('#teListBody');
       body.innerHTML = this.skeleton();
       if ((f.mine || f.assigned) && !api.staffId) {
-        body.innerHTML = '<div class="te-empty">"내가 작성/내 담당"은 현재 사용자를 먼저 선택하세요.</div>';
+        body.innerHTML = '<div class="te-empty">"내가 작성/내 담당 양식"은 현재 사용자를 먼저 선택하세요.</div>';
         return;
       }
       const q = new URLSearchParams();
@@ -450,7 +453,7 @@
       if (f.status) q.set('status', f.status);
       if (f.target) q.set('target', f.target);
       if (f.mine) q.set('author_id', api.staffId);
-      if (f.assigned) q.set('assignee_id', api.staffId);
+      if (f.assigned) q.set('owner_id', api.staffId);  // P14 S4-C1: 내가 담당자인 양식
       if (f.correcting) q.set('correcting', 'true');
       q.set('page', f.page);
       const r = await api.get(`documents?${q}`);
@@ -468,14 +471,15 @@
       const pages = Math.max(1, Math.ceil(total / size));
       body.innerHTML = `
         <table class="data-table">
-          <thead><tr><th>번호</th><th>양식(버전)</th><th>대상</th><th>작업일</th><th>작성/담당</th><th>상태</th><th>작성 요구</th><th>작성일</th></tr></thead>
+          <thead><tr><th>번호</th><th>양식(버전)</th><th>대상</th><th>작업일</th><th>작성자</th><th>담당자</th><th>상태</th><th>작성 요구</th><th>작성일</th></tr></thead>
           <tbody>${items.map((d) => d.kind === 'bundle' ? bundleRow(d) : `
             <tr class="te-row-link" data-id="${d.document_id}">
               <td>${d.document_id}</td>
               <td>${esc(d.template.name)} v${d.template.version}</td>
               <td>${esc(d.target_summary || d.subject || '-')}</td>
               <td>${d.work_date}</td>
-              <td>staff ${d.created_by} / ${d.assignee_id ? `staff ${d.assignee_id}` : '-'}</td>
+              <td>${T.personHtml(d.created_by)}</td>
+              <td>${T.peopleHtml(T.ownersOf(d.template.type_code))}</td>
               <td>${statusCell(d.status, d.correcting)}</td>
               <td>${d.requirement ? `<span class="te-req">${REQUIREMENT[d.requirement]}</span>` : '<span class="te-hint">–</span>'}</td>
               <td>${T.fmtDateTime(d.created_at)}</td>
@@ -564,7 +568,8 @@
         return {
           document_id: x.document_id, lot: `${l.lot_number} · ${l.item_name}`, lot_number: l.lot_number,
           status: x.status, correcting: x.correcting, version: x.version, verdict: x.verdict, nonconforming: x.nonconforming,
-          inspector_id: x.inspector_id, attempt: x.progress ? x.progress.attempt : null, my_slot: x.my_slot, progress: x.progress,
+          inspector_id: x.inspector_id, attempt: x.progress ? x.progress.attempt : null, my_slots: x.my_slots || [], progress: x.progress,
+          can_submit: x.can_submit, submit_block: x.submit_block,  // P14: 일괄 상신 미리 표시(S1-Q7)
         };
       });
     },
@@ -584,14 +589,14 @@
       const n = {
         inspector: picked.filter((x) => EDITABLE.includes(x.status)).length,
         submit: picked.filter((x) => x.status === 'completed').length,
-        approve: picked.filter((x) => x.my_slot).length,
+        approve: picked.reduce((n, x) => n + x.my_slots.length, 0),  // P14: 내 칸 수 합(겸직자는 문서당 2칸)
       };
       const over = picked.length > max;
       const btn = (id, label, count) => `<button class="btn ${count ? 'btn-primary' : 'btn-secondary'} btn-sm" id="${id}" ${!count || over ? 'disabled' : ''}>${label} (${count})</button>`;
       const s = data.summary;
       const approval = (x) => {
         if (x.status === 'approved') return '완료';
-        if (x.status === 'submitted' && x.progress) return `승인 ${x.progress.approved}/${x.progress.total}${x.my_slot ? ' · <b class="te-my-turn">▸ 내 차례</b>' : ''}`;
+        if (x.status === 'submitted' && x.progress) return `승인 ${x.progress.approved}/${x.progress.total}${myTurn(x.my_slots)}`;
         if (x.progress && x.progress.status === 'cancelled') return '<span class="te-hint te-cancelled">취소됨</span>';  // P10: 최신 회차 상신 취소
         if (x.status === 'rejected') return '<span class="te-hint">반려</span>';
         return '<span class="te-hint">–</span>';
@@ -620,7 +625,7 @@
               <td>${esc(l.quantity || '-')}</td>
               <td><a href="#" class="te-lot-link" data-open-doc="${x.document_id}">#${x.document_id}</a></td>
               <td>${statusCell(x.status, x.correcting)}</td>
-              <td>${x.inspector_id ? `staff ${esc(x.inspector_id)}` : '<span class="te-hint">-</span>'}</td>
+              <td>${T.personHtml(x.inspector_id)}</td>
               <td>${x.verdict ? `<span class="${x.verdict === 'FAIL' ? 'te-judge-ng' : ''}">${x.verdict === 'FAIL' ? '부적합' : '적합'}</span>` : '<span class="te-hint">–</span>'}</td>
               <td>${x.approved_verdict ? `${x.approved_verdict === 'FAIL' ? '<span class="te-judge-ng">부적합</span>' : '적합'} <span class="te-hint">${x.approved ? `${x.approved.attempt}회차` : ''}</span>` : '<span class="te-hint">–</span>'}</td>
               <td>${approval(x)}</td>
@@ -649,7 +654,7 @@
         openDoc: (id) => { this.bundle.selected = new Set(); this.openFromBundle(id); },
       };
       $('#bdApprove').addEventListener('click', () => B.openApprove(picked, { origin: 'bundle', ...after }));
-      $('#bdSubmit').addEventListener('click', () => B.openSubmit(picked, data.default_slots, after));
+      $('#bdSubmit').addEventListener('click', () => B.openSubmit(picked, data.approval_line, after));
       $('#bdInspector').addEventListener('click', () => B.guardOpen(async () => this.openInspector(picked, after, max)));
     },
 
@@ -696,7 +701,8 @@
         return {
           document_id: d.document_id, lot: `${mmdd(x.work_date)} (${WEEKDAY[x.weekday % 7]})`, status: d.status, correcting: d.correcting,
           version: d.version, verdict: d.nonconforming === true ? 'FAIL' : (d.nonconforming === false ? 'PASS' : null), nonconforming: d.nonconforming,
-          inspector_id: d.inspector_id, attempt: d.progress ? d.progress.attempt : null, my_slot: d.my_slot, progress: d.progress,
+          inspector_id: d.inspector_id, attempt: d.progress ? d.progress.attempt : null, my_slots: d.my_slots || [], progress: d.progress,
+          can_submit: d.can_submit, submit_block: d.submit_block,  // P14: 일괄 상신 미리 표시(S1-Q7)
         };
       });
     },
@@ -711,7 +717,7 @@
       const n = {
         inspector: picked.filter((x) => EDITABLE.includes(x.status)).length,
         submit: picked.filter((x) => x.status === 'completed').length,
-        approve: picked.filter((x) => x.my_slot).length,
+        approve: picked.reduce((n, x) => n + x.my_slots.length, 0),  // P14: 내 칸 수 합(겸직자는 문서당 2칸)
         skip: picked.filter((x) => x.status === 'draft').length,
       };
       const over = picked.length > max;
@@ -719,7 +725,7 @@
       const s = data.summary;
       const approval = (x) => {
         if (x.status === 'approved') return '완료';
-        if (x.status === 'submitted' && x.progress) return `승인 ${x.progress.approved}/${x.progress.total}${x.my_slot ? ' · <b class="te-my-turn">▸ 내 차례</b>' : ''}`;
+        if (x.status === 'submitted' && x.progress) return `승인 ${x.progress.approved}/${x.progress.total}${myTurn(x.my_slots)}`;
         if (x.progress && x.progress.status === 'cancelled') return '<span class="te-hint te-cancelled">취소됨</span>';  // P10: 최신 회차 상신 취소
         if (x.status === 'rejected') return '<span class="te-hint">반려</span>';
         return '<span class="te-hint">–</span>';
@@ -734,10 +740,10 @@
           <td>${label}</td>
           <td><a href="#" class="te-lot-link" data-open-doc="${d.document_id}">#${d.document_id}</a></td>
           <td>${statusCell(d.status, d.correcting)}</td>
-          <td>${d.inspector_id ? `staff ${esc(d.inspector_id)}` : '<span class="te-hint">-</span>'}</td>
+          <td>${T.personHtml(d.inspector_id)}</td>
           <td>${d.status === 'skipped' ? '<span class="te-hint">–</span>' : counts(d.check_counts)}</td>
           <td>${d.nonconforming ? '<span class="te-judge-ng">부적합</span>' : (d.nonconforming === false ? '적합' : '<span class="te-hint">–</span>')}</td>
-          <td>${approval({ ...d, my_slot: d.my_slot })}</td>
+          <td>${approval({ ...d, my_slots: d.my_slots || [] })}</td>
         </tr>`;
       };
       body.innerHTML = `
@@ -774,7 +780,7 @@
         openDoc: (id) => { this.week.selected = new Set(); this.openFromWeek(id); },
       };
       $('#wkApprove').addEventListener('click', () => B.openApprove(picked, { origin: 'bundle', ...after }));
-      $('#wkSubmit').addEventListener('click', () => B.openSubmit(picked, data.default_slots, after));
+      $('#wkSubmit').addEventListener('click', () => B.openSubmit(picked, data.approval_line, after));
       $('#wkInspector').addEventListener('click', () => B.guardOpen(async () => this.openInspector(picked, after, max)));
       $('#wkSkip').addEventListener('click', () => B.guardOpen(async () => this.openSkip(picked, { ...after, title: `${data.type_code} ${picked.filter((x) => x.status === 'draft').length}건`, max })));
     },
@@ -843,11 +849,11 @@
       const m = B.modal(`점검자 지정 · ${targets.length}건`);
       const state = { inspector: '', busy: false, error: '' };
       const render = () => {
-        const options = ['<option value="">선택</option>'].concat((T.staff || []).map((id) => `<option value="${id}" ${String(id) === state.inspector ? 'selected' : ''}>staff ${id}</option>`)).join('');
+        const options = T.staffOptions(state.inspector, { blank: '선택' });
         m.body.innerHTML = `
           <p class="te-hint">기본정보의 점검자를 한 번에 바꿉니다(문서마다 저장, 버전 확인). 이미 같은 점검자인 문서는 "변화 없음"입니다.</p>
           ${state.error}
-          <ul class="te-target-list" id="bxTargets">${targets.map((x) => `<li data-target="${x.document_id}">${B.rowName(x)} <span class="te-hint">(지금: ${x.inspector_id ? `staff ${esc(x.inspector_id)}` : '-'})</span></li>`).join('')
+          <ul class="te-target-list" id="bxTargets">${targets.map((x) => `<li data-target="${x.document_id}">${B.rowName(x)} <span class="te-hint">(지금: ${esc(T.person(x.inspector_id))})</span></li>`).join('')
             || '<li class="te-hint">수정 가능한(작성중·반려·정정 중) 문서가 없습니다.</li>'}</ul>
           ${B.excludedHtml(excluded)}
           ${B.overLimit(targets.length, max)}
@@ -1009,8 +1015,8 @@
         recent[key] = res.ok ? res.data.items : [];
       }));
       const basic = document
-        ? { subject: document.subject || '', work_date: document.work_date, assignee_id: document.assignee_id ? String(document.assignee_id) : '', due_at: document.due_at ? document.due_at.slice(0, 16) : '' }
-        : { subject: '', work_date: today(0), assignee_id: '', due_at: '' };
+        ? { subject: document.subject || '', work_date: document.work_date, due_at: document.due_at ? document.due_at.slice(0, 16) : '' }
+        : { subject: '', work_date: today(0), due_at: '' };  // P14 Q3 a: 담당자(assignee_id)는 고르지 않음 — 양식 담당자
       this.form = {
         mode: document ? 'edit' : 'create', template: r.data, schema, sectionByKey, document,
         requirement: !!(document && document.record_key),
@@ -1041,8 +1047,7 @@
         const section = this.form.sectionByKey[row.key];
         return `<span data-computed="${row.uid}.${field.key}">${this.display(field, withComputed(section, row.values)[field.key])}</span>`;
       }
-      const staffOptions = ['<option value="">-</option>']
-        .concat((T.staff || []).map((id) => `<option value="${id}" ${String(v) === String(id) ? 'selected' : ''}>staff ${id}</option>`)).join('');
+      const staffOptions = T.staffOptions(v);
       const hinted = this.form.hinted.has(`${row.uid}.${field.key}`);
       const hintMark = hinted ? `<div class="te-hint">${field.date_window ? '기본값(작업일) — 저장하면 확정' : '자동 제안(같은 LOT 성적서)'}</div>` : '';
       switch (field.type) {
@@ -1238,13 +1243,12 @@
       const f = this.form;
       const d = f.document;
       const title = f.mode === 'create' ? `새 문서 › ${f.template.name} v${f.template.version}` : `문서 #${d.document_id} 수정 › ${f.template.name} v${f.template.version}`;
-      const staffOptions = (sel) => ['<option value="">-</option>']
-        .concat((T.staff || []).map((id) => `<option value="${id}" ${String(sel) === String(id) ? 'selected' : ''}>staff ${id}</option>`)).join('');
       const changed = this.basicChanges();
       const cls = (k) => (f.mode === 'edit' && k in changed ? 'te-field-changed' : '') + (f.errors[`basic.${k}`] ? ' te-field-error' : '');
       const basicErr = (k) => (f.errors[`basic.${k}`] ? `<div class="te-error-text">${esc(f.errors[`basic.${k}`])}</div>` : '');
       const future = f.basic.work_date > today(0) ? '<div class="te-hint">미래 날짜입니다(작성 지시용).</div>' : '';
-      const author = f.mode === 'create' ? (api.staffId ? `staff ${api.staffId} (자동)` : '현재 사용자 미선택') : `staff ${d.created_by}`;
+      const author = f.mode === 'create' ? (api.staffId ? `${T.person(api.staffId)} (자동)` : '현재 사용자 미선택') : T.person(d.created_by);
+      const owners = T.ownersOf(f.template.type_code);
 
       const sectionsHtml = f.schema.sections.map((s) => {
         const rows = f.rows.filter((r) => r.key === s.key);
@@ -1267,7 +1271,7 @@
         const canAdd = !s.system_rows;
         // 측정자 = 행 기록자(recorded_by). 설계 순서(판정 → 측정자 → 비고)대로 판정 열 바로 뒤에 둔다
         const recorder = hasComputed(s);
-        const recorderCell = (row) => `<td class="te-hint">${row.sectionId ? `staff ${(d.sections.find((x) => x.section_id === row.sectionId) || {}).recorded_by ?? '-'}` : (api.staffId ? `staff ${api.staffId}` : '-')}</td>`;
+        const recorderCell = (row) => `<td class="te-hint">${row.sectionId ? T.personHtml((d.sections.find((x) => x.section_id === row.sectionId) || {}).recorded_by) : T.personHtml(api.staffId || null)}</td>`;
         const afterField = (fd, html) => (recorder && fd.computed ? html : '');
         return `<div class="te-section">
           <div class="te-section-head"><span class="te-section-title">${esc(s.label)} <span class="te-hint">반복${s.max_rows ? ` · 최대 ${s.max_rows}행` : ''}${s.min_rows ? ` · 최소 ${s.min_rows}행(작성완료 때)` : ''}${limits ? ` · 한계기준: ${esc(limits)}` : ''}${s.system_rows ? ' · 행은 입고 때 자동으로 추가됩니다' : ''}</span></span>
@@ -1299,7 +1303,7 @@
             <div class="card-header"><div class="card-title">문서 정보 ${d ? requirementChip(d) : ''}</div><div class="te-hint">작성자: ${esc(author)}</div></div>
             <div class="te-grid">
               ${basicFields}
-              <div class="form-group"><label class="form-label">담당자</label><select class="form-control ${cls('assignee_id')}" data-basic="assignee_id">${staffOptions(f.basic.assignee_id)}</select>${basicErr('assignee_id')}</div>
+              <div class="form-group"><label class="form-label">담당자</label><div class="te-ro te-ro-block" id="teFormOwners">${owners.length ? T.peopleHtml(owners) : '<span class="te-judge-ng">(없음) ⚠</span>'} <span class="te-hint">(양식 담당자 — ${T.roleLink()})</span></div></div>
               <div class="form-group"><label class="form-label">마감</label><input type="datetime-local" class="form-control ${cls('due_at')}" data-basic="due_at" value="${esc(f.basic.due_at)}">${basicErr('due_at')}</div>
             </div>
             ${d ? `<div class="te-meta">${periodText(f.schema, d)}</div>` : ''}
@@ -1389,8 +1393,7 @@
     basicPayload(source) {
       const out = {};
       Object.entries(source).forEach(([k, v]) => {
-        if (k === 'assignee_id') out[k] = v === '' ? null : Number(v);
-        else if (k === 'subject' || k === 'due_at') out[k] = v === '' ? null : v;
+        if (k === 'subject' || k === 'due_at') out[k] = v === '' ? null : v;
         else out[k] = v;
       });
       return out;
@@ -1446,8 +1449,8 @@
     // ================================================= DOC-SC-06 수정 충돌 (ISS-001)
     changeSummary() {
       const f = this.form;
-      const labels = { subject: '대상', work_date: '작업일', assignee_id: '담당자', due_at: '마감' };
-      const out = Object.entries(this.basicChanges()).map(([k, v]) => `${labels[k]}: ${v === '' ? '(비움)' : (k === 'assignee_id' ? `staff ${v}` : v)}`);
+      const labels = { subject: '대상', work_date: '작업일', due_at: '마감' };
+      const out = Object.entries(this.basicChanges()).map(([k, v]) => `${labels[k]}: ${v === '' ? '(비움)' : v}`);
       f.schema.sections.forEach((s) => {
         const fieldLabel = (key) => (s.fields.find((fd) => fd.key === key) || { label: key }).label;
         const fmt = (values) => Object.entries(values).map(([k, v]) => `${fieldLabel(k)} ${v === null ? '(비움)' : v}`).join(', ');
@@ -1486,7 +1489,7 @@
       f.errorTitle = completion ? '작성완료할 수 없습니다. 아래 항목을 채운 뒤 저장하고 다시 작성완료하세요.' : null;
       (data.details || []).forEach((e) => {
         const path = e.path || '';
-        const basic = /^(?:document\.)?(subject|work_date|assignee_id|due_at)$/.exec(path);
+        const basic = /^(?:document\.)?(subject|work_date|due_at)$/.exec(path);
         const row = /^(sections(?:\.(?:update|add|delete))?\[[^\]#]+\])(?:\.values\.(\w+)|\.round)?$/.exec(path);
         const numbered = /^sections\[(\w+)#(\d+)\]\.values\.(\w+)$/.exec(path); // 작성완료 검사(VR-19)
         const section = /^sections\[(\w+)\]$/.exec(path);
@@ -1559,10 +1562,13 @@
       if (d.status === 'draft' && d.submitted_at) notes.draft = '상신 이력이 있어 삭제할 수 없습니다.';
       if (d.status === 'draft' && d.record_key) notes.draft = '작성 요구로 만들어진 문서입니다. 삭제할 수 없습니다.';
       if (canSkip) notes.draft = '주기 작성 요구 문서입니다. 휴무 등 작성하지 않는 날은 [작성 안 함]을 누르세요. 날짜를 잘못 골라 만들었으면 [삭제] — 규칙상 만드는 평일은 다음 주기 생성 때 다시 만들어집니다.';
-      if (skipped) notes.skipped = `작성 안 함: <b>${esc(d.skip.reason)}</b> — staff ${esc(d.skip.by)}, ${T.fmtDateTime(d.skip.at)}. 다시 작성하려면 [되돌리기](입력했던 값은 그대로).`;
+      if (skipped) notes.skipped = `작성 안 함: <b>${esc(d.skip.reason)}</b> — ${T.personHtml(d.skip.by)}, ${T.fmtDateTime(d.skip.at)}. 다시 작성하려면 [되돌리기](입력했던 값은 그대로).`;
       const counts = checkCounts(schema, d);
       const info = d.sections.find((s) => s.section_def === 'info');
-      const inspector = info && info.values.inspector ? `<span>점검자 <b>staff ${esc(info.values.inspector)}</b></span>` : '';
+      const inspector = info && info.values.inspector ? `<span>점검자 <b>${T.personHtml(info.values.inspector)}</b></span>` : '';
+      // P14 S1-Q1: [정정 시작]은 담당자·팀장만(서버 permissions.start_correction) — 아니면 비활성 + 이유
+      const mayCorrect = !!(d.permissions && d.permissions.start_correction);
+      const correctOff = !api.staffId ? 'disabled title="현재 사용자를 선택하세요"' : (mayCorrect ? '' : 'disabled title="이 양식의 담당자나 HACCP팀장만 정정할 수 있습니다"');
       const sections = this.sectionsHtml(schema, d, { detail: true });
       this.root.innerHTML = `
         <div class="fade-in">
@@ -1575,7 +1581,7 @@
                 ${canEdit ? `<button class="btn btn-primary btn-sm" id="btnEdit" ${api.staffId ? '' : 'disabled'}>수정</button>` : ''}
                 ${canComplete ? `<button class="btn btn-primary te-btn-complete btn-sm" id="btnComplete" ${api.staffId ? '' : 'disabled'}>작성완료</button>` : ''}
                 ${canReopen ? `<button class="btn btn-secondary btn-sm" id="btnReopen" ${api.staffId ? '' : 'disabled'}>작성 재개</button>` : ''}
-                ${canCorrect ? `<button class="btn btn-warning btn-sm" id="btnCorrect" ${api.staffId ? '' : 'disabled title="현재 사용자를 선택하세요"'}>정정 시작</button>` : ''}
+                ${canCorrect ? `<button class="btn btn-warning btn-sm" id="btnCorrect" ${correctOff}>정정 시작</button>` : ''}
                 ${canDelete ? `<button class="btn btn-danger btn-sm" id="btnDelete" ${api.staffId ? '' : 'disabled'}>삭제</button>` : ''}
                 ${canSkip ? `<button class="btn btn-secondary btn-sm" id="btnSkip" ${api.staffId ? '' : 'disabled'}>작성 안 함</button>` : ''}
                 ${skipped ? `<button class="btn btn-primary btn-sm" id="btnUnskip" ${api.staffId ? '' : 'disabled'}>되돌리기</button>` : ''}
@@ -1583,14 +1589,15 @@
             </div>
             ${fixing ? this.correctionBanner(d, fixing, effective) : ''}
             ${notes[d.status] ? `<div class="${skipped ? 'te-skip-note' : 'te-status-note'}" id="teStatusNote">${notes[d.status]}</div>` : ''}
+            ${canCorrect && api.staffId && !mayCorrect ? `<div class="te-perm-note" id="teCorrectWhy">이 양식의 담당자나 HACCP팀장만 정정할 수 있습니다. ${T.roleLink()}</div>` : ''}
             <div class="te-meta">
               <span>대상 <b id="teTarget">${targetHtml(d)}</b></span><span>작업일 <b>${d.work_date}</b></span>
-              <span>작성자 <b>staff ${d.created_by}</b></span><span>담당자 <b>${d.assignee_id ? `staff ${d.assignee_id}` : '-'}</b></span>${inspector}
+              <span>작성자 <b>${T.personHtml(d.created_by)}</b></span><span id="teOwners">담당자 <b>${T.peopleHtml(d.owner_ids || [], { empty: '(없음) ⚠' })}</b> <span class="te-hint">(양식)</span></span>${inspector}
               <span>마감 <b>${T.fmtDateTime(d.due_at)}</b></span>${periodText(schema, d)}
             </div>
             <div class="te-meta" style="margin-top:.25rem">
               <span>작성 ${T.fmtDateTime(d.created_at)}</span><span>최종 수정 ${T.fmtDateTime(d.updated_at)}</span>
-              ${d.completed_at && d.status !== 'rejected' ? `<span id="teCompleted">작성완료 ${T.fmtDateTime(d.completed_at)} (staff ${d.completed_by})</span>` : ''}
+              ${d.completed_at && d.status !== 'rejected' ? `<span id="teCompleted">작성완료 ${T.fmtDateTime(d.completed_at)} (${T.personHtml(d.completed_by)})</span>` : ''}
               ${d.submitted_at ? `<span>상신 ${T.fmtDateTime(d.submitted_at)}</span>` : ''}<span class="te-hint">v${d.version}</span>
             </div>
             ${WEEK_TYPES.includes(d.template.type_code) ? '<div class="te-meta" id="teWeekStrip"></div>' : ''}
@@ -1661,7 +1668,7 @@
           return `<tr class="${ng ? 'te-row-ng' : ''}" data-section-row="${x.section_id}">
             <td>${i + 1}</td>${s.fields.map((fd) => `<td>${this.display(fd, values[fd.key], x.hints && x.hints[fd.key])}</td>`).join('')}
             ${legacy ? `<td>${this.judgeCell(s, x.values)}</td>` : ''}
-            <td class="te-hint">${ng && !legacy && !hasComputed(s) ? '<span class="te-judge-ng">⚠ 부적합</span><br>' : ''}${T.fmtDateTime(x.recorded_at)} · staff ${x.recorded_by ?? '-'}${ng && canDev ? `<br><button class="btn btn-secondary btn-sm te-dev-add" data-dev-for="${x.section_id}" data-dev-text="${esc(`${s.label} ${rowName} 부적합`)}">개선조치 추가</button>` : ''}</td></tr>`;
+            <td class="te-hint">${ng && !legacy && !hasComputed(s) ? '<span class="te-judge-ng">⚠ 부적합</span><br>' : ''}${T.fmtDateTime(x.recorded_at)} · ${T.personHtml(x.recorded_by)}${ng && canDev ? `<br><button class="btn btn-secondary btn-sm te-dev-add" data-dev-for="${x.section_id}" data-dev-text="${esc(`${s.label} ${rowName} 부적합`)}">개선조치 추가</button>` : ''}</td></tr>`;
         }).join('')
           || `<tr><td colspan="${s.fields.length + 3}" class="te-empty">${s.system_rows ? '아직 입고된 LOT가 없습니다' : '행이 없습니다.'}</td></tr>`;
         return `<div class="te-section"><div class="te-section-title">${esc(s.label)} <span class="te-hint">${rows.length}행</span></div>
@@ -1684,8 +1691,8 @@
       const hasRows = schema.sections.some((x) => x.repeat) || list.some((x) => x.section_id);
       return `<div class="te-section" id="teSnapDeviation"><div class="te-section-title">${esc(title)} <span class="te-hint">${list.length}건</span></div>
         ${list.length ? `<div class="te-table-wrap"><table class="data-table"><thead><tr>${hasRows ? '<th>관련 행</th>' : ''}<th>한계기준 이탈내용</th><th>조치자</th><th>개선조치 및 결과</th><th>확인자</th></tr></thead>
-        <tbody>${list.map((x) => `<tr>${hasRows ? `<td>${esc(rowName(x.section_id))}</td>` : ''}<td>${esc(x.description)}</td><td>${x.actor_id ? `staff ${x.actor_id}` : '-'}</td>
-          <td>${esc(x.action_result || '-')}</td><td>${(x.checker_ids || []).map((c) => `staff ${c}`).join(', ') || '-'}</td></tr>`).join('')}</tbody></table></div>`
+        <tbody>${list.map((x) => `<tr>${hasRows ? `<td>${esc(rowName(x.section_id))}</td>` : ''}<td>${esc(x.description)}</td><td>${T.personHtml(x.actor_id)}</td>
+          <td>${esc(x.action_result || '-')}</td><td>${T.peopleHtml(x.checker_ids || [], { max: 10, empty: '-' })}</td></tr>`).join('')}</tbody></table></div>`
         : '<p class="te-hint">기록된 개선조치가 없습니다.</p>'}</div>`;
     },
 
@@ -1695,7 +1702,7 @@
         return '<span class="te-hint">-</span>';
       }
       if (field.type === 'bool') return value ? '예' : '아니오';
-      if (field.type === 'staff') return `staff ${esc(value)}`;
+      if (field.type === 'staff') return T.personHtml(value);
       if (field.type === 'datetime') return esc(String(value).replace('T', ' '));
       if (field.display === 'hm' && typeof value === 'number') return esc(fmtMinutes(value));
       if (field.computed) {
@@ -1739,7 +1746,7 @@
             <tbody>${d.files.map((x) => `<tr data-file="${x.file_id}">
               <td>${icon(x.mime_type)} ${esc(x.original_name)}</td>
               <td class="te-nowrap">${this.fileSize(x.size_bytes)}</td>
-              <td class="te-nowrap">staff ${esc(x.uploaded_by)} · ${T.fmtDateTime(x.uploaded_at)}</td>
+              <td class="te-nowrap">${T.personHtml(x.uploaded_by)} · ${T.fmtDateTime(x.uploaded_at)}</td>
               <td>${shared(x)}</td>
               <td class="te-nowrap"><a class="btn btn-secondary btn-sm" href="/api/v1/files/${x.file_id}" target="_blank" rel="noopener" data-file-view="${x.file_id}">보기</a>
                 ${can ? `<button class="btn btn-secondary btn-sm" data-file-detach="${x.file_id}" title="이 문서에서 연결 끊기" ${api.staffId ? '' : 'disabled'}>✕</button>` : ''}</td>
@@ -1894,24 +1901,50 @@
 
     // ================================================= 이탈·개선조치 영역 (P4-S1 (5), F19~F21)
     // 문서 상태와 상관없이 언제든 저장한다. 문서 버전과 무관하게 개선조치 자기 version으로 충돌을 감지한다.
-    renderDeviations(d, schema) {
+    // S5 r2(DR-20 B2): 다시 그리기 전에 화면의 새 줄 값을 devDrafts에 담는다 — 안 그러면 [+ 추가]·새 줄 [취소] 때
+    // 입력한 글자가 사라지고, 확인자는 기본값(담당자 + 팀장)으로 조용히 다시 체크된다
+    syncDevDrafts(el) {
+      (el ? [...el.querySelectorAll('tr[data-dev^="n"]')] : []).forEach((tr) => {
+        const i = Number(tr.dataset.dev.slice(1));
+        if (!this.devDrafts[i]) return;
+        const v = (k) => tr.querySelector(`[data-k="${k}"]`);
+        const num = (x) => (x === '' ? null : Number(x));
+        Object.assign(this.devDrafts[i], {
+          section_id: v('section_id') ? num(v('section_id').value) : (this.devDrafts[i].section_id ?? null),
+          description: v('description').value,
+          actor_id: num(v('actor_id').value),
+          action_result: v('action_result').value,
+        });
+      });
+    },
+
+    renderDeviations(d, schema, { synced = false } = {}) {
       const el = this.root.querySelector('#teDeviationArea');
       if (!el) return;
+      if (!synced) this.syncDevDrafts(el);
       const rowOptions = [];
       schema.sections.filter((s) => s.repeat).forEach((s) => d.sections.filter((x) => x.section_def === s.key).forEach((x, i) => {
         rowOptions.push({ id: x.section_id, label: `${s.label} ${x.values.lot_number || `${i + 1}행`}` });
       }));
-      const staffOpts = (sel) => ['<option value="">-</option>'].concat((T.staff || []).map((sid) => `<option value="${sid}" ${String(sel) === String(sid) ? 'selected' : ''}>staff ${sid}</option>`)).join('');
+      const staffOpts = (sel) => T.staffOptions(sel);
+      // P14 ROLE-FR-12 r12(DR-21): 확인자는 고르지 않는다 — 새 개선조치를 저장할 때 서버가 이 양식 담당자 + HACCP팀장으로
+      // 자동 지정(DOC-DVC-01b: 담당자 먼저, 각각 id 순, 10명까지). 새 줄에는 그 미리 보기만(서버가 저장 때 다시 계산)
+      const defaults = [...(d.owner_ids || [])];
+      T.leaderIds().slice().sort((a, b) => a - b).forEach((id) => { if (!defaults.includes(id)) defaults.push(id); });
+      const truncated = defaults.length > 10;
+      const defaultCheckers = defaults.slice(0, 10);
       const rowSelect = (sel) => ['<option value="">– 없음</option>'].concat(rowOptions.map((o) => `<option value="${o.id}" ${String(sel) === String(o.id) ? 'selected' : ''}>${esc(o.label)}</option>`)).join('');
-      // 확인 슬롯 1개에 여러 명(D-054). 1명이 확인하면 끝(확인 기능은 ISS-008)
-      const checkerSelect = (ids) => `<span class="te-checkers">${(T.staff || []).map((sid) => `<label class="te-check"><input type="checkbox" data-checker value="${sid}" ${ids.includes(sid) ? 'checked' : ''}>${sid}</label>`).join('')}</span>`;
+      // 확인 슬롯 1개에 여러 명(D-054). 1명이 확인하면 끝(확인 기능은 ISS-008). r12: 읽기만 — 저장된 확인자 / 새 줄은 자동 지정 미리 보기
+      const checkerCell = (x, key) => (key.startsWith('n')
+        ? `<span class="te-hint" data-checkers-preview="${defaultCheckers.join(',')}">${T.peopleHtml(defaultCheckers, { max: 10, empty: '(없음)' })} · 저장 때 자동</span>`
+        : `<span data-checkers="${(x.checker_ids || []).join(',')}">${T.peopleHtml(x.checker_ids || [], { max: 10, empty: '<span class="te-hint">–</span>' })}</span>`);
       const line = (x, key) => `
         <tr data-dev="${key}">
           ${hasRows ? `<td><select class="form-control" data-k="section_id">${rowSelect(x.section_id)}</select></td>` : ''}
           <td><input class="form-control" data-k="description" maxlength="500" value="${esc(x.description || '')}" placeholder="이탈내용(필수)"></td>
           <td><select class="form-control" data-k="actor_id">${staffOpts(x.actor_id)}</select></td>
           <td><input class="form-control" data-k="action_result" maxlength="1000" value="${esc(x.action_result || '')}"></td>
-          <td>${checkerSelect(x.checker_ids || [])}</td>
+          <td>${checkerCell(x, key)}</td>
           <td class="te-nowrap">${x.deviation_id ? ((x.checker_ids || []).length ? (x.checked_at ? '확인' : '대기') : '–') : '<span class="te-hint">새 행</span>'}</td>
           <td class="te-nowrap"><button class="btn btn-primary btn-sm" data-dev-save="${key}" ${api.staffId ? '' : 'disabled'}>저장</button>
             <button class="btn btn-secondary btn-sm" data-dev-del="${key}" ${api.staffId ? '' : 'disabled'}>${x.deviation_id ? '삭제' : '취소'}</button></td>
@@ -1926,10 +1959,11 @@
             <button class="btn btn-secondary btn-sm" id="devAdd" ${api.staffId ? '' : 'disabled'}>+ 추가</button></div>
           ${nonconforming && !saved.length ? '<div class="te-error-text">부적합 항목이 있어 작성완료하려면 이탈·개선조치를 1건 이상 적어야 합니다.</div>' : ''}
           <div class="te-table-wrap"><table class="data-table te-rows">
-            <thead><tr>${hasRows ? '<th>관련 행</th>' : ''}<th>한계기준 이탈내용 *</th><th>조치자</th><th>개선조치 및 결과</th><th>확인자 <span class="te-hint">(staff, 여러 명)</span></th><th>확인</th><th></th></tr></thead>
+            <thead><tr>${hasRows ? '<th>관련 행</th>' : ''}<th>한계기준 이탈내용 *</th><th>조치자</th><th>개선조치 및 결과</th><th>확인자 <span class="te-hint">(자동 — 담당자 + HACCP팀장)</span></th><th>확인</th><th></th></tr></thead>
             <tbody>${saved.map((x) => line(x, `s${x.deviation_id}`)).join('')}${this.devDrafts.map((x, i) => line(x, `n${i}`)).join('')
               || (saved.length ? '' : `<tr><td colspan="${hasRows ? 7 : 6}" class="te-empty">기록된 개선조치가 없습니다.</td></tr>`)}</tbody>
           </table></div>
+          ${this.devDrafts.length ? `<div class="te-hint" id="devDefaultNote">ⓘ 확인자는 고르지 않습니다 — 저장할 때 이 양식 담당자 + HACCP팀장으로 자동 지정됩니다(저장 때의 역할 기준).${truncated ? ' 확인자가 많아 10명까지만 지정됩니다(담당자 먼저).' : ''}</div>` : ''}
         </div>`;
       const read = (tr) => {
         const v = (k) => tr.querySelector(`[data-k="${k}"]`);
@@ -1937,11 +1971,10 @@
         return {
           section_id: v('section_id') ? num(v('section_id').value) : null, description: v('description').value.trim(),
           actor_id: num(v('actor_id').value), action_result: v('action_result').value.trim() || null,
-          checker_ids: [...tr.querySelectorAll('[data-checker]:checked')].map((o) => Number(o.value)),
-        };
+        };  // r12(DR-21): checker_ids는 보내지 않음 — 새 개선조치는 서버가 자동 지정, 저장된 확인자는 그대로
       };
       const reload = () => this.showDetail(d.document_id);
-      el.querySelector('#devAdd').addEventListener('click', () => { this.devDrafts.push({}); this.renderDeviations(d, schema); });
+      el.querySelector('#devAdd').addEventListener('click', () => { this.syncDevDrafts(el); this.devDrafts.push({}); this.renderDeviations(d, schema, { synced: true }); });
       el.querySelectorAll('[data-dev-save]').forEach((b) => b.addEventListener('click', async () => {
         const key = b.dataset.devSave;
         const tr = el.querySelector(`tr[data-dev="${key}"]`);
@@ -1949,7 +1982,7 @@
         let res;
         if (key.startsWith('n')) {
           res = await api.post(`documents/${d.document_id}/deviations`, body);
-          if (res.ok) this.devDrafts.splice(Number(key.slice(1)), 1);
+          if (res.ok) { this.syncDevDrafts(el); this.devDrafts.splice(Number(key.slice(1)), 1); }  // 다른 새 줄 값은 남김
         } else {
           const cur = saved.find((x) => `s${x.deviation_id}` === key);
           const patch = {};
@@ -1964,7 +1997,7 @@
       }));
       el.querySelectorAll('[data-dev-del]').forEach((b) => b.addEventListener('click', async () => {
         const key = b.dataset.devDel;
-        if (key.startsWith('n')) { this.devDrafts.splice(Number(key.slice(1)), 1); this.renderDeviations(d, schema); return; }
+        if (key.startsWith('n')) { this.syncDevDrafts(el); this.devDrafts.splice(Number(key.slice(1)), 1); this.renderDeviations(d, schema, { synced: true }); return; }
         const cur = saved.find((x) => `s${x.deviation_id}` === key);
         if (!(await T.confirm('개선조치 삭제', '이 개선조치를 삭제합니다. 기록은 삭제자·시각과 함께 보존됩니다.', '삭제', 'btn-danger'))) return;
         const res = await api.del(`deviations/${cur.deviation_id}?expected_version=${cur.version}`);
@@ -2122,7 +2155,7 @@
         : '';
       return `<div class="te-fix-banner" id="teFixBanner">
         <div class="te-fix-head">⚠ 정정 중입니다</div>
-        <div>${T.fmtDateTime(c.started_at)} staff ${esc(c.started_by)} · 사유: ${esc(c.reason)}</div>
+        <div>${T.fmtDateTime(c.started_at)} ${T.personHtml(c.started_by)} · 사유: ${esc(c.reason)}</div>
         <div>${eff}</div>
         ${cancel ? `<div class="te-fix-actions">${c.cancellable ? '' : '<span class="te-hint">수정한 내용이 있어 취소할 수 없습니다 — 작성완료 후 재상신하세요</span>'}${cancel}</div>` : ''}
       </div>`;
@@ -2182,6 +2215,11 @@
           $('#fixError').textContent = (data.details || [])[0]?.message || data.message;
           check();
           $('#fixGo').disabled = false;
+          return;
+        }
+        // P14: 403 ROLE_REQUIRED·409 ROLE_CONFIG_INVALID — 모달 안 오류(다시 눌러도 같은 결과)
+        if (data.code === 'ROLE_REQUIRED' || data.code === 'ROLE_CONFIG_INVALID') {
+          $('#fixTop').innerHTML = `<div class="te-error-box">[${esc(data.code)}] ${data.code === 'ROLE_REQUIRED' ? '이 양식의 담당자나 HACCP팀장만 정정할 수 있습니다.' : '역할 설정 파일 오류로 정정을 시작할 수 없습니다.'} ${T.roleLink()}</div>`;
           return;
         }
         // 409(다른 사람이 먼저 정정 시작·승인 아님·버전) → 모달 안 [코드] 메시지 + [다시 열기]

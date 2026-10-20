@@ -6,6 +6,8 @@
 
 FLOWS = {
     "DOC-STF": ["DOC-STF-01"],
+    # P14 ROLE-A01 역할 보기(p14-s2-spec 10.1): 활성 양식(안에서 DOC-TPL-01) → 역할 설정 요약
+    "DOC-ROL": ["DOC-ROL-01", "DOC-TPL-01", "DOC-ROL-02"],
     "DOC-TPL-LIST": ["DOC-TPL-01"],
     "DOC-TPL-GET": ["DOC-TPL-02"],
     # P7: 02·03 UNION, 04 문서 줄 값, 05 묶음 집계, 06 묶음 전체 건수, 07 조립(p7-s2-flows 6장)

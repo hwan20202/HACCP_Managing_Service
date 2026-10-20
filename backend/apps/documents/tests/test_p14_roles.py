@@ -49,6 +49,18 @@ class DetailPermissionTests(RolesFileMixin, TestCase):
         )
         self.assertFalse(no_line["permissions"]["submit"])
 
+    def test_tc41_writer_permissions(self):
+        """ROLE-TC-41(r11, DR-20): 작성 권한자는 submit만 true, 정정 시작은 false."""
+        data = default_roles()
+        data["forms"]["CCP_MONITORING"]["writers"] = ["DEV-004"]
+        self.use_roles(data)
+        self.assertEqual(self.detail(4)["permissions"], {"submit": True, "start_correction": False})
+        document, _ = make_document(self.t["ccp"], status="approved")
+        self.document_id = document.document_id
+        self.assertEqual(
+            self.detail(4)["permissions"], {"submit": False, "start_correction": False}
+        )
+
     def test_tc27_approved_correction(self):
         document, _ = make_document(self.t["ccp"], status="approved")
         self.document_id = document.document_id

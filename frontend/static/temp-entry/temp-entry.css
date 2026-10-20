@@ -236,3 +236,21 @@
 .te-btn-outline-danger { background: transparent; color: var(--color-danger, #dc3545); border: 1px solid var(--color-danger, #dc3545); }
 .te-btn-outline-danger:hover { background: var(--color-danger, #dc3545); color: #fff; }
 .te-cancel-lines { margin: 0; padding-left: 1.1rem; line-height: 1.7; }
+
+/* ---------- P14 역할 기반 결재(p14-s1-screens 3장) ---------- */
+.te-person-code { color: var(--text-muted); font-size: 0.85em; }
+.te-person-unknown { color: var(--text-muted); }
+.te-person-off { color: var(--text-muted); }
+.te-person-inactive { font-size: 0.75em; color: var(--text-muted); border: 1px solid var(--border-color, #d0d5dd); border-radius: 4px; padding: 0 0.25rem; }
+.te-more { color: var(--text-muted); border-bottom: 1px dotted var(--text-muted); cursor: help; }
+.te-dim, .te-dim .te-person { color: var(--text-muted); }
+.te-perm-note { margin-top: 0.4rem; font-size: 0.8rem; color: var(--text-secondary); }
+.te-role-link { font-size: 0.8rem; white-space: nowrap; }
+.te-line-preview { margin-top: 0.75rem; }
+.te-line-preview .te-sub, .te-modal-body .te-sub { font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem; }
+.te-line-table { margin-bottom: 0.25rem; }
+.te-row-repeat td:nth-child(2), .te-row-repeat td:nth-child(3), .te-row-repeat td:nth-child(4) { color: var(--text-muted); }
+.te-row-mine td:first-child { box-shadow: inset 3px 0 0 var(--primary, #2563eb); }
+.te-blocked { margin: 0.6rem 0 0; padding-left: 1.1rem; font-size: 0.85rem; color: #b45309; }
+.te-role-warnings { margin: 0.6rem 0; font-size: 0.85rem; }
+.te-role-warnings summary { cursor: pointer; color: #b45309; font-weight: 600; }

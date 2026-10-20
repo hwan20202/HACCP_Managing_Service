@@ -316,7 +316,7 @@ def _submit_check(actor_id, type_code, status, line):
     """P14 묶음 문서별 상신 가능 여부(DR-12 S1-Q7). 반환 (can_submit, submit_block)."""
     if line["reason"] == "config_invalid":
         return False, "config_invalid"
-    if not (roles.is_owner(actor_id, type_code) or roles.is_leader(actor_id)):
+    if not roles.can_submit(actor_id, type_code):  # ROLE-R01: 담당자·작성 권한자·팀장(DR-20)
         return False, "role_required"
     if not line["ok"]:
         return False, line["reason"]
