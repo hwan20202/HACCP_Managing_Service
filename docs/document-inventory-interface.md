@@ -139,5 +139,5 @@ get_source_document(document_id)
 | 항목 | 요청 |
 |---|---|
 | 훅 `document_bridge.incoming_received` | `(*, lot_id)` → `(*, lot_id, staff_id, answers=None)`로 바꾸고 안에서 2.1 호출 |
-| 입고 취소 | **결재중부터는 수불이 막음** — 취소 전 `docs_for_lot`에서 `status`가 `submitted`·`approved`·`correcting`인 문서가 있으면 거부. 그 밖의 경우 문서 쪽 처리는 미정, 훅 `incoming_receipt_cancelled`는 당분간 빈 함수 |
+| 입고 취소 | **결재중부터는 수불이 막음** — 취소 전 `docs_for_lot`에서 `status`가 `submitted`·`approved`·`correcting`인 문서가 있으면 거부. 취소 후 훅 `incoming_receipt_cancelled`가 `delete_lot_documents(staff_id, lot_id)`를 같은 트랜잭션에서 호출해 입고 서류를 소프트 딜리트. 오류 시 입고 취소도 롤백 |
 | 수불대장 | 2.7 `ledger_approved_until()` 이하 날짜의 수불 등록·정정을 막음 |
