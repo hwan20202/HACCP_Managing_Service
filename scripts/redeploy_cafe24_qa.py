@@ -1,4 +1,4 @@
-"""Manual QA redeploy. Run with the existing server Python as root; never installs services.
+"""QA redeploy. Run with the existing server Python as root; never installs services.
 
 No secrets are printed. The one-time refresh marker survives failures deliberately.
 All old code/data/configuration are retained. Rollback never deletes new QA activity.
@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import sqlite3
 import subprocess
 import tarfile
@@ -17,6 +18,7 @@ import time
 import urllib.request
 from contextlib import closing
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
 
@@ -25,7 +27,6 @@ CURRENT = BASE / "current"
 APP_ENV = Path("/etc/biodot/qa.env")
 CADDY_ENV = Path("/etc/biodot/caddy.env")
 PYTHON = Path("/opt/biodot-qa/bin/python3.14")
-SITE = "175-118-124-141.sslip.io"
 MARKER = BASE / "qa-refresh-20261016.json"
 
 
@@ -36,6 +37,58 @@ def run(*args, **kwargs):
 def private_copy(source, target):
     shutil.copy2(source, target)
     target.chmod(0o600)
+
+
+def schema_files(code):
+    """Include SQL used by RunPython as well as Django migration modules."""
+    return {
+        path.relative_to(code).as_posix(): path.read_bytes()
+        for path in (code / "backend").rglob("*")
+        if path.is_file()
+        and (path.suffix == ".sql" or ("migrations" in path.parts and path.suffix == ".py"))
+    }
+
+
+def require_code_only_compatibility(current, stage):
+    if schema_files(current) != schema_files(stage):
+        raise SystemExit("Migration/SQL changes require a separate manual database deployment")
+    for name in ("requirements",):
+        before = {p.name: p.read_bytes() for p in (current / name).glob("*.txt")}
+        after = {p.name: p.read_bytes() for p in (stage / name).glob("*.txt")}
+        if not before or before != after:
+            raise SystemExit("Dependency changes require a separately prepared virtualenv")
+    if (current / ".python-version").read_bytes() != (stage / ".python-version").read_bytes():
+        raise SystemExit("Python version changes require manual preparation")
+
+
+def check_schema_without_writes(code, env_file):
+    app(
+        code,
+        env_file,
+        "backend/manage.py",
+        "makemigrations",
+        "--check",
+        "--dry-run",
+        "--noinput",
+        "--settings=config.settings.qa",
+    )
+    app(code, env_file, "backend/manage.py", "migrate", "--check", "--settings=config.settings.qa")
+
+
+def configured_site(proxy):
+    value = proxy.get("HACCP_SITE_ADDRESS", "")
+    parsed = urlsplit(value if "://" in value else "https://" + value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise SystemExit("Expected one HTTPS site in the existing Caddy environment")
+    return parsed.netloc
 
 
 def business_fingerprint(data):
@@ -137,7 +190,13 @@ def main():
     parser.add_argument("--commit")
     parser.add_argument("--fresh-data-once", action="store_true")
     parser.add_argument("--rollback", type=Path)
+    parser.add_argument(
+        "--code-only", action="store_true", help="Never migrate or seed the server DB"
+    )
+    parser.add_argument("--branch", default="main")
     args = parser.parse_args()
+    if args.code_only and (args.fresh_data_once or args.rollback):
+        parser.error("--code-only cannot be combined with data refresh or rollback")
     if os.geteuid() != 0:
         raise SystemExit("Run as root on the QA server.")
     import fcntl
@@ -163,7 +222,8 @@ def main():
         raise SystemExit("Unexpected QA data path")
     if not (old_data / "db/app.sqlite3").is_file():
         raise SystemExit("Existing QA database is missing")
-    if not proxy.get("HACCP_QA_AUTH_HASH") or SITE not in proxy.get("HACCP_SITE_ADDRESS", ""):
+    site = configured_site(proxy)
+    if not proxy.get("HACCP_QA_AUTH_HASH"):
         raise SystemExit("Existing QA proxy authentication/site must be configured")
     if config.get("DJANGO_HTTPS_ENABLED", "").lower() != "true":
         raise SystemExit("Existing HTTPS settings were not confirmed")
@@ -212,12 +272,20 @@ def main():
             stage / "requirements" / name
         ).read_bytes():
             raise SystemExit("Dependency change needs a separately prepared virtualenv")
+    if args.code_only:
+        require_code_only_compatibility(CURRENT, stage)
     owner = pwd.getpwnam("biodot-qa")
     isolated_regressions(stage, owner.pw_uid, owner.pw_gid)
-    (stage / "QA-DEPLOYED-REVISION.txt").write_text(
-        "feature/inventory-production\n" + args.commit + "\n"
-    )
+    (stage / "QA-DEPLOYED-REVISION.txt").write_text(args.branch + "\n" + args.commit + "\n")
     new_data = Path("/srv/biodot/qa-data-" + stamp) if args.fresh_data_once else old_data
+    static_dir = (
+        BASE / ("static-" + args.commit[:12] + "-" + stamp)
+        if args.code_only
+        else new_data / "static"
+    )
+    if args.code_only:
+        static_dir.mkdir(mode=0o755)
+        os.chown(static_dir, owner.pw_uid, owner.pw_gid)
     old_code = BASE / ("previous-code-" + stamp)
     record = {
         "commit": args.commit,
@@ -227,6 +295,8 @@ def main():
         "old_data": str(old_data),
         "new_data": str(new_data),
         "fresh_data": args.fresh_data_once,
+        "code_only": args.code_only,
+        "static_dir": str(static_dir),
         "isolated_regressions": "passed",
         "previous_revision": (CURRENT / "QA-DEPLOYED-REVISION.txt").read_text()
         if (CURRENT / "QA-DEPLOYED-REVISION.txt").exists()
@@ -245,7 +315,7 @@ def main():
         new_env,
         {
             "HACCP_QA_DATA_DIR": str(new_data),
-            "HACCP_STATIC_DIR": str(new_data / "static"),
+            "HACCP_STATIC_DIR": str(static_dir),
             "HACCP_QA_SEED_ENABLED": "false",
         },
     )
@@ -254,12 +324,22 @@ def main():
     private_copy(new_env, staging_env)
     account = pwd.getpwnam("biodot-qa")
     os.chown(staging_env, account.pw_uid, account.pw_gid)
+    if args.code_only:
+        check_schema_without_writes(stage, staging_env)
     if args.fresh_data_once:
         new_data.mkdir(mode=0o711)  # fails if anything already occupies this path
         os.chown(new_data, account.pw_uid, account.pw_gid)
         MARKER.write_text(json.dumps(record, indent=2))
         MARKER.chmod(0o600)
     stopped = False
+    previous_handlers = {}
+
+    def interrupted(signum, frame):
+        raise SystemExit(f"Deployment interrupted by signal {signum}")
+
+    for name in ("SIGTERM", "SIGINT", "SIGHUP"):
+        sig = getattr(signal, name)
+        previous_handlers[sig] = signal.signal(sig, interrupted)
     try:
         stopped = True
         run("systemctl", "stop", "caddy", "biodot-qa")
@@ -276,7 +356,10 @@ def main():
                     with archive.extractfile(member) as stream:
                         while stream.read(1024 * 1024):
                             pass
-        app(stage, staging_env, "scripts/project.py", "--env-file", staging_env, "--qa", "init")
+        if args.code_only:
+            check_schema_without_writes(stage, staging_env)
+        else:
+            app(stage, staging_env, "scripts/project.py", "--env-file", staging_env, "--qa", "init")
         if args.fresh_data_once:
             app(
                 stage,
@@ -327,7 +410,7 @@ def main():
             record["business_data_preserved"] = True
             record_path.write_text(json.dumps(record, indent=2))
         new_data.chmod(0o711)
-        for directory, _, files in os.walk(new_data / "static"):
+        for directory, _, files in os.walk(static_dir):
             Path(directory).chmod(0o755)
             for name in files:
                 (Path(directory) / name).chmod(0o644)
@@ -338,11 +421,11 @@ def main():
             "--",
             "test",
             "-r",
-            new_data / "static/prototype/js/modules/production-api.js",
+            static_dir / "prototype/js/modules/production-api.js",
         )
         proxy_environment = os.environ.copy()
         proxy_environment.update({k: v for k, v in proxy.items() if v is not None})
-        proxy_environment["HACCP_STATIC_DIR"] = str(new_data / "static")
+        proxy_environment["HACCP_STATIC_DIR"] = str(static_dir)
         validation = subprocess.run(
             ["caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"],
             env=proxy_environment,
@@ -354,11 +437,11 @@ def main():
             APP_ENV,
             {
                 "HACCP_QA_DATA_DIR": str(new_data),
-                "HACCP_STATIC_DIR": str(new_data / "static"),
+                "HACCP_STATIC_DIR": str(static_dir),
                 "HACCP_QA_SEED_ENABLED": "false",
             },
         )
-        update_env(CADDY_ENV, {"HACCP_STATIC_DIR": str(new_data / "static")})
+        update_env(CADDY_ENV, {"HACCP_STATIC_DIR": str(static_dir)})
         os.replace(CURRENT, old_code)
         os.replace(stage, CURRENT)
         run("systemctl", "restart", "biodot-qa", "caddy")
@@ -366,7 +449,7 @@ def main():
             try:
                 request = urllib.request.Request(
                     "http://127.0.0.1:8002/health/ready/",
-                    headers={"Host": SITE, "X-Forwarded-Proto": "https"},
+                    headers={"Host": site, "X-Forwarded-Proto": "https"},
                 )
                 with urllib.request.urlopen(request, timeout=3) as response:
                     if response.status == 200:
@@ -385,7 +468,7 @@ def main():
                 "/dev/null",
                 "--write-out",
                 "%{http_code}",
-                "https://" + SITE + "/",
+                "https://" + site + "/",
             ],
             text=True,
         )
@@ -394,9 +477,15 @@ def main():
         print("DEPLOYED", args.commit, "DATA", new_data, "RECORD", record_path)
         print("Browser/iPad business QA remains to be performed.")
     except BaseException:
+        # Finish recovery even if the SSH session sends another termination signal.
+        for sig in previous_handlers:
+            signal.signal(sig, signal.SIG_IGN)
         if stopped:
             restore(record)
         raise
+    finally:
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
 
 
 if __name__ == "__main__":

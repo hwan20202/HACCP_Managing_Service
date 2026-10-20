@@ -3,6 +3,7 @@ name: Project checks
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -30,3 +31,38 @@ jobs:
       - name: Check HTTP endpoints
         run: python -u scripts/smoke_process.py
         timeout-minutes: 2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Check frontend state and navigation
+        run: |
+          node scripts/test_qa_frontend.cjs
+          node scripts/test_receipt_frontend.cjs
+          node scripts/test_navigation_frontend.cjs
+
+  deploy-qa:
+    name: Deploy Cafe24 QA (code only)
+    needs: check
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && vars.QA_AUTO_DEPLOY == 'true'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: cafe24-qa-deployment
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Upload and deploy the checked commit
+        shell: bash
+        env:
+          DEPLOY_COMMIT: ${{ github.sha }}
+          QA_SSH_HOST: ${{ vars.QA_SSH_HOST }}
+          QA_SSH_PORT: ${{ vars.QA_SSH_PORT }}
+          QA_SSH_USER: ${{ vars.QA_SSH_USER }}
+          QA_SSH_KNOWN_HOSTS: ${{ vars.QA_SSH_KNOWN_HOSTS }}
+          QA_SSH_PRIVATE_KEY: ${{ secrets.QA_SSH_PRIVATE_KEY }}
+        run: bash scripts/deploy_qa_actions.sh
