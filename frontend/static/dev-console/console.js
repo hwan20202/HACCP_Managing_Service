@@ -927,10 +927,10 @@
       } },
     { id: 'DOC-PS-21', unit: 'P4', label: '작성 요구 문서 삭제 거부', expect: '409 DOCUMENT_NOT_DELETABLE(reason requirement) · DOC-DEL-02 영향 0행 → 02a 실패 · DB 변화 없음',
       prepare: async () => { const d = await p4Doc('D01', 'draft'); return { func: 'delete', id: d.document_id }; } },
-    { id: 'DOC-PS-25', unit: 'P4', label: 'CCP 판정 계산', expect: '200 · DOC-UPD-05b(판정 재계산) 포함 도식 일치 · 새 행 values_json.verdict = 부적합(SUS 우 X), 판정은 서버가 저장',
+    { id: 'DOC-PS-25', unit: 'P4', label: 'CCP 판정 계산', expect: '200 · DOC-UPD-05b(판정 재계산) 포함 도식 일치 · 새 행 values_json.verdict = 부적합(STS만 통과 X — CCP-3P v2), 판정은 서버가 저장',
       prepare: async () => {
         const d = await p4Doc('CCP-3P', 'draft', (x) => x.deviations.length > 0);
-        const ok = { fe_l: '○', fe_c: '○', fe_r: '○', sus_l: '○', sus_c: '○', sus_r: 'X', product_only: 'X', product_fe: '○', product_sus: '○' };
+        const ok = { fe_only: '○', sts_only: 'X', product_only: 'X', product_fe: '○', product_sus: '○' };
         return { func: 'update', id: d.document_id, body: J({ expected_version: d.version, sections: { add: [{ section_def: 'checks', values: { phase: '중간', passed_at: `${d.work_date}T13:00`, ...ok } }] } }) };
       } },
     { id: 'DOC-PS-26', unit: 'P4', label: '승인된 문서의 개선조치 쓰기·수정', expect: '사전 조건: 승인된 D03(LOT 1건) · 쓰기 201 → 수정 200 · DOC-DVC·DOC-DVU 도식 일치, 문서 잠금 검사 없음 · deviation_action(관련 행 없음, section_id NULL)·checker만 변경, document 변화 없음',

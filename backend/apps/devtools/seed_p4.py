@@ -96,11 +96,11 @@ def _ccp_rows(code, day):
             {"phase": "건조종료 전", "measured_at": _at(day + timedelta(days=1), "11:00"),
              "temp_c": 69.8, "dry_minutes": 120},
         ]  # fmt: skip
-    ok = dict.fromkeys(("fe_l", "fe_c", "fe_r", "sus_l", "sus_c", "sus_r"), "○")
-    ok.update(product_only="X", product_fe="○", product_sus="○")
-    return "checks", [
+    ok = {"fe_only": "○", "sts_only": "○", "product_only": "X"}
+    ok.update(product_fe="○", product_sus="○")
+    return "checks", [  # CCP-3P v2(P12 DP-03)
         {"phase": "시작", "passed_at": _at(day, "08:40"), **ok},
-        {"phase": "중간", "passed_at": _at(day, "10:40"), **ok, "fe_c": "X"},  # 부적합 1행
+        {"phase": "중간", "passed_at": _at(day, "10:40"), **ok, "fe_only": "X"},  # 부적합 1행
         {"phase": "종료", "passed_at": _at(day, "17:10"), **ok},
     ]
 
