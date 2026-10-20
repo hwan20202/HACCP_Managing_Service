@@ -313,11 +313,13 @@
     TempEntry.open('role-view');
   });
 
-  // 쓰기 호출이 성공하면 배지를 다시 센다(여러 호출이 이어지면 한 번만)
+  // 쓰기 호출이 성공하면 배지를 다시 센다(여러 호출이 이어지면 한 번만).
+  // 409(이미 처리됨·회차 끝남 등 상태 충돌)도 다른 창에서 상태가 바뀐 것이라 다시 센다(ISR-07)
   let badgeTimer = null;
   HaccpApi.onCall((record) => {
     const method = record.request && record.request.method;
-    if (!record.ok || method === 'GET' || !String(record.request.url).startsWith('/api/v1/')) return;
+    const changed = record.ok || record.status === 409;
+    if (!changed || method === 'GET' || !String(record.request.url).startsWith('/api/v1/')) return;
     clearTimeout(badgeTimer);
     badgeTimer = setTimeout(() => TempEntry.refreshBadges(), 300);
   });
