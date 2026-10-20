@@ -105,7 +105,7 @@
 | 스키마 | 문서 마이그레이션을 다시 생성(`inventory 0002` 의존), 임시 staff·devstock 제거, 사람 FK → 수불 `staff` | D-081, D-105, D-128 |
 | ERD | v7(사람 FK·`approval_request` `cancelled`·`period_end`) + v7.1(`skipped`) — `period_end`는 코드에 넣지 않음(쓰는 곳 없음) | D-105, D-106, D-136 |
 
-## 10. 확정 — 구현 예정 (설계 완료)
+## 10. 단위별 진행 (P9~P14 — 줄마다 설계·구현 상태)
 
 | 단위 | 내용 | 결정 |
 |---|---|---|
