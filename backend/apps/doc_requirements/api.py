@@ -14,7 +14,7 @@ from apps.core.http import (
 from apps.core.trace import step
 from apps.staff.services import actor_from_header, optional_actor_from_header
 
-from . import errors, periodic, services, todo
+from . import ccp, errors, periodic, services, todo
 
 
 def _api(view):
@@ -144,3 +144,15 @@ def todo_list(request):
     with step("REQ-TDO-01", "API", "현재 사용자"):
         actor = actor_from_header(request.headers.get("X-Staff-Id"))
     return json_response(todo.todo_list(actor, request.GET.get("date"), request.GET.get("mine")))
+
+
+# -------------------------------------------------------- P11 CCP 현황 (p11-s2-spec 2.1)
+
+
+@require_http_methods(["GET"])
+@_api
+def ccp_dashboard(request):
+    """REQ-A09: CCP 현황 ?date=YYYY-MM-DD (X-Staff-Id 선택 — 보내면 확인만, B2)."""
+    with step("REQ-CCP-01", "API", "현재 사용자(선택)"):
+        actor = optional_actor_from_header(request.headers.get("X-Staff-Id"))
+    return json_response(ccp.ccp_dashboard(actor, request.GET.get("date")))

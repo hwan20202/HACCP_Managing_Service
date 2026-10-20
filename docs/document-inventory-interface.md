@@ -94,8 +94,13 @@ docs_for_lot(lot_id)
 ```python
 docs_for_batch(batch_id)
 # -> {"production_batch_id": ..., "documents": [
-#      {"document_id", "type_code", "process_code", "status", "version"}]}
+#      {"document_id", "type_code", "process_code", "status", "version",
+#       "summary": {"row_count", "latest": {"at", "phase", "verdict"} | None,
+#                   "nonconforming_count", "deviation_count",
+#                   "no_action", "pending", "no_checker", "checked"} | None}]}
 ```
+
+`summary`(P11 — 생산 화면 [연결 문서]): CCP 일지마다 측정 행 수·최근 측정·이탈 행 수·개선조치 상태(이탈 행 중 개선조치 없음, 확인 대기, 확인자 없음, 확인됨). 기존 키는 그대로이고 키만 더함. 판정·상태 규칙은 CCP 대시보드와 같음.
 
 ### 2.6 `get_source_document(document_id)` — HOLD 근거 문서
 
@@ -134,5 +139,5 @@ get_source_document(document_id)
 | 항목 | 요청 |
 |---|---|
 | 훅 `document_bridge.incoming_received` | `(*, lot_id)` → `(*, lot_id, staff_id, answers=None)`로 바꾸고 안에서 2.1 호출 |
-| 입고 취소 | **결재중부터는 수불이 막음** — 취소 전 `docs_for_lot`에서 `status`가 `submitted`·`approved`·`correcting`인 문서가 있으면 거부. 그 밖의 경우 문서 쪽 처리는 미정, 훅 `incoming_receipt_cancelled`는 당분간 빈 함수 |
+| 입고 취소 | **결재중부터는 수불이 막음** — 취소 전 `docs_for_lot`에서 `status`가 `submitted`·`approved`·`correcting`인 문서가 있으면 거부. 취소 후 훅 `incoming_receipt_cancelled`가 `delete_lot_documents(staff_id, lot_id)`를 같은 트랜잭션에서 호출해 입고 서류를 소프트 딜리트. 오류 시 입고 취소도 롤백 |
 | 수불대장 | 2.7 `ledger_approved_until()` 이하 날짜의 수불 등록·정정을 막음 |

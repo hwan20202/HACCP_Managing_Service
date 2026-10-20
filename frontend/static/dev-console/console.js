@@ -86,6 +86,10 @@
     // ---- P10 문서함·결재함 — document-workflow/p10-s2-spec.md(+ 5.1 단계 ID)
     todo: { label: 'REQ 작성 필요 목록 (F10·A08)', method: 'GET', flow: 'REQ-TDO', uses: ['query'], path: (s) => `todo${s.query ? `?${s.query}` : ''}` },
     cancelSubmission: { label: 'WF 상신 취소 (WF-F05)', method: 'POST', flow: 'WF-CAN', uses: ['id', 'docId'], path: (s) => `approval-requests/${s.id}/cancel`, doc: (s) => s.docId },
+    // ---- P11 CCP 대시보드 — dashboard/p11-s2-spec.md(+ 5장 단계 ID). 확인 대기 흐름은 헤더 없음 DOC-PND-ANON · summary=1 DOC-PND-SUM
+    ccpDashboard: { label: 'REQ CCP 현황 (F11·A09)', method: 'GET', flow: 'REQ-CCP', uses: ['query'], path: (s) => `ccp-dashboard${s.query ? `?${s.query}` : ''}` },
+    deviationsPending: { label: 'DOC 개선조치 확인 대기 (F30·A22)', method: 'GET', flow: 'DOC-PND', uses: ['query'], path: (s) => `deviations/pending${s.query ? `?${s.query}` : ''}` },
+    deviationCheck: { label: 'DOC 개선조치 확인 (F31·A23)', method: 'POST', flow: 'DOC-DVK', uses: ['id', 'body', 'docId'], path: (s) => `deviations/${s.id}/check`, doc: (s) => s.docId },
     // ---- P14 역할 기반 결재 — roles/p14-s2-spec.md 10장
     roles: { label: 'ROLE 역할 보기 (ROLE-A01)', method: 'GET', flow: 'DOC-ROL', uses: [], path: () => 'roles' },
   };
@@ -1003,7 +1007,7 @@
       prepare: async () => ({ func: 'reqLot', body: J(await lotBody(await freeDay(), { fail_after: true })) }) },
     { id: 'REQ-PS-07', label: '생산 시작(제조)', expect: '201 · REQ-DEV-BAT 도식 일치(REQ-BAT-03 ×3) · production_batches +1(개발 전용 INSERT), document +3(CCP-1P·2B·3P), document_ref(배치 + 공정) +3',
       prepare: async () => ({ func: 'reqBatch', body: J({ item_id: await itemId('유자차'), process_type: 'MANUFACTURE', manufactured_date: localDay(0), quantity_kg: 900 }) }) },
-    { id: 'REQ-PS-08', label: '같은 배치 다시 호출 / 포장 배치', expect: '[호출 1] 200 · 이미 있음 ×3 · ④ production_batches ~1(updated_at만) [호출 2] 201 · REQ-BAT-03 건너뜀(공정 없음) · ④ production_batches +1, 문서 변화 없음',
+    { id: 'REQ-PS-08', label: '같은 배치 다시 호출 / 포장 배치 거부', expect: '[호출 1] 200 · 이미 있음 ×3 · ④ production_batches ~1(updated_at만) [호출 2] 400 INVENTORY_REJECTED(포장배치는 MVP 범위 밖 — 수불 0006, ISS-048) · REQ-DEV-02에서 중단 · ④ 변화 없음',
       prepare: async () => {
         const batch = (await reqList('batches')).find((b) => b.process_type === 'MANUFACTURE' && b.status !== 'CANCELLED' && b.documents.length);
         if (!batch) throw new Error(`CCP 문서가 있는 제조 배치가 없습니다. ${REQ_HINT}.`);
@@ -1541,6 +1545,85 @@
       } }),
   );
 
+  // ---------------------------------------------------------------- 프리셋 DSH-PS-01~08 (P11 S5 — p11-s1-screens 6장)
+  // 사전 조건은 불러올 때 개발 API(fixtures/ccp — 새 배치 → REQ-F02 → 행·개선조치·확인)로 만든다(ISS-019). 기준일 = 실행하는 날(Asia/Seoul)
+  const p11 = (preset) => ({ unit: 'P11', ...preset });
+  async function ccpFixture(body) {
+    const made = await devPost('/api/dev/fixtures/ccp', body);
+    made.batches.forEach((b) => Object.entries(b.documents).forEach(([proc, id]) => prepared.push({ lot_number: '-', document_id: id, status: `배치 ${b.label} CCP-${proc}` })));
+    return made;
+  }
+  // fixtures/ccp 응답의 개선조치 id → 그 문서의 개선조치(version·확인 기록)
+  async function ccpDeviation(made, process, deviationId, batch = 1) {
+    const documentId = made.batches[batch - 1].documents[process];
+    const d = await quietGet(`documents/${documentId}`);
+    const x = d && d.deviations.find((y) => y.deviation_id === deviationId);
+    if (!x) throw new Error(`개선조치 #${deviationId}를 찾지 못했습니다.`);
+    return { documentId, deviation: x };
+  }
+  const BAD_2B = { process: '2B', values: { temp_c: 73.5 } };
+
+  PRESETS.push(
+    p11({ id: 'DSH-PS-01', label: '대시보드 기본', expect: '200 · REQ-CCP 도식 일치(01~05, 04 안쪽 DOC-MSM-01~05) · SQL 6개 이하(MSM) · cards 3개(CCP-1P·2B·3P 순서) · 준비한 배치 2개: 1P·2B는 측정 행 1개씩(최근 측정 값), 3P는 행 없음(no_rows · "측정 없음") · 작성중이라 todo · ④ 변화 없음',
+      prepare: async () => {
+        await ccpFixture({ rows: [{ process: '1P' }, { process: '2B' }] });
+        return { func: 'ccpDashboard', staff: '3', query: `date=${seoulToday()}` };
+      } }),
+    p11({ id: 'DSH-PS-02', label: '이탈 + 개선조치 없음', expect: '200 · REQ-CCP 도식 일치 · deviations에 준비한 2B 행(건조온도 73.5, reasons temp_c expect min 68·max 72) 1줄, deviation.state none("개선조치 없음") · CCP-2B 카드 counts.deviation_rows ≥ 1 · ④ 변화 없음',
+      prepare: async () => {
+        await ccpFixture({ rows: [BAD_2B] });
+        return { func: 'ccpDashboard', staff: '3', query: `date=${seoulToday()}` };
+      } }),
+    p11({ id: 'DSH-PS-03', label: 'CCP 개선조치 즉시 노출', expect: '200 · DOC-PND 도식 일치(00~05) · 준비한 2B 개선조치(확인자 staff 3)가 rows에 있음 — 문서는 작성중(CCP check_visibility immediate) · can_check true · counts.mine ≥ 1 · ④ 변화 없음',
+      prepare: async () => {
+        await ccpFixture({ rows: [BAD_2B], deviations: [{ process: '2B', row: 1, checker_ids: [3] }] });
+        return { func: 'deviationsPending', staff: '3', query: `date=${seoulToday()}` };
+      } }),
+    p11({ id: 'DSH-PS-04', label: '일반 양식은 작성완료 뒤', expect: '1번째 200(DOC-PND) → 2번째 200(DOC-CMP) → 3번째 200(DOC-PND) · 준비한 D03(작성중, 개선조치 확인자 staff 3)은 1번째 rows에 없고, 작성완료 뒤 3번째 rows에 있음(after_complete) · ④ document draft→completed',
+      prepare: async () => {
+        const { d } = await fixtureDoc({ state: 'draft', inspector: 4, received_date: seoulToday() });
+        await quietPostAs(`documents/${d.document_id}/deviations`, { description: '포장 파손(콘솔 준비)', action_result: '반품 처리', checker_ids: [3] }, 3);
+        const fresh = await quietGet(`documents/${d.document_id}`);
+        const query = `date=${seoulToday()}`;
+        const complete = { func: 'complete', staff: '3', id: String(d.document_id), body: J({ expected_version: fresh.version }) };
+        return { func: 'deviationsPending', staff: '3', query, docId: String(d.document_id),
+          script: async (exec) => {
+            await exec({ func: 'deviationsPending', staff: '3', query });
+            await exec(complete);
+            await exec({ func: 'deviationsPending', staff: '3', query });
+          } };
+      } }),
+    p11({ id: 'DSH-PS-05', label: '확인 성공', expect: '200 · DOC-DVK 도식 일치(00~02) · 02 조건부 UPDATE 영향 1행 · ④ deviation_action checked_by 3·checked_at 채움·version+1, updated_by·updated_at 그대로, document version 그대로 · 대시보드를 다시 보면 확인 대기에서 빠지고 이탈 줄 "확인됨"',
+      prepare: async () => {
+        const made = await ccpFixture({ rows: [BAD_2B], deviations: [{ process: '2B', row: 1, checker_ids: [3] }] });
+        const { documentId, deviation } = await ccpDeviation(made, '2B', made.deviations[0]);
+        return { func: 'deviationCheck', staff: '3', id: String(deviation.deviation_id), docId: String(documentId), body: J({ expected_version: deviation.version }) };
+      } }),
+    p11({ id: 'DSH-PS-06', label: '확인 거절(확인자 아님 · 이미 확인됨)', expect: '1번째 403 NOT_CHECKER(staff 4) → 2번째 409 ALREADY_CHECKED(details checked_by 3·checked_at) · 둘 다 DOC-DVK-02 영향 0행 → 02a 실패 사유 · ④ 변화 없음',
+      prepare: async () => {
+        const made = await ccpFixture({ rows: [BAD_2B, { process: '2B' }], deviations: [{ process: '2B', row: 1, checker_ids: [3] }, { process: '2B', row: 2, checker_ids: [3], checked_by: 3 }] });
+        const open = await ccpDeviation(made, '2B', made.deviations[0]);
+        const done = await ccpDeviation(made, '2B', made.deviations[1]);
+        const first = { func: 'deviationCheck', staff: '4', id: String(open.deviation.deviation_id), docId: String(open.documentId), body: J({ expected_version: open.deviation.version }) };
+        return { ...first,
+          script: async (exec) => {
+            await exec(first);
+            await exec({ func: 'deviationCheck', staff: '3', id: String(done.deviation.deviation_id), docId: String(done.documentId), body: J({ expected_version: done.deviation.version }) });
+          } };
+      } }),
+    p11({ id: 'DSH-PS-07', label: '확인 뒤 수정', expect: '200 · DOC-DVU 도식 일치 · ④ deviation_action action_result 바뀜·version+1·updated_* 바뀜, checked_by 3·checked_at 그대로(확인 기록 남음)',
+      prepare: async () => {
+        const made = await ccpFixture({ rows: [BAD_2B], deviations: [{ process: '2B', row: 1, checker_ids: [3], checked_by: 3 }] });
+        const { documentId, deviation } = await ccpDeviation(made, '2B', made.deviations[0]);
+        return { func: 'devUpdate', staff: '3', id: String(deviation.deviation_id), docId: String(documentId), body: J({ expected_version: deviation.version, action_result: '재측정 70.2℃, 적합(확인 뒤 수정)' }) };
+      } }),
+    p11({ id: 'DSH-PS-08', label: '확인자 없음', expect: '200 · DOC-PND 도식 일치 · 준비한 개선조치(확인자 비움)는 rows에 없고 no_checker.rows에 있음, no_checker.count ≥ 1 · 배지 합계(my_total)에 들지 않음 · ④ 변화 없음',
+      prepare: async () => {
+        await ccpFixture({ rows: [BAD_2B], deviations: [{ process: '2B', row: 1, checker_ids: [] }] });
+        return { func: 'deviationsPending', staff: '3', query: `date=${seoulToday()}` };
+      } }),
+  );
+
   function preparedText(m) {
     if (m.document_id === null) return `새 LOT ${esc(m.lot_number)} · 문서 없음(작성 요구 안 부름)`;
     if (m.lot_number === '-') return `문서 #${esc(m.document_id)}(${esc(m.status)})`;
@@ -1714,6 +1797,18 @@
         return { func: 'update', staff: '4', id: String(d.document_id),
           body: J({ expected_version: d.version, sections: { update: [{ section_id: insp.section_id, values: { packaging: '양호' } }] } }) };
       } }),
+    // P14 R05(FR-13 — P11 병합 뒤): 팀장은 지정 확인자가 아니어도·확인자 없는 개선조치도 확인
+    role({ id: 'ROLE-PS-12', label: '팀장의 개선조치 확인', expect: '1번째 200(staff 5 = HACCP팀장, 확인자 staff 3인 개선조치 — DOC-DVK-02 영향 1행) → 2번째 200(확인자 없는 개선조치) · ④ deviation_action checked_by 5 ×2',
+      prepare: async () => {
+        const made = await ccpFixture({ rows: [BAD_2B, { process: '2B', values: { temp_c: 74 } }], deviations: [{ process: '2B', row: 1, checker_ids: [3] }, { process: '2B', row: 2, checker_ids: [] }] });
+        const assigned = await ccpDeviation(made, '2B', made.deviations[0]);
+        const loose = await ccpDeviation(made, '2B', made.deviations[1]);
+        const first = { func: 'deviationCheck', staff: '5', id: String(assigned.deviation.deviation_id), docId: String(assigned.documentId), body: J({ expected_version: assigned.deviation.version }) };
+        return { ...first, script: async (exec) => {
+          await exec(first);
+          await exec({ ...first, id: String(loose.deviation.deviation_id), body: J({ expected_version: loose.deviation.version }) });
+        } };
+      } }),
     role({ id: 'ROLE-PS-16', label: '점검자 바꾸기 권한', expect: '1번째 403 ROLE_REQUIRED(staff 4 = 점검자, required = owner·leader — DOC-WRT-03 실패, DB 변화 없음) → 2번째 200(staff 2 = D03 담당자, 점검자 2로)',
       prepare: async () => {
         const { d } = await fixtureDoc({ state: 'draft' });
@@ -1735,7 +1830,7 @@
     $('#dcStaff').addEventListener('change', (e) => api.setStaff(e.target.value));
     $('#dcFunc').innerHTML = Object.entries(FUNCS).map(([k, f]) => `<option value="${k}">${esc(f.label)}</option>`).join('');
     const group = (unit, label) => `<optgroup label="${label}">${PRESETS.filter((p) => (p.unit || p.id.split('-')[0]) === unit).map((p) => `<option value="${p.id}">${p.id} ${esc(p.label)}</option>`).join('')}</optgroup>`;
-    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)') + group('FILE', '파일 업로드 (스프린트 3)') + group('P8', '점검표·작성 안 함 (P8)') + group('P9', '주기형 작성 요구 (P9)') + group('P10', '문서함·결재함 (P10)') + group('ROLE', '역할 기반 결재 (P14)');
+    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)') + group('FILE', '파일 업로드 (스프린트 3)') + group('P8', '점검표·작성 안 함 (P8)') + group('P9', '주기형 작성 요구 (P9)') + group('P10', '문서함·결재함 (P10)') + group('P11', 'CCP 대시보드 (P11)') + group('ROLE', '역할 기반 결재 (P14)');
     $('#dcFunc').addEventListener('change', () => { state.preset = null; toggleInputs(); });
     ['#dcId', '#dcQuery', '#dcBody', '#dcDocId'].forEach((sel) => $(sel).addEventListener('input', () => { if (state.preset && state.preset.script) state.preset = null; }));
     $('#dcLoadPreset').addEventListener('click', loadPreset);

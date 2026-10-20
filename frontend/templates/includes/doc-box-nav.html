@@ -1,4 +1,4 @@
-<!-- [P10] 문서함·결재함 메뉴(p10-s1-screens 2장) · [P14] 역할 보기(p14-s1-screens NAV, 숫자 없음). 자리는 HACCP_DOC_MENU — dev: 개발 검증 섹션, haccp: HACCP 관리 섹션 맨 위 -->
+<!-- [P10] 문서함·결재함 메뉴(p10-s1-screens 2장) + [P11] CCP 대시보드(p11-s1-screens 2장) · [P14] 역할 보기(p14-s1-screens NAV, 숫자 없음). 자리는 HACCP_DOC_MENU — dev: 개발 검증 섹션, haccp: HACCP 관리 섹션 맨 위 -->
         <a href="#" class="nav-item" data-page="doc-box" id="nav-doc-box">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M12 20h9"/>
@@ -14,6 +14,14 @@
           </svg>
           <span>결재함</span>
           <span class="nav-badge" id="badge-approval-box" title="내 칸(내가 처리할 결재 대기)" hidden></span>
+        </a>
+        <a href="#" class="nav-item" data-page="ccp-dashboard" id="nav-ccp-dashboard">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="9"/>
+            <circle cx="12" cy="12" r="3"/>
+          </svg>
+          <span>CCP 대시보드</span>
+          <span class="nav-badge" id="badge-ccp-dashboard" title="내 확인 대기(날짜 무관)" hidden></span>
         </a>
         <a href="#" class="nav-item" data-page="role-view" id="nav-role-view">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

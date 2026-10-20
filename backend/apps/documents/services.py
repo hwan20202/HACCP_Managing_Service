@@ -1339,6 +1339,54 @@ def delete_document(actor_id, document_id):
         return None
 
 
+def delete_source_documents(actor_id, document_ids):
+    """N10(D-178): 원천 기록(입고)이 취소되어 그 문서들을 함께 소프트 딜리트한다(REQ F12 전용).
+
+    사용자 삭제(F08 delete_document)의 조건 — 작성중·상신 이력 없음·작성 요구 문서 아님 — 을
+    보지 않는다(D-017·D-021·C-3의 예외). 열린 정정은 닫는다(outcome cancelled).
+    결재 회차는 APR이 닫는다(DOC → APR 의존 없음). 이미 지운 문서는 건너뜀.
+    개선조치·파일 연결 행은 그대로(문서가 지워져 목록·확인 대기에서 빠짐).
+    반환 {deleted: [id…], closed_corrections: n}.
+    """
+    with step("DOC-SDL-00", "DOC", "트랜잭션·입력 확인"):
+        _require_transaction()
+        ids = list(dict.fromkeys(document_ids))
+        if not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+            raise errors.ValidationFailed(
+                details=[validation.error("document_ids", "invalid", "정수 목록입니다.")]
+            )
+    now = timezone.now()
+    with step("DOC-SDL-01", "DOC", "삭제 대상(지우지 않은 문서)") as s:
+        targets = list(
+            Document.objects.filter(pk__in=ids, deleted_at__isnull=True)
+            .order_by("document_id")
+            .values_list("pk", flat=True)
+        )
+        s.note(f"{len(targets)}건")
+    with step("DOC-SDL-02", "DOC", "열린 정정 닫기") as s:
+        closed = 0
+        if targets:
+            closed = DocumentCorrection.objects.filter(
+                document_id__in=targets, closed_at__isnull=True
+            ).update(closed_at=now, outcome="cancelled")
+        else:
+            s.skip("대상 없음")
+        s.note(f"닫은 정정 {closed}")
+    with step("DOC-SDL-03", "DOC", "삭제 표시(조건부 UPDATE)") as s:
+        marked = 0
+        if targets:
+            marked = Document.objects.filter(pk__in=targets, deleted_at__isnull=True).update(
+                deleted_at=now,
+                deleted_by_id=actor_id,
+                updated_at=now,
+                version=F("version") + 1,
+            )
+        else:
+            s.skip("대상 없음")
+        s.note(f"영향 행 {marked}")
+    return {"deleted": targets, "closed_corrections": closed}
+
+
 # ---------------------------------------------------------------- F09~F11 생명주기 (WF 전용)
 
 
@@ -3126,3 +3174,491 @@ def _db_date(value):
     from django.db import connection
 
     return connection.ops.adapt_datefield_value(value)
+
+
+# ---------------------------------------------------------------- P11 CCP 대시보드·개선조치 확인
+# (dev-notes/dashboard/p11-s2-spec.md 2.2·3장). DOC는 "CCP"를 모른다 — 측정 섹션은 양식 키
+# phase_order, 이탈은 nonconforming, 확인 노출은 deviation.check_visibility로 판단한다.
+
+VISIBLE_AFTER_COMPLETE = ("completed", "submitted", "approved", "rejected", "correcting")
+PENDING_OTHER_DAYS_MAX = 10  # 다른 날 내 확인 대기 날짜 수(S1-Q1 a)
+PENDING_FUTURE_IDS_MAX = 5  # 미래 작업일 묶음의 문서 [열기] 수(A2 a)
+PERIOD_SCAN_DAYS = 31  # 기간 문서 후보를 읽을 범위(기준일 −31일 ~ 기준일). 지금 기간은 D11 6일
+
+
+def _today():
+    """오늘(Asia/Seoul). 테스트는 이 함수를 바꿔 날짜를 고정한다."""
+    return timezone.localdate()
+
+
+def period_days(schema):
+    """기간 문서의 길이(일, G2 — P11 S4): 1행 섹션 필드 date_window.to의 최댓값, 없으면 0.
+
+    D11은 info.checked_on date_window {from 0, to 6} → work_date(월)~+6일(일). VR-P11-01 5번의
+    period_end를 컬럼 없이 계산한다(C3 S4에서 period_end 컬럼을 넣지 않음, D-162 Q2 a).
+    """
+    days = 0
+    for section in (schema or {}).get("sections", []):
+        if section.get("repeat"):
+            continue
+        for field in section.get("fields", []):
+            window = field.get("date_window")
+            if isinstance(window, dict) and isinstance(window.get("to"), int):
+                days = max(days, window["to"])
+    return days
+
+
+def _covers(work_date, days, base):
+    """문서(work_date ~ +days)가 기준일을 포함하는가."""
+    from datetime import timedelta
+
+    return work_date <= base <= work_date + timedelta(days=days)
+
+
+def _expect(item):
+    return {op: item[op] for op in validation.CONDITION_OPS if op in item}
+
+
+def _reasons(section, values):
+    """이탈 행의 어긋난 조건(N8). computed 판정 필드가 있으면 그 조건 중 거짓인 것,
+    없으면 nonconforming 조건 중 참인 것. 값이 비어 판정이 안 된 조건은 뺀다."""
+    labels = {f["key"]: f.get("label", f["key"]) for f in section.get("fields", [])}
+    computed = next((f["computed"] for f in section.get("fields", []) if f.get("computed")), None)
+    if computed:
+        items = computed.get("all") or computed.get("any") or []
+        wanted = False
+    else:
+        rule = section.get("nonconforming") or {}
+        items = rule.get("all") or rule.get("any") or []
+        wanted = True
+    reasons = []
+    for item in items:
+        value = (values or {}).get(item["field"])
+        if validation._compare(item, value) is wanted:
+            reasons.append(
+                {
+                    "field": item["field"],
+                    "label": labels.get(item["field"], item["field"]),
+                    "value": value,
+                    "expect": _expect(item),
+                }
+            )
+    return reasons
+
+
+def measurement_summary(work_date, type_codes, note_fields=None):
+    """N8(P11, REQ-F11용): 작업일 문서의 측정 요약·이탈 행·개선조치. 쓰기 없음.
+
+    SQL 6: 문서·양식 1 · 행 1 · 참조 1 · 개선조치 1 · 확인자 1 · 양식 이름 1(문서 없는 양식 카드).
+    반환 {documents: [...], templates: {type_code: name}}.
+    note_fields(P11 S5 r1): {type_code: {section_def: field}} — 부르는 쪽이 정한 "특이사항" 칸.
+    값이 있는 행을 문서마다 notes로 돌려준다(DOC는 어느 칸이 특이사항인지 모름).
+    """
+    with step("DOC-MSM-01", "DOC", "입력 확인"):
+        day = _as_day(work_date)
+        codes = [c for c in (type_codes or []) if isinstance(c, str) and c]
+        problems = []
+        if day is None:
+            problems.append(validation.error("work_date", "invalid", "YYYY-MM-DD 형식입니다."))
+        if not codes:
+            problems.append(validation.error("type_codes", "required", "양식을 지정하세요."))
+        if problems:
+            raise errors.ValidationFailed(details=problems)
+    with step("DOC-MSM-02", "DOC", "작업일 문서·양식") as s:
+        documents = list(
+            Document.objects.select_related("template")
+            .filter(deleted_at__isnull=True, work_date=day, template__type_code__in=codes)
+            .order_by("document_id")
+        )
+        s.note(f"{len(documents)}건")
+    ids = [d.document_id for d in documents]
+    rows, labels, deviations, checkers = {i: [] for i in ids}, {}, {i: [] for i in ids}, {}
+    batch_ids = {}
+    with step("DOC-MSM-03", "DOC", "행·참조·개선조치·확인자") as s:
+        if ids:
+            for row in DocSection.objects.filter(document_id__in=ids).order_by(
+                "document_id", "section_def", "row_no"
+            ):
+                rows[row.document_id].append(row)
+            for document_id, label, batch_id in DocumentRef.objects.filter(
+                document_id__in=ids, section_id__isnull=True
+            ).values_list("document_id", "label", "production_batch_id"):
+                labels.setdefault(document_id, label)
+                if batch_id is not None:
+                    batch_ids.setdefault(document_id, batch_id)
+            for d in DeviationAction.objects.filter(
+                document_id__in=ids, deleted_at__isnull=True
+            ).order_by("deviation_id"):
+                deviations[d.document_id].append(d)
+            dev_ids = [d.deviation_id for items in deviations.values() for d in items]
+            if dev_ids:
+                for deviation_id, staff_id in (
+                    DeviationChecker.objects.filter(deviation_id__in=dev_ids)
+                    .order_by("staff_id")
+                    .values_list("deviation_id", "staff_id")
+                ):
+                    checkers.setdefault(deviation_id, []).append(staff_id)
+        else:
+            s.skip("문서 없음")
+    with step("DOC-MSM-04", "DOC", "측정 섹션·최근 측정·이탈 행"):
+        out = []
+        for d in documents:
+            sections = validation.sections_of(d.template.schema_json)
+            by_section, latest, nonconforming, info = {}, None, [], {}
+            repeat_values, notes = {}, []
+            wanted = ((note_fields or {}).get(d.template.type_code)) or {}
+            for row in rows[d.document_id]:
+                section = sections.get(row.section_def)
+                if section is None:
+                    continue
+                values = row.values_json or {}
+                if not section["repeat"]:
+                    if row.section_def == "info":
+                        info = values
+                    continue
+                order = section.get("phase_order")
+                at = values.get(order["time_field"]) if order else None
+                if order:
+                    by_section[row.section_def] = by_section.get(row.section_def, 0) + 1
+                    if at and (
+                        latest is None or (at, row.row_no) > (latest["at"], latest["row_no"])
+                    ):
+                        latest = {
+                            "section_def": row.section_def,
+                            "row_no": row.row_no,
+                            "at": at,
+                            "phase": values.get(order["field"]),
+                            "values": values,
+                            "verdict": values.get("verdict"),
+                        }
+                else:
+                    repeat_values.setdefault(row.section_def, []).append(values)
+                note_key = wanted.get(row.section_def)
+                text = values.get(note_key) if note_key else None
+                if isinstance(text, str) and text.strip():
+                    field = next((f for f in section["fields"] if f["key"] == note_key), {})
+                    notes.append(
+                        {
+                            "section_id": row.section_id,
+                            "section_def": row.section_def,
+                            "section_label": section.get("label", row.section_def),
+                            "field_label": field.get("label", note_key),
+                            "row_no": row.row_no,
+                            "at": at,
+                            "text": text.strip(),
+                        }
+                    )
+                if validation.is_nonconforming(section, values):
+                    nonconforming.append(
+                        {
+                            "section_id": row.section_id,
+                            "section_def": row.section_def,
+                            "row_no": row.row_no,
+                            "at": at,
+                            "phase": values.get(order["field"]) if order else None,
+                            "values": values,
+                            "reasons": _reasons(section, values),
+                        }
+                    )
+            for key, section in sections.items():
+                if section["repeat"] and section.get("phase_order"):
+                    by_section.setdefault(key, 0)
+            if latest:
+                latest.pop("row_no")
+            out.append(
+                {
+                    "document_id": d.document_id,
+                    "type_code": d.template.type_code,
+                    "template_name": d.template.name,
+                    "status": d.status,
+                    "version": d.version,
+                    "label": labels.get(d.document_id) or d.subject,
+                    "batch_id": batch_ids.get(d.document_id),  # P11 S5 r1: 배치별 공정 순서용
+                    "item_name": info.get("item_name"),
+                    "rows_by_section": by_section,
+                    "latest": latest,
+                    "nonconforming": nonconforming,
+                    "repeat_values": repeat_values,
+                    "notes": notes,
+                    "deviations": [
+                        {
+                            "deviation_id": x.deviation_id,
+                            "section_id": x.section_id,
+                            "checked_by": x.checked_by_id,
+                            "checked_at": _iso(x.checked_at),
+                            "checker_ids": checkers.get(x.deviation_id, []),
+                            # P11 S5 r1: 배치 영역 이탈 표(개선조치 내용·[확인]용 version)
+                            "version": x.version,
+                            "description": x.description,
+                            "action_result": x.action_result,
+                            "actor_id": x.actor_id,
+                        }
+                        for x in deviations[d.document_id]
+                    ],
+                }
+            )
+    with step("DOC-MSM-05", "DOC", "양식 이름(문서 없는 양식 포함)"):
+        latest_version = (
+            DocumentTemplate.objects.filter(type_code=OuterRef("type_code"), is_active=True)
+            .order_by("-version")
+            .values("version")[:1]
+        )
+        templates = dict(
+            DocumentTemplate.objects.filter(
+                type_code__in=codes, is_active=True, version=Subquery(latest_version)
+            ).values_list("type_code", "name")
+        )
+    return {"documents": out, "templates": templates}
+
+
+def _bad_filter(path, message):
+    return errors.InvalidFilter(details=[validation.error(path, "invalid", message)])
+
+
+def _flag(value, name):
+    if value in (None, "", "0", 0, False):
+        return False
+    if value in ("1", 1, True):
+        return True
+    raise _bad_filter(name, "0 또는 1입니다.")
+
+
+def _pending_queryset():
+    """VR-P11-01 1~4(확인자 조건 3은 부르는 쪽): 미삭제·미확인, 문서 살아 있음, 노출 조건."""
+    from django.db.models.fields.json import KeyTextTransform, KeyTransform
+    from django.db.models.functions import Coalesce
+
+    visibility = Coalesce(
+        KeyTextTransform(
+            "check_visibility", KeyTransform("deviation", "document__template__schema_json")
+        ),
+        Value("after_complete"),
+        output_field=models.TextField(),
+    )
+    return (
+        DeviationAction.objects.filter(
+            deleted_at__isnull=True, checked_at__isnull=True, document__deleted_at__isnull=True
+        )
+        .annotate(visibility=visibility)
+        .filter(
+            (Q(visibility="immediate") & ~Q(document__status="skipped"))
+            | (~Q(visibility="immediate") & Q(document__status__in=VISIBLE_AFTER_COMPLETE))
+        )
+    )
+
+
+def _mine(actor_id):
+    return Exists(DeviationChecker.objects.filter(deviation_id=OuterRef("pk"), staff_id=actor_id))
+
+
+def _check_leader(actor_id):
+    """P14 ROLE-R05(FR-13): 팀장은 지정 확인자가 아니어도 확인한다(확인자 없는 개선조치 포함).
+
+    역할 설정 파일 형식 오류면 팀장 예외는 쓸 수 없다(ROLE-C07 — 지정 확인자의 확인은 그대로).
+    """
+    return actor_id is not None and roles.config_error() is None and roles.is_leader(actor_id)
+
+
+def _my_pending(queryset, actor_id, leader):
+    """내가 확인할 수 있는 대기 — 팀장이면 전부, 아니면 지정 확인자인 것(R05)."""
+    return queryset if leader else queryset.filter(_mine(actor_id))
+
+
+@roles.scope()
+def pending_deviations(actor_id, base_date=None, mine=False, summary=False):
+    """F30(P11): 개선조치 확인 대기. actor_id = API가 확인한 현재 사용자 또는 None(헤더 없음).
+
+    SQL 6 이하(역할 1 · 목록 1 · 확인자 1 · 참조 1 · info 1 · 내 것 1), summary면 2. 쓰기 없음.
+    P14 R05: 팀장이면 "내 것" = 확인 대기 전부(확인자 없는 것 포함).
+    """
+    with step("DOC-PND-01", "DOC", "기준일·mine·summary 확인"):
+        today = _today()
+        if base_date in (None, ""):
+            base = today
+        else:
+            base = _as_day(base_date)
+            if base is None:
+                raise _bad_filter("date", "YYYY-MM-DD 형식입니다.")
+            if base > today:
+                raise _bad_filter("date", "오늘 이후 날짜는 볼 수 없습니다.")
+        mine, summary = _flag(mine, "mine"), _flag(summary, "summary")
+        if actor_id is None and (mine or summary):
+            raise staff_services.StaffHeaderMissing()
+        leader = _check_leader(actor_id)  # P14 R05: 팀장이면 확인 대기 전부가 "내 것"
+    pending = _pending_queryset()
+    if summary:
+        with step("DOC-PND-02", "DOC", "내 확인 대기 합계(배지)"):
+            return {"my_total": _my_pending(pending, actor_id, leader).count()}
+    from datetime import timedelta
+
+    with step("DOC-PND-02", "DOC", "기준일 문서의 확인 대기 후보") as s:
+        candidates = list(
+            pending.filter(
+                document__work_date__gte=base - timedelta(days=PERIOD_SCAN_DAYS),
+                document__work_date__lte=base,
+            )
+            .select_related("document__template")
+            .order_by("created_at", "deviation_id")
+        )
+        windows = {}
+        chosen = []
+        for x in candidates:
+            template = x.document.template
+            if template.template_id not in windows:
+                windows[template.template_id] = period_days(template.schema_json)
+            if _covers(x.document.work_date, windows[template.template_id], base):
+                chosen.append(x)
+        s.note(f"후보 {len(candidates)}, 기준일 {len(chosen)}")
+    with step("DOC-PND-03", "DOC", "확인자·대상 표시") as s:
+        checkers = {}
+        if chosen:
+            for deviation_id, staff_id in (
+                DeviationChecker.objects.filter(deviation_id__in=[x.deviation_id for x in chosen])
+                .order_by("staff_id")
+                .values_list("deviation_id", "staff_id")
+            ):
+                checkers.setdefault(deviation_id, []).append(staff_id)
+            doc_ids = sorted({x.document_id for x in chosen})
+            refs, names = _refs_by_document(doc_ids), _item_names(doc_ids)
+        else:
+            refs, names = {}, {}
+            s.skip("후보 없음")
+    with step("DOC-PND-04", "DOC", "줄 조립"):
+        rows, no_checker = [], []
+        for x in chosen:
+            d = x.document
+            ids = checkers.get(x.deviation_id, [])
+            row = {
+                "deviation_id": x.deviation_id,
+                "version": x.version,
+                "document_id": d.document_id,
+                "type_code": d.template.type_code,
+                "template_name": d.template.name,
+                "target_summary": _target_summary(d, refs[d.document_id], names.get(d.document_id)),
+                "work_date": _iso(d.work_date),
+                "description": x.description,
+                "action_result": x.action_result,
+                "actor_id": x.actor_id,
+                "checker_ids": ids,
+                "created_at": _iso(x.created_at),
+                # P14 R05: 지정 확인자 또는 HACCP팀장(확인자 없는 줄도)
+                "can_check": actor_id is not None and (actor_id in ids or leader),
+            }
+            (rows if ids else no_checker).append(row)
+        result = {
+            "base_date": base.isoformat(),
+            "rows": [r for r in rows if r["can_check"]] if mine else rows,
+            "counts": {"total": len(rows)},
+            "no_checker": {"count": len(no_checker), "rows": no_checker},
+        }
+        if actor_id is None:
+            return result
+        # 팀장은 확인자 없는 줄도 셈(내가 확인할 수 있는 전체 — 화면 r7 DSH-SC)
+        result["counts"]["mine"] = sum(1 for r in rows + no_checker if r["can_check"])
+    with step("DOC-PND-05", "DOC", "내 확인 대기 — 다른 날·합계"):
+        mine_rows = list(
+            _my_pending(pending, actor_id, leader)
+            .order_by("document__work_date", "deviation_id")
+            .values_list(
+                "deviation_id",
+                "document_id",
+                "document__work_date",
+                "document__template_id",
+                "document__template__schema_json",
+            )
+        )
+        other, other_total = {}, 0
+        for deviation_id, document_id, work_date, template_id, schema in mine_rows:
+            if template_id not in windows:
+                windows[template_id] = period_days(schema)
+            if _covers(work_date, windows[template_id], base):
+                continue
+            other_total += 1
+            group = other.setdefault(work_date, {"count": 0, "document_ids": []})
+            group["count"] += 1
+            if document_id not in group["document_ids"]:
+                group["document_ids"].append(document_id)
+        days = sorted(other, reverse=True)[:PENDING_OTHER_DAYS_MAX]
+        result["other_days_mine"] = []
+        for day in days:
+            item = {
+                "work_date": day.isoformat(),
+                "count": other[day]["count"],
+                "future": day > today,
+            }
+            if item["future"]:
+                item["document_ids"] = other[day]["document_ids"][:PENDING_FUTURE_IDS_MAX]
+            result["other_days_mine"].append(item)
+        result["other_days_mine_total"] = other_total
+        result["my_total"] = len(mine_rows)
+    return result
+
+
+@roles.scope()
+def check_deviation(actor_id, deviation_id, expected_version):
+    """F31(P11): 개선조치 확인. 지정 확인자 또는 HACCP팀장(P14 R05) 1명이 한 번(취소 없음, Q9 a).
+
+    팀장 여부는 UPDATE 전에 역할로 판단해 값으로 넘긴다(p14-s2-flows 3.11 DOC-DVK-02).
+
+    updated_by·updated_at은 바꾸지 않는다(S2-Q2 a — 확인은 내용 수정이 아님). 문서는 그대로.
+    노출 조건은 보지 않는다(S2-Q3 a — 문서 상세에서는 상태와 무관하게 확인).
+    """
+    with step("DOC-DVK-01", "DOC", "형식 검사") as s:
+        if (
+            isinstance(expected_version, bool)
+            or not isinstance(expected_version, int)
+            or expected_version < 1
+        ):
+            s.fail("expected_version")
+            raise errors.ValidationFailed(
+                details=[
+                    validation.error("expected_version", "required", "1 이상의 정수여야 합니다.")
+                ]
+            )
+        leader = _check_leader(actor_id)  # P14 R05 — 설정 오류면 False(C07)
+        s.note("HACCP팀장" if leader else "지정 확인자만")
+    now = timezone.now()
+    with transaction.atomic():
+        with step("DOC-DVK-02", "DOC", "확인 기록(조건부 UPDATE)") as s:
+            mine = DeviationChecker.objects.filter(deviation_id=OuterRef("pk"), staff_id=actor_id)
+            target = _live_deviation(deviation_id, expected_version).filter(checked_at__isnull=True)
+            if not leader:
+                target = target.filter(Exists(mine))
+            changed = target.update(
+                checked_by_id=actor_id, checked_at=now, version=F("version") + 1
+            )
+            s.note(f"영향 행 {changed}")
+        if changed == 0:
+            with step("DOC-DVK-02a", "DOC", "실패 사유 확인"):
+                row = (
+                    DeviationAction.objects.filter(pk=deviation_id)
+                    .values("deleted_at", "checked_at", "checked_by", "document__deleted_at")
+                    .first()
+                )
+                if (
+                    row is None
+                    or row["deleted_at"] is not None
+                    or row["document__deleted_at"] is not None
+                ):
+                    raise errors.DeviationNotFound()
+                if row["checked_at"] is not None:
+                    raise errors.AlreadyChecked(
+                        details=[
+                            {
+                                "path": "deviation",
+                                "code": "already_checked",
+                                "message": "이미 확인되었습니다.",
+                                "checked_by": row["checked_by"],
+                                "checked_at": _iso(row["checked_at"]),
+                            }
+                        ]
+                    )
+                if (
+                    not leader
+                    and not DeviationChecker.objects.filter(
+                        deviation_id=deviation_id, staff_id=actor_id
+                    ).exists()
+                ):
+                    raise errors.NotChecker()
+            _deviation_failure(deviation_id, expected_version, "DOC-DVK-02a")
+    return _deviation_detail(deviation_id)

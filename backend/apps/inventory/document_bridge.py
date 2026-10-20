@@ -13,7 +13,7 @@ if the document side raises (an ApiError), the inventory change rolls back too.
     receipt registered  -> doc_requirements.require_for_lot    (D01 · D02 · D03 per LOT)
     receipt cancelling  -> doc_requirements.docs_for_lot       (refused once a LOT document is
                                                                 in approval — document side 4)
-    receipt cancelled   -> nothing yet (document side has not decided; no-op hook)
+    receipt cancelled   -> doc_requirements.delete_lot_documents (soft-delete LOT documents)
     batch started       -> doc_requirements.require_for_batch  (CCP 일지 for MANUFACTURE)
 
 The document functions are imported inside each hook so importing inventory does not load the
@@ -51,7 +51,10 @@ def receipt_cancel_blockers(*, lot_id):
 
 
 def incoming_receipt_cancelled(*, lot_id, reason, staff_id):
-    """A receipt was cancelled. Document side: not decided yet (document side 4) — no-op."""
+    """Soft-delete the LOT's documents inside the receipt cancellation transaction."""
+    from apps.doc_requirements import services
+
+    return services.delete_lot_documents(staff_id, lot_id)
 
 
 def batch_started(*, batch_id, staff_id):

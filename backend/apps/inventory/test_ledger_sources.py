@@ -2,10 +2,31 @@
 
 from .models import IncomingReceipt
 from .movements import correct_movement
+from .receiving import cancel_receipt
 from .test_production import ProductionTestCase
 
 
 class LedgerSourceTests(ProductionTestCase):
+    def test_cancelled_receipt_status_is_context_only_and_keeps_balances(self):
+        lot = self.receive(self.raw, "10", "cancelled-context")
+        receipt = IncomingReceipt.objects.get(lot=lot)
+        cancel_receipt(receipt_id=receipt.pk, staff_id=self.staff.pk, reason="입고 취소 확인")
+        response = self.client.get(
+            "/api/v1/inventory/ledger/", {"from": str(self.today), "to": str(self.today)}
+        )
+        self.assertEqual(response.status_code, 200)
+        record = next(
+            record
+            for item in response.json()["results"]
+            for record in item["lots"]
+            if record["lot_id"] == lot.pk
+        )
+        self.assertEqual(record["closing"], "0")
+        self.assertEqual([line["balance"] for line in record["lines"]], ["10", "0"])
+        for line in record["lines"]:
+            self.assertEqual(line["source"]["receipt_status"], "CANCELLED")
+            self.assertEqual(line["source"]["receipt_id"], receipt.pk)
+
     def test_receipt_usage_output_and_correction_links_with_unchanged_balances(self):
         lot = self.receive(self.raw, "10", "links-stock")
         batch = self.batch(self.semi)

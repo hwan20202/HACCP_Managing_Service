@@ -260,3 +260,80 @@
 .te-blocked { margin: 0.6rem 0 0; padding-left: 1.1rem; font-size: 0.85rem; color: #b45309; }
 .te-role-warnings { margin: 0.6rem 0; font-size: 0.85rem; }
 .te-role-warnings summary { cursor: pointer; color: #b45309; font-weight: 600; }
+
+/* ---------- P11 CCP 대시보드 (DSH-SC-01·02, p11-s1-screens 3·4장) ---------- */
+.te-dsh-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; padding: 0.7rem 1rem; }
+.te-dsh-date { width: auto; }
+.te-dsh-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }
+.te-dsh-card { padding: 0.8rem 1rem; }
+.te-dsh-card-head { border-bottom: 1px solid var(--border-color, #e5e7eb); padding-bottom: 0.45rem; margin-bottom: 0.45rem; }
+.te-dsh-card-title { font-weight: 700; font-size: 0.9rem; }
+.te-dsh-card-counts { font-size: 0.78rem; color: var(--text-muted); margin-top: 0.15rem; }
+.te-dsh-row { padding: 0.45rem 0; border-bottom: 1px dashed var(--border-color, #e5e7eb); }
+.te-dsh-row:last-child { border-bottom: none; }
+.te-dsh-row-ng { background: rgba(239, 68, 68, 0.05); }
+.te-dsh-line { font-size: 0.82rem; line-height: 1.5; }
+.te-dsh-open { float: right; }
+.te-dsh-warn { color: #d97706; font-weight: 600; }
+.te-dsh-empty { margin: 0.4rem 0; }
+.te-dsh-fail { color: var(--color-danger); font-size: 0.85rem; padding: 0.5rem 0; }
+.te-dsh-tools { display: flex; gap: 1rem; align-items: center; }
+.te-dsh-other { margin-top: 0.6rem; font-size: 0.82rem; }
+.te-dsh-nochecker { margin-top: 0.6rem; padding: 0.5rem 0.75rem; background: rgba(107, 114, 128, 0.06); border-radius: 8px; }
+.te-dsh-check p { margin: 0.25rem 0; }
+.te-dsh-check .te-dsh-warn { margin-top: 0.75rem; }
+
+/* ---------- P11 S5 r1 배치 영역 (사용설명서 1.5, p11-s5-r1-lines v8) ---------- */
+.te-b { display: inline-block; border-radius: 10px; padding: 1px 7px; font-size: 0.7rem; font-weight: 700; margin-left: 4px; white-space: nowrap; }
+.te-b-red { background: #fde2e2; color: #b91c1c; }
+.te-b-orange { background: #fdecc8; color: #b45309; }
+.te-b-grey { background: #e5e7eb; color: #4b5563; }
+.te-b-blue { background: #dbeafe; color: #1d4ed8; }
+.te-b-green { background: #dcfce7; color: #15803d; }
+.te-dsh-total { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; padding: 0.55rem 0.9rem; margin-bottom: 0.5rem; }
+.te-dsh-grow { flex: 1; }
+.te-dsh-grid { display: grid; grid-template-columns: 1.2rem minmax(170px, 1.3fr) repeat(3, minmax(120px, 1fr)) minmax(170px, 1.2fr) 5.5rem; gap: 0.5rem; align-items: center; }
+.te-dsh-colhead { padding: 0 0.9rem 0.25rem; font-size: 0.72rem; color: var(--text-muted); }
+.te-dsh-fold { padding: 0.5rem 0.9rem; margin-bottom: 0.4rem; cursor: pointer; font-size: 0.8rem; }
+.te-dsh-fold:hover { background: #f9fafb; }
+.te-dsh-caret { color: var(--text-muted); }
+.te-dsh-name { font-size: 0.9rem; }
+.te-dsh-area { padding: 0; margin-bottom: 0.5rem; }
+.te-dsh-area-head { padding: 0.55rem 0.9rem; border-bottom: 1px solid var(--border-color, #e5e7eb); cursor: pointer; display: flex; align-items: center; flex-wrap: wrap; gap: 0.25rem; }
+.te-dsh-procs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.6rem; padding: 0.6rem 0.75rem; }
+.te-dsh-proc { border: 1px solid var(--border-color, #e5e7eb); border-radius: 8px; padding: 0.45rem 0.6rem; }
+.te-dsh-proc-ng { background: #fef2f2; }
+.te-dsh-proc-head { font-weight: 700; font-size: 0.82rem; margin-bottom: 0.2rem; }
+.te-dsh-panel { margin: 0 0.75rem 0.6rem; border: 1px solid #fde68a; background: #fffbeb; border-radius: 8px; }
+.te-dsh-panel-head { padding: 0.35rem 0.7rem; font-weight: 700; font-size: 0.8rem; cursor: pointer; }
+.te-dsh-panel .data-table { margin: 0; font-size: 0.78rem; background: transparent; }
+.te-dsh-notetable { background: #eff6ff !important; }
+@media (max-width: 1100px) { .te-dsh-procs { grid-template-columns: 1fr; } }
+/* r1(D-168): 열 이름 줄 없음 — 배치 요약 줄은 이름 · 공정 결과(공정 이름 붙임, 품목별 순서) · 이탈·개선조치 · 최근 */
+.te-dsh-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.te-dsh-fold.te-dsh-row { padding: 0.5rem 0.9rem; }
+.te-dsh-area .te-dsh-area-head.te-dsh-row { display: flex; padding: 0.5rem 0.9rem; font-size: 0.8rem; }
+.te-dsh-name { min-width: 11rem; }
+.te-dsh-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; flex: 1; }
+.te-dsh-chip { border: 1px solid var(--border-color, #e5e7eb); border-radius: 8px; padding: 0.1rem 0.5rem; background: #fafafa; white-space: nowrap; font-size: 0.78rem; }
+.te-dsh-arrow { color: #9ca3af; }
+.te-dsh-devsum { display: inline-flex; flex-wrap: wrap; }
+.te-dsh-area-badges { padding: 0.45rem 0.9rem 0; }
+.te-dsh-procs { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+/* D-169 특이사항 칸(이탈·개선조치 칸과 따로) */
+.te-dsh-notes { margin: 0 0.75rem 0.6rem; border: 1px solid #bfdbfe; background: #eff6ff; border-radius: 8px; }
+.te-dsh-notes-head { padding: 0.35rem 0.7rem; font-weight: 700; font-size: 0.8rem; cursor: pointer; color: #1d4ed8; }
+.te-dsh-notes .data-table { margin: 0; font-size: 0.78rem; background: transparent; }
+/* D-170 빈 칸: 늘 두되 한 줄만, 누를 것 없음 */
+.te-dsh-panel-empty { background: #fafafa; border-color: var(--border-color, #e5e7eb); }
+.te-dsh-notes-empty { background: #fafafa; border-color: var(--border-color, #e5e7eb); }
+.te-dsh-empty-head { cursor: default; color: var(--text-muted); font-weight: 600; }
+/* D-172 배치 이름 옆 생산 정보(수량·시작) */
+.te-dsh-namebox { display: inline-flex; flex-direction: column; min-width: 12rem; }
+.te-dsh-namebox .te-dsh-name { min-width: 0; }
+.te-dsh-namebox .te-b { align-self: flex-start; margin: 0.1rem 0 0; }
+.te-dsh-prodinfo { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.1rem; white-space: nowrap; }
+.te-dsh-prodlink { float: right; padding: 0.1rem 0.5rem; font-size: 0.72rem; }
+.te-dsh-focus { box-shadow: 0 0 0 2px var(--brand-primary, #2563eb); }
+/* P14 r13 E5: 대시보드 [개선조치 쓰기] — 양식 역할이 없으면 흐리게(점검자는 문서 상세에서 쓸 수 있어 막지는 않음) */
+[data-dev-noperm] { opacity: 0.5; }
