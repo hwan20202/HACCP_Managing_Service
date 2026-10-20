@@ -127,6 +127,27 @@
       return form ? form.owners.map((p) => p.id) : [];
     },
     leaderIds() { return this.roles ? this.roles.leaders.map((p) => p.id) : []; },
+    // P14 r13(DR-23) 작성 권한(ROLE-R07): 양식 담당자·작성 권한자·HACCP팀장 — 역할 설정 파일 오류면 검사 안 함(C07).
+    // 문서 화면은 서버가 준 permissions.write를 쓰고, 이 함수는 새 문서 양식 고르기·작성 폼(문서 점검자 포함)용
+    canWriteForm(id, typeCode, inspectorId = null) {
+      if (!id) return false;
+      if (this.roles && this.roles.config_error) return true;
+      if (inspectorId && Number(inspectorId) === Number(id)) return true;
+      return this.isLeader(id) || this.ownerForms(id).includes(typeCode) || this.writerForms(id).includes(typeCode);
+    },
+    // r13 점검자 지정(ROLE-R08): 담당자·HACCP팀장 — 설정 파일 오류면 서버가 409라 false
+    canAssignInspector(id, typeCode) {
+      if (!id || !this.roles || this.roles.config_error) return false;
+      return this.isLeader(id) || this.ownerForms(id).includes(typeCode);
+    },
+    WRITE_WHY: '이 양식의 담당자·작성 권한자·HACCP팀장이나 지정된 점검자만 작성할 수 있습니다.',
+    INSPECTOR_WHY: '이 양식의 담당자나 HACCP팀장만 점검자를 지정할 수 있습니다.',
+    // r13(명세 2.7): 작성 요구 문서의 작성자 = "작성 요구(자동)" + 흐린 "실행 ○○"(created_by = 부른 사람)
+    authorHtml(d, { short = false } = {}) {
+      if (!d.requirement) return this.personHtml(d.created_by);
+      if (short) return `<span class="te-author-auto" title="실행 ${this.esc(this.person(d.created_by))}">작성 요구(자동)</span>`;
+      return `<span class="te-author-auto">작성 요구(자동)</span> <span class="te-hint">실행 ${this.personHtml(d.created_by)}</span>`;
+    },
     // 현재 사용자 선택(S1-Q4): 목록 = 역할 요약, 가장 높은 역할 = HACCP팀장 > 담당자 n
     roleSummary(id) {
       const parts = [];
@@ -185,7 +206,7 @@
     },
 
     // ---------- P10 사이드바 숫자 배지(p10-s1-screens 2장, S1-Q4 — 폴링 없음) ----------
-    // 문서함 = 작성 필요 전체(A08 mine=0 counts 합 — 상신 대기·30일 넘은 미완료 제외), 결재함 = 내 차례(대기 total).
+    // 문서함 = 작성 필요 전체(A08 mine=0 counts 합 — 상신 대기·30일 넘은 미완료 제외), 결재함 = 내 칸(대기 total — r7 DR-24 Q2 b).
     // 화면을 열 때·사용자를 바꿀 때·내가 저장·작성완료·상신·결재·상신 취소·작성 안 함 한 뒤(api 쓰기 호출 성공) 다시 센다.
     badgeSeq: 0,
     async refreshBadges() {

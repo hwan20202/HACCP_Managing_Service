@@ -279,7 +279,8 @@
     steps.filter((s) => own(s) && !expected.includes(s.step_id))
       .forEach((s) => chips.push({ id: s.step_id, cls: s.result === 'fail' ? 'fail extra' : 'extra' }));
     // 실패 분기 단계(…-02a, P6 …-02b 등 숫자 뒤 글자)는 도식에 없으면 순서 비교에서 뺀다
-    const branch = (id) => /\d[a-z]$/.test(id) && !expected.includes(id);
+    // P14 r13: 조건부 단계(점검자를 바꾸는 수정의 DOC-WRT-03 — documents/flows.py OPTIONAL)도 도식에 없으면 뺀다
+    const branch = (id) => (/\d[a-z]$/.test(id) || id === 'DOC-WRT-03') && !expected.includes(id);
     let mainRun = steps.filter(own).map((s) => s.step_id).filter((id) => (reqFlow ? expected.includes(id) : !branch(id)));
     if (reqFlow) mainRun = mainRun.filter((id, i) => i === 0 || mainRun[i - 1] !== id);
     const inOrder = mainRun.every((id, i) => expected[i] === id);
@@ -745,7 +746,7 @@
         return { func: 'update', id: d.document_id, body: body('먼저 저장'),
           script: async (exec) => {
             await exec({ func: 'update', id: d.document_id, body: body('먼저 저장'), staff: api.staffId });
-            await exec({ func: 'update', id: d.document_id, body: body('나중 저장(덮어쓰기 시도)'), staff: '4' });
+            await exec({ func: 'update', id: d.document_id, body: body('나중 저장(덮어쓰기 시도)'), staff: '5' });  // P14 r13: 다른 사람 = 팀장(역할 없는 4는 403)
           } };
       } },
   ];
@@ -802,7 +803,7 @@
         const submit = J({ expected_version: d.version });
         return { func: 'submit', id: d.document_id, body: submit,
           script: async (exec) => {
-            await exec({ ...completeSpec(d), staff: '4' });
+            await exec({ ...completeSpec(d), staff: OWNER });  // P14 r13: 작성완료도 작성 권한(R07) — 담당자
             await exec({ func: 'submit', id: d.document_id, body: submit, staff: OWNER });
           } };
       } },
@@ -1697,6 +1698,32 @@
       prepare: async () => {
         const m = await fileDoc({ state: 'completed', files: 1 });  // 새 LOT의 D01(작성완료)
         return { func: 'submit', staff: '4', id: String(m.document_id), body: J({ expected_version: m.version }) };
+      } }),
+    // P14 r13(DR-23) 작성 권한 — 화면 r7 7장. D03 fixture 점검자 기본 = staff 4(역할 없음)
+    role({ id: 'ROLE-PS-14', label: '작성 권한 없는 수정', expect: '403 ROLE_REQUIRED(required = owner·writer·leader·inspector) · DOC-UPD-01·02 → DOC-WRT-01 → DOC-WRT-02 실패, 잠금(DOC-UPD-03) 없음 · ④ 변화 없음',
+      prepare: async () => {
+        const { d } = await fixtureDoc({ state: 'draft', inspector: null });  // 점검자 없음 → staff 4는 D03 역할 없음
+        const insp = d.sections.find((x) => x.section_def === 'inspection');
+        return { func: 'update', staff: '4', id: String(d.document_id),
+          body: J({ expected_version: d.version, sections: { update: [{ section_id: insp.section_id, values: { packaging: '양호' } }] } }) };
+      } }),
+    role({ id: 'ROLE-PS-15', label: '점검자의 작성(역할 없음)', expect: '200 · DOC-WRT-02 통과(점검자) · DOC-UPD 도식 일치 · ④ doc_section 값·recorded_by = 4, version +1',
+      prepare: async () => {
+        const { d } = await fixtureDoc({ state: 'draft' });  // 점검자 = 4
+        const insp = d.sections.find((x) => x.section_def === 'inspection');
+        return { func: 'update', staff: '4', id: String(d.document_id),
+          body: J({ expected_version: d.version, sections: { update: [{ section_id: insp.section_id, values: { packaging: '양호' } }] } }) };
+      } }),
+    role({ id: 'ROLE-PS-16', label: '점검자 바꾸기 권한', expect: '1번째 403 ROLE_REQUIRED(staff 4 = 점검자, required = owner·leader — DOC-WRT-03 실패, DB 변화 없음) → 2번째 200(staff 2 = D03 담당자, 점검자 2로)',
+      prepare: async () => {
+        const { d } = await fixtureDoc({ state: 'draft' });
+        const info = d.sections.find((x) => x.section_def === 'info');
+        const first = { func: 'update', staff: '4', id: String(d.document_id),
+          body: J({ expected_version: d.version, sections: { update: [{ section_id: info.section_id, values: { inspector: 2 } }] } }) };
+        return { ...first, script: async (exec) => {
+          await exec(first);
+          await exec({ ...first, staff: '2' });
+        } };
       } }),
   );
 

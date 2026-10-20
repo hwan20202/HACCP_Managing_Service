@@ -178,6 +178,9 @@
       if (code === 'DOCUMENT_NOT_SKIPPABLE') return '주기 작성 요구 문서만 작성 안 함으로 바꿀 수 있습니다.';
       if (code === 'INVALID_TRANSITION') return '작성중 문서만 작성 안 함으로 바꿀 수 있습니다.';
     }
+    // P14 r13: 작성 권한(R07 — 작성 안 함)·점검자 지정(R08)
+    if (code === 'ROLE_REQUIRED' && action === 'skip') return T.WRITE_WHY;
+    if (code === 'ROLE_REQUIRED' && action === 'inspector') return T.INSPECTOR_WHY;
     if (code === 'DOCUMENT_LOCKED' && action === 'inspector') {
       return sub === 'completed' ? '작성완료된 문서입니다. 바꾸려면 작성 재개하세요.' : '결재 중이거나 승인된 문서는 바꿀 수 없습니다.';
     }

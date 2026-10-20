@@ -2,7 +2,7 @@
 // 역할 보기 (P14 ROLE-SC-01, 읽기 전용)
 // 설계: dev-notes/roles/p14-s1-screens.md 4장 ROLE-SC-01 · API: p14-s2-spec.md 10.1 GET /api/v1/roles
 // 역할은 설정 파일(roles.json)에서만 바꾼다(ROLE-C01). 화면은 서버가 계산한 값을 보여 줄 뿐이다.
-// r4(DR-20): 작성 권한자 열 — 상신만 할 수 있고 결재 칸 후보가 아님
+// r4(DR-20)·r6(DR-23): 작성 권한자 열 — 작성·상신을 할 수 있고 결재 칸 후보가 아님
 // =============================================
 (function () {
   const T = window.TempEntry;
@@ -45,7 +45,7 @@
     },
 
     html(data) {
-      const info = '<div class="te-status-note" id="roInfo">ⓘ 역할은 설정 파일(roles.json)에서만 바꿉니다. 설정 파일을 바꾼 뒤에는 서버를 다시 시작해야 반영됩니다. 직원 등록·비활성은 바로 반영됩니다.<br>작성 권한자는 상신만 할 수 있습니다 — 결재(칸 처리)는 담당자·HACCP팀장이 합니다.</div>';
+      const info = '<div class="te-status-note" id="roInfo">ⓘ 역할은 설정 파일(roles.json)에서만 바꿉니다. 설정 파일을 바꾼 뒤에는 서버를 다시 시작해야 반영됩니다. 직원 등록·비활성은 바로 반영됩니다.<br>작성 권한자는 작성·상신을 할 수 있습니다 — 결재(칸 처리)·정정 시작·점검자 지정은 담당자·HACCP팀장이 합니다.</div>';
       if (data.config_error) {
         return `${info}<div class="te-error-box" id="roConfigError"><strong>역할 설정 파일을 읽지 못했습니다 — 모든 상신이 막혀 있습니다.</strong><div class="te-hint">${esc(data.config_error)}</div></div>`;
       }
@@ -71,7 +71,7 @@
         ${warn}
         <div class="te-meta" id="roLeaders" style="margin-top:.75rem"><span>HACCP팀장</span> <b>${whoList(data.leaders)}</b></div>
         <div class="te-table-wrap"><table class="data-table" id="roForms">
-          <thead><tr><th>양식</th><th>결재 칸</th><th>담당자</th><th title="상신만 — 결재 칸 후보 아님">작성 권한자</th><th>상신</th></tr></thead>
+          <thead><tr><th>양식</th><th>결재 칸</th><th>담당자</th><th title="작성·상신 — 결재 칸 후보 아님">작성 권한자</th><th>상신</th></tr></thead>
           <tbody>${rows || '<tr><td colspan="5" class="te-hint">활성 양식이 없습니다.</td></tr>'}</tbody>
         </table></div>
         ${me}`;

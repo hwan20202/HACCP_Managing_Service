@@ -245,6 +245,12 @@
 .te-more { color: var(--text-muted); border-bottom: 1px dotted var(--text-muted); cursor: help; }
 .te-dim, .te-dim .te-person { color: var(--text-muted); }
 .te-perm-note { margin-top: 0.4rem; font-size: 0.8rem; color: var(--text-secondary); }
+/* P14 r13(명세 2.7): 작성 요구 문서의 작성자 "작성 요구(자동)" */
+.te-author-auto { color: var(--text-secondary); font-style: italic; }
+[data-inspector-ro] { display: inline-block; padding: 0.35rem 0; }
+/* S5 r4: 권한·상태로 막힌 버튼이 눈에 보이게(공통 .btn에는 :disabled 모양이 없음 — 정정 시작만 있었음) */
+.page-actions .btn:disabled, .te-section .btn:disabled, .te-bundle-actions .btn:disabled,
+.te-actions .btn:disabled, .te-cards .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .te-role-link { font-size: 0.8rem; white-space: nowrap; }
 .te-line-preview { margin-top: 0.75rem; }
 .te-line-preview .te-sub, .te-modal-body .te-sub { font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem; }
