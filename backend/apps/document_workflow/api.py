@@ -144,5 +144,5 @@ def cancel_submission(request, request_id):
 def print_sheet(request):
     """WF-A06 종이 한 장 데이터 — 읽기 전용, 사용자 헤더 필요 없음(보내도 쓰지 않음)."""
     with step("WF-PRT-00", "API", "조건 확인"):
-        document_id = printing.parse_query(request.GET)
-    return json_response(printing.print_sheet(document_id))
+        query = printing.parse_query(request.GET)
+    return json_response(printing.print_by_query(query))

@@ -63,6 +63,8 @@ BATCH = {
         "tail": ["WF-BSB-07"],
     },
 }
+_RCV_DOCS = ["WF-PRT-05", *(f"DOC-RQD-0{n}" for n in range(1, 7))]
+_RCV = [*_RCV_DOCS, "WF-PRT-07", "DOC-PRT-01", "APR-PRT-01", "APR-PRT-02", "WF-PRT-06"]
 FLOWS.update(
     {
         "WF-BAP": [*BATCH["WF-BAP"]["head"], *BATCH["WF-BAP"]["items"]["approved"], "WF-BAP-07"],
@@ -78,6 +80,19 @@ FLOWS.update(
         "WF-PRT": ["WF-PRT-00", "WF-PRT-01", "WF-PRT-02", "DOC-PRT-01"]
         + ["APR-PRT-01", "APR-PRT-02", "WF-PRT-03", "WF-PRT-04"],
         "WF-PRT-NOT-PRINTABLE": ["WF-PRT-00", "WF-PRT-01", "WF-PRT-02", "DOC-PRT-01"],
+        # P12 D03 입고일 묶음(p12-d03-policy.md): 조건 → [DOC N7] → [DOC N9 → APR A12] → 줄 조립.
+        # 문서로 열기(-DOC)는 그 문서 상태·작업일을 먼저 본다. 문서 0건(-EMPTY)은 N9·A12 없음
+        "WF-PRT-RCV": ["WF-PRT-00", *_RCV],
+        "WF-PRT-RCV-DOC": ["WF-PRT-00", "WF-PRT-01", "WF-PRT-02", "DOC-PRT-01", *_RCV],
+        "WF-PRT-RCV-EMPTY": ["WF-PRT-00", *_RCV_DOCS, "WF-PRT-07", "WF-PRT-06"],
+        # P12 D10 주 묶음(p12-d10-policy.md): 단계는 입고일 묶음과 같음(N7 범위만 월~일)
+        "WF-PRT-WK": ["WF-PRT-00", *_RCV],
+        "WF-PRT-WK-DOC": ["WF-PRT-00", "WF-PRT-01", "WF-PRT-02", "DOC-PRT-01", *_RCV],
+        "WF-PRT-WK-EMPTY": ["WF-PRT-00", *_RCV_DOCS, "WF-PRT-07", "WF-PRT-06"],
+        # P12 D11 월 묶음(p12-d11-policy.md): 단계는 주 묶음과 같음(N7 범위 = 그 달 월요일들)
+        "WF-PRT-MON": ["WF-PRT-00", *_RCV],
+        "WF-PRT-MON-DOC": ["WF-PRT-00", "WF-PRT-01", "WF-PRT-02", "DOC-PRT-01", *_RCV],
+        "WF-PRT-MON-EMPTY": ["WF-PRT-00", *_RCV_DOCS, "WF-PRT-07", "WF-PRT-06"],
         "WF-CAN": ["WF-CAN-01", "WF-CAN-01b", "WF-CAN-02", "WF-CAN-03"]
         + [f"APR-CAN-0{n}" for n in range(0, 4)]
         + ["WF-CAN-04", "DOC-ULK-00", "DOC-ULK-01", "DOC-ULK-02", "WF-CAN-05"],
