@@ -115,7 +115,7 @@ const InventoryApiPage = {
           <p class="page-desc">수불 내역과 현재고를 조회합니다. 품목명을 누르면 재고 요약·전체 LOT·선택 기간 수불을 함께 확인합니다.</p>
         </div>
         <div class="page-actions">
-          ${window.HACCP_SITE?.qa ? '<button id="qaReceiptOpen" class="btn btn-primary" onclick="InventoryApiPage.openQaReceipt()">QA 입고 등록</button>' : ''}
+          <button id="qaReceiptOpen" class="btn btn-primary" onclick="InventoryApiPage.openQaReceipt()">입고 등록</button>
           <button class="btn btn-secondary" onclick="InventoryApiPage.load()">새로고침</button>
           <button class="btn btn-secondary" id="invExport" onclick="InventoryApiPage.exportExcel()">엑셀 다운로드</button>
         </div>
@@ -389,7 +389,7 @@ const InventoryApiPage = {
     return this.getJson('/ledger/', this.ledgerParams());
   },
 
-  // Hosted QA uses the business API with DEBUG=false; no /api/dev/ dependency.
+  // Normal receipt entry uses the business API in local, QA and production environments.
   async openQaReceipt() {
     try {
       const [items, suppliers, staff] = await Promise.all([
@@ -399,8 +399,8 @@ const InventoryApiPage = {
       this.qaReceiptKey = crypto.randomUUID();
       this.receiptItems = items.results.filter(i=>i.is_stock_managed && ['RAW','PACKAGING','SEMI'].includes(i.item_type));
       this.receiptType = this.type === 'sub' ? 'PACKAGING' : this.type === 'finished' ? 'SEMI' : 'RAW';
-      App.showModal('QA 입고 등록', `<form id="qaReceiptForm">
-        <p>검증용 입고입니다. 저장하면 수불·재고와 입고 문서 3종이 연결됩니다.</p>
+      App.showModal('입고 등록', `<form id="qaReceiptForm">
+        <p>저장하면 수불·재고와 입고 문서 3종이 연결됩니다.</p>
         ${this.field('품목 유형', `<select class="form-control" onchange="InventoryApiPage.receiptType=this.value;InventoryApiPage.filterReceiptItems()">${[['RAW','원료'],['PACKAGING','포장재'],['SEMI','반제품'],['','전체 유형']].map(([v,l])=>`<option value="${v}" ${this.receiptType===v?'selected':''}>${l}</option>`).join('')}</select>`)}
         ${this.field('품목명·코드 검색', `<input id="qaReceiptSearch" type="search" class="form-control" oninput="InventoryApiPage.filterReceiptItems()" placeholder="이름 또는 코드">`)}
         ${this.field('품목', '<select id="qaReceiptItem" name="item_id" class="form-control" size="4" style="height:auto" required onchange="InventoryApiPage.receiptUnit()"></select>')}
@@ -413,7 +413,7 @@ const InventoryApiPage = {
         ${this.field('소비기한 (있음 선택 시 필수)', '<input name="expiration_date" type="date" class="form-control" disabled>')}
         ${this.field('입고 검사 판정', '<select name="judgment" class="form-control"><option value="">미판정 — 문서함에서 육안검사 작성</option><option value="PASS">적합</option><option value="FAIL">부적합</option></select>')}
         <p id="qaReceiptError" role="alert" style="color:var(--color-danger);"></p>
-        <button type="submit" id="qaReceiptSave" class="btn btn-primary">QA 입고 저장</button>
+        <button type="submit" id="qaReceiptSave" class="btn btn-primary">입고 저장</button>
       </form>`);
       this.filterReceiptItems();
       document.getElementById('qaReceiptForm').addEventListener('submit', (e) => { e.preventDefault(); this.saveQaReceipt(); });
@@ -544,7 +544,7 @@ const InventoryApiPage = {
       const result = await response.json();
       if (!response.ok) throw new Error(result.error?.message || `요청 실패 (${response.status})`);
       App.closeModal();
-      App.showToast('success', 'QA 입고 완료', '수불·재고·문서가 연결되었습니다. 문서함에서 입고 문서를 확인하세요.');
+      App.showToast('success', '입고 완료', '수불·재고·문서가 연결되었습니다. 문서함에서 입고 문서를 확인하세요.');
       this.load();
     } catch (error) {
       const target = document.getElementById('qaReceiptError');
@@ -659,8 +659,87 @@ const InventoryApiPage = {
     try {
       const r=await this.getJson(`/receipts/${id}/`);
       if(serial!==this.receiptSerial || modal!==document.querySelector('#modalContainer .modal-body') || !document.getElementById('modalContainer').classList.contains('active')) return;
-      modal.innerHTML=`<h3>${this.esc(r.item.name)} · 입고 #${r.id}</h3><p>LOT ${this.esc(r.lot_number)} · 입고일 ${this.esc(r.received_date)}</p><p>입고량 ${this.esc(r.quantity)} ${this.esc(r.unit)} · 공급처 ${this.esc(r.supplier.name)} · 처리자 ${this.esc(r.staff.name)}</p><p>상태 ${this.esc(r.receipt_status)} · ${this.esc(r.cancel_reason||'')}</p><button class="btn btn-secondary" onclick="InventoryApiPage.openItem(${r.item.id})">품목 상세</button><button class="btn btn-secondary" onclick="InventoryApiPage.openLinkedDocs(${r.lot_id},null)">입고 연결 문서</button>`;
+      this.receiptDetail = r;
+      modal.innerHTML = this.renderReceipt(r);
     } catch(error) { if(serial===this.receiptSerial && modal===document.querySelector('#modalContainer .modal-body')) modal.innerHTML=`<p role="alert">${this.esc(error.message)}</p>`; }
+  },
+
+  renderReceipt(r) {
+    const cancelled = r.receipt_status === 'CANCELLED';
+    return `<h3>${this.esc(r.item.name)} · 입고 #${r.id}</h3>
+      <p>LOT ${this.esc(r.lot_number)} · 입고일 ${this.esc(r.received_date)}</p>
+      <p>입고량 ${this.esc(r.quantity)} ${this.esc(r.unit)} · 공급처 ${this.esc(r.supplier.name)} · 처리자 ${this.esc(r.staff.name)}</p>
+      <p>상태: ${cancelled ? '취소됨' : '입고 완료'}${cancelled ? ` · 취소 사유: ${this.esc(r.cancel_reason)}` : ''}</p>
+      ${cancelled ? `<p>취소 시각: ${this.esc(r.cancelled_at || '')}</p><p>취소된 입고의 연결 문서는 일반 조회에서 제외됩니다. 입고와 수불의 취소 이력은 유지됩니다.</p>` : ''}
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+        <button class="btn btn-secondary" onclick="InventoryApiPage.openItem(${r.item.id})">품목 상세</button>
+        ${!cancelled ? `<button class="btn btn-secondary" onclick="InventoryApiPage.openLinkedDocs(${r.lot_id},null)">입고 연결 문서</button>
+        <button id="receiptCancelOpen" class="btn btn-danger" onclick="InventoryApiPage.openReceiptCancel(${r.id})">입고 취소</button>` : ''}
+      </div>
+      <div id="receiptCancelPanel"></div>`;
+  },
+
+  async openReceiptCancel(id) {
+    if (this.receiptDetail?.id !== id || this.receiptDetail.receipt_status === 'CANCELLED') return;
+    const panel = document.getElementById('receiptCancelPanel');
+    if (!panel || this.receiptCancelling) return;
+    const serial = this.receiptSerial;
+    panel.innerHTML = '<p>담당자를 불러오는 중…</p>';
+    try {
+      const staff = await this.getJson('/staff/');
+      if (serial !== this.receiptSerial || panel !== document.getElementById('receiptCancelPanel')) return;
+      panel.innerHTML = `<form id="receiptCancelForm" style="margin-top:1rem;display:grid;gap:0.75rem;">
+        <p>입고를 취소하면 잔여 입고 수량이 차감되고 관련 입고 서류도 함께 삭제됩니다. 입고·수불 이력은 유지됩니다.</p>
+        <p>이미 사용·조정된 LOT 또는 결재 중·승인·정정 중인 문서가 있으면 취소할 수 없습니다.</p>
+        ${this.field('취소 담당자', `<select name="staff_id" class="form-control" required><option value="">담당자를 선택하세요</option>${staff.results.map(s => `<option value="${s.id}">${this.esc(s.name)}</option>`).join('')}</select>`)}
+        ${this.field('취소 사유', '<textarea name="reason" class="form-control" rows="3" required placeholder="취소 사유를 입력하세요"></textarea>')}
+        <p id="receiptCancelError" role="alert" style="color:var(--color-danger);"></p>
+        <div><button id="receiptCancelSave" type="submit" class="btn btn-danger">입고 취소 확인</button></div>
+      </form>`;
+      document.getElementById('receiptCancelForm').addEventListener('submit', e => { e.preventDefault(); this.cancelReceipt(id); });
+      document.getElementById('receiptCancelOpen').disabled = true;
+    } catch (error) {
+      if (serial === this.receiptSerial && panel === document.getElementById('receiptCancelPanel')) panel.innerHTML = `<p role="alert">${this.esc(error.message)}</p>`;
+    }
+  },
+
+  async cancelReceipt(id) {
+    const form = document.getElementById('receiptCancelForm');
+    const button = document.getElementById('receiptCancelSave');
+    const errorBox = document.getElementById('receiptCancelError');
+    const receipt = this.receiptDetail;
+    if (!form || !button || this.receiptCancelling || receipt?.id !== id || !form.reportValidity()) return;
+    const values = Object.fromEntries(new FormData(form));
+    const reason = values.reason.trim();
+    if (!reason) { errorBox.textContent = '취소 사유를 입력하세요.'; return; }
+    if (!window.confirm(`${receipt.item.name} · LOT ${receipt.lot_number}\n입고량 ${receipt.quantity} ${receipt.unit}\n\n입고를 취소하고 관련 입고 서류도 함께 삭제하시겠습니까?`)) return;
+    this.receiptCancelling = true;
+    button.disabled = true;
+    errorBox.textContent = '';
+    const serial = this.receiptSerial;
+    const token = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/)?.[1] || '';
+    try {
+      const response = await fetch(`${this.API}/receipts/${id}/cancel/`, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': decodeURIComponent(token) },
+        body: JSON.stringify({ staff_id: Number(values.staff_id), reason }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error?.message || `요청 실패 (${response.status})`);
+      App.showToast('success', '입고 취소 완료', '수불·재고에 취소를 반영하고 관련 입고 서류를 삭제했습니다.');
+      this.load();
+      const modal = document.querySelector('#modalContainer .modal-body');
+      if (serial === this.receiptSerial && form === document.getElementById('receiptCancelForm') && modal) {
+        this.receiptDetail = result;
+        modal.innerHTML = this.renderReceipt(result);
+      }
+      window.TempEntry?.refreshBadges?.();
+    } catch (error) {
+      if (form === document.getElementById('receiptCancelForm')) errorBox.textContent = error.message;
+    } finally {
+      this.receiptCancelling = false;
+      button.disabled = false;
+    }
   },
 
 };
