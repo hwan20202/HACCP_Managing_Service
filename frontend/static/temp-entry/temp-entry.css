@@ -182,6 +182,15 @@
 
 /* ---------- 스프린트 3 파일 영역 DOC-SC-07·08 ---------- */
 .te-files { margin-top: 1.25rem; }
+.te-files .te-section-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+/* P12 DP-19 첨부 미리보기(문서 화면 안에서 바로 보기) */
+.te-file-previews { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.75rem; margin-top: 0.75rem; }
+.te-file-preview { margin: 0; border: 1px solid var(--border, #d9dde3); border-radius: 8px; overflow: hidden; background: #fff; display: flex; flex-direction: column; }
+.te-file-preview img { display: block; width: 100%; height: 340px; object-fit: contain; background: #f4f5f7; }
+.te-file-preview iframe { display: block; width: 100%; height: 340px; border: 0; background: #f4f5f7; }
+.te-file-preview figcaption { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.4rem 0.6rem; font-size: 0.8rem; border-top: 1px solid var(--border, #d9dde3); }
+.te-file-missing-body { display: flex; align-items: center; justify-content: center; height: 340px; padding: 1rem; background: #f4f5f7; color: var(--text-muted, #6b7280); font-size: 0.85rem; text-align: center; }
+.te-file-preview figcaption span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .te-file-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin-top: 0.6rem; }
 .te-dropzone { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.55rem 1rem; border: 1.5px dashed var(--border-strong); border-radius: var(--radius-md); cursor: pointer; font-size: 0.85rem; }
 .te-dropzone:hover, .te-drop-over { border-color: var(--brand-primary); background: #eef4ff; }

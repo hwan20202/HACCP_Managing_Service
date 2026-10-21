@@ -622,8 +622,40 @@
     return null;
   }
 
+  // ---------------------------------------------------------------- 첨부 사진 원본(P12 DP-19 — D01·D02 증빙 파일)
+  // ?files=1,2(&auto=1): 사진만 A4 한 쪽에 하나씩, 쪽에 맞춰 축소(회전 없음). 머리·바닥글 없이 원본 그대로
+  function loadFiles(params) {
+    const ids = String(params.get('files') || '').split(',').map((x) => x.trim()).filter((x) => /^\d+$/.test(x));
+    if (!ids.length) return message('인쇄할 파일이 없습니다.', '주소에 ?files=파일번호 가 필요합니다.');
+    document.body.classList.add('prt-files-mode');
+    const style = document.createElement('style');  // 원본 그대로 — 쪽 번호 안 찍음
+    style.textContent = '@page { size: A4 portrait; margin: 10mm; @bottom-center { content: none; } }';
+    document.head.appendChild(style);
+    document.title = `첨부 인쇄 (${ids.length}장)`;
+    $('#prtTitle').textContent = `첨부 원본 인쇄 · 사진 ${ids.length}장`;
+    $('#prtRoot').innerHTML = ids.map((id) => `<div class="prt-file-page"><img src="/api/v1/files/${id}" alt="첨부 ${id}"></div>`).join('');
+    const imgs = [...document.querySelectorAll('.prt-file-page img')];
+    let left = imgs.length;
+    let failed = 0;
+    const done = () => {
+      left -= 1;
+      if (left > 0) return;
+      if (failed === imgs.length) return message('파일을 불러오지 못했습니다.', '파일이 없거나 사진이 아닙니다.');
+      $('#prtPrint').disabled = false;
+      if (params.get('auto') === '1') setTimeout(() => window.print(), 200);
+    };
+    imgs.forEach((img) => {
+      if (img.complete && img.naturalWidth) { done(); return; }
+      img.addEventListener('load', done);
+      img.addEventListener('error', () => { failed += 1; img.closest('.prt-file-page').classList.add('prt-file-missing'); done(); });
+    });
+    return undefined;
+  }
+
   async function load() {
-    const target = queryOf(new URLSearchParams(location.search));
+    const search = new URLSearchParams(location.search);
+    if (search.get('files') !== null) return loadFiles(search);
+    const target = queryOf(search);
     if (!target) return message('출력할 문서를 지정하세요.', '주소에 ?document_id=문서번호 또는 ?kind=receiving&type=D03&date=YYYY-MM-DD 가 필요합니다.');
     let response;
     let data;

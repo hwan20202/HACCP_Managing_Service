@@ -29,6 +29,27 @@
   const PRINT_TYPES = ['CCP-1P', 'CCP-2B', 'CCP-3P', 'D03', 'D10', 'D12', 'D11'];  // D11 = 그 달(DP-17)
   const WEEK_PRINT_TYPES = ['D10', 'D12'];  // 주 묶음 [주 출력](DP-12·13)
   const PRINTABLE = ['completed', 'submitted', 'approved', 'correcting'];
+  // P12 DP-19 첨부 원본 인쇄(D01·D02 등 증빙 파일): 사진은 인쇄용 페이지(/print/?files=…)가 A4에 맞춰 한 장씩,
+  // PDF는 화면 밖 iframe에서 브라우저 PDF 인쇄 — 안 되는 브라우저면 새 탭으로 열어 거기서 인쇄
+  const isPdf = (x) => x.mime_type === 'application/pdf';
+  function printImages(ids) {
+    if (ids.length) window.open(`/print/?files=${ids.join(',')}&auto=1`, '_blank');
+  }
+  function printPdf(fileId) {
+    const url = `/api/v1/files/${fileId}`;
+    document.querySelectorAll('iframe[data-te-pdf-print]').forEach((f) => f.remove());
+    const frame = document.createElement('iframe');
+    frame.dataset.tePdfPrint = String(fileId);
+    frame.setAttribute('aria-hidden', 'true');
+    frame.style.cssText = 'position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none';
+    frame.addEventListener('load', () => {
+      setTimeout(() => {
+        try { frame.contentWindow.focus(); frame.contentWindow.print(); } catch (e) { window.open(url, '_blank', 'noopener'); }
+      }, 300);
+    });
+    frame.src = url;
+    document.body.appendChild(frame);
+  }
   // P8 점검표 섹션: 1행 섹션이고 필드에 표시용 키 group(관리 구분)이 있으면 종이처럼 표로(p8-s1-screens 2장)
   const isChecklist = (section) => !section.repeat && section.fields.some((fd) => fd.group);
   const isResult = (fd) => fd.type === 'select' && (fd.options || []).includes('O') && (fd.options || []).includes('X');
@@ -1803,7 +1824,8 @@
       };
       el.innerHTML = `
         <div class="te-section te-files" id="teFileArea">
-          <div class="te-section-head"><span class="te-section-title">증빙 파일 <span class="te-hint" id="teFileCount">${d.files.length}개 · PDF·JPG·PNG, 파일당 20MB 이하${rule.min ? ` · 작성완료에는 ${rule.min}개 이상` : ''}</span></span></div>
+          <div class="te-section-head"><span class="te-section-title">증빙 파일 <span class="te-hint" id="teFileCount">${d.files.length}개 · PDF·JPG·PNG, 파일당 20MB 이하${rule.min ? ` · 작성완료에는 ${rule.min}개 이상` : ''}</span></span>
+            ${d.files.length ? `<button class="btn btn-secondary btn-sm" id="teFilePrintAll" data-file-print-all title="첨부 원본을 모두 인쇄(사진은 한 번에, PDF는 파일마다 인쇄 창)">모두 인쇄</button>` : ''}</div>
           ${rule.kinds ? `<p class="te-hint">서류 종류(${rule.kinds.map(esc).join(' / ')})는 기본정보의 [서류 종류]에서 고릅니다.</p>` : ''}
           ${results.length ? `<ul class="te-result-list" id="teFileResults">${results.map((x) => (x.ok
             ? `<li class="te-result-ok-line">✅ <b>${esc(x.name)}</b> <span>${esc(x.text)}</span></li>`
@@ -1816,6 +1838,7 @@
               <td class="te-nowrap">${T.personHtml(x.uploaded_by)} · ${T.fmtDateTime(x.uploaded_at)}</td>
               <td>${shared(x)}</td>
               <td class="te-nowrap"><a class="btn btn-secondary btn-sm" href="/api/v1/files/${x.file_id}" target="_blank" rel="noopener" data-file-view="${x.file_id}">보기</a>
+                <button class="btn btn-secondary btn-sm" data-file-print="${x.file_id}" title="이 파일 원본 인쇄">인쇄</button>
                 ${can ? `<button class="btn btn-secondary btn-sm" data-file-detach="${x.file_id}" title="이 문서에서 연결 끊기" ${on ? '' : 'disabled'}>✕</button>` : ''}</td>
             </tr>`).join('') || `<tr><td colspan="5" class="te-empty">${can ? '아직 올린 파일이 없습니다. 아래에서 파일을 고르거나 끌어 놓으세요.' : '파일이 없습니다.'}</td></tr>`}</tbody>
           </table></div>
@@ -1827,7 +1850,10 @@
               <button class="btn btn-secondary btn-sm" id="teFilePick" ${on ? '' : 'disabled'}>이전 파일 불러오기</button>
               ${api.staffId ? (on ? '' : '<span class="te-hint">작성 권한이 없습니다(위 안내).</span>') : '<span class="te-hint">현재 사용자를 선택하세요.</span>'}
             </div>` : (lockedNote[d.status] ? `<p class="te-hint">${lockedNote[d.status]}</p>` : '')}
+          ${this.filePreviewsHtml(d.files)}
         </div>`;
+      // P12 DP-19: 미리보기·인쇄는 상태·쓰기 권한과 무관(원본 서류)
+      this.bindFilePrint(el, d.files);
       if (!can || !on) return;
       const input = el.querySelector('#teFileInput');
       const drop = el.querySelector('#teDrop');
@@ -1840,6 +1866,49 @@
         const file = d.files.find((x) => x.file_id === Number(b.dataset.fileDetach));
         this.detachFile(d, file);
       }));
+    },
+
+    // P12 DP-19 첨부 원본 미리보기 카드 — 문서 상세와 결재 요청 상세(상신 당시 파일)가 같이 씀
+    filePreviewsHtml(files, id = 'teFilePreviews') {
+      if (!files.length) return '';
+      const icon = (mime) => (mime === 'application/pdf' ? '📄' : '🖼');
+      return `<div class="te-file-previews" id="${id}">${files.map((x) => `
+            <figure class="te-file-preview" data-file-preview="${x.file_id}">
+              ${isPdf(x)
+                ? `<iframe src="/api/v1/files/${x.file_id}#toolbar=0&navpanes=0&view=FitH" title="${esc(x.original_name)}" loading="lazy"></iframe>`
+                : `<a href="/api/v1/files/${x.file_id}" target="_blank" rel="noopener"><img src="/api/v1/files/${x.file_id}" alt="${esc(x.original_name)}" loading="lazy"></a>`}
+              <figcaption><span title="${esc(x.original_name)}">${icon(x.mime_type)} ${esc(x.original_name)}</span>
+                <button class="btn btn-secondary btn-sm" data-file-print="${x.file_id}">인쇄</button></figcaption>
+            </figure>`).join('')}</div>`;
+    },
+
+    // [인쇄]·[모두 인쇄] 연결. files는 살아 있는 목록 — 결재 화면이 지워진 파일을 빼면 [모두 인쇄]에서도 빠짐.
+    // 미리보기·인쇄는 상태·쓰기 권한과 무관(원본 서류)
+    bindFilePrint(el, files) {
+      el.querySelectorAll('[data-file-print]').forEach((b) => b.addEventListener('click', () => {
+        const file = files.find((x) => x.file_id === Number(b.dataset.filePrint));
+        if (!file) return;
+        if (isPdf(file)) printPdf(file.file_id); else printImages([file.file_id]);
+      }));
+      el.querySelector('[data-file-print-all]')?.addEventListener('click', () => this.printAllFiles(files));
+    },
+
+    // P12 DP-19 [모두 인쇄]: 사진은 인쇄용 페이지 한 번, PDF는 파일마다 인쇄 창 — 다음 PDF는 확인 뒤
+    async printAllFiles(files) {
+      const images = files.filter((x) => !isPdf(x)).map((x) => x.file_id);
+      const pdfs = files.filter(isPdf);
+      printImages(images);
+      for (let i = 0; i < pdfs.length; i += 1) {
+        if (i > 0 || images.length) {
+          const go = await T.modal({
+            title: '다음 파일 인쇄',
+            body: `<p>앞 인쇄 창을 닫은 뒤 [인쇄]를 누르세요.</p><p><b>${esc(pdfs[i].original_name)}</b> <span class="te-hint">(PDF ${i + 1}/${pdfs.length})</span></p>`,
+            buttons: [{ label: '그만', value: false }, { label: '인쇄', value: true, cls: 'btn-primary' }],
+          });
+          if (!go) return;
+        }
+        printPdf(pdfs[i].file_id);
+      }
     },
 
     // 파일마다 한 요청. 버전 충돌이면 최신 버전을 읽어 한 번 더(다른 사람이 그사이 저장한 경우)

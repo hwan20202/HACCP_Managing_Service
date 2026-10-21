@@ -223,6 +223,13 @@ table.prt-page > thead > tr > td, table.prt-page > tbody > tr > td { padding: 0;
 .d10-head .name.tighter, .d10-meta .name.tighter, .d10-devs .name.tighter { font-size: 7pt; letter-spacing: -.3px; line-height: 1.15; }
 .d10-head .name.tiniest, .d10-meta .name.tiniest, .d10-devs .name.tiniest { font-size: 6.4pt; letter-spacing: -.4px; line-height: 1.12; }
 
+/* 첨부 사진 원본(P12 DP-19): A4 세로 한 쪽에 하나, 쪽에 맞춰 축소 — 쪽 번호도 안 찍음(원본 그대로) */
+.prt-files-mode .prt-root { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.prt-file-page { width: 190mm; height: 275mm; display: flex; align-items: center; justify-content: center; background: var(--paper); box-shadow: 0 2px 12px rgba(0, 0, 0, .15); }
+.prt-file-page img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.prt-file-page.prt-file-missing::after { content: "파일을 불러오지 못했습니다"; color: #a00; font-size: 12pt; }
+.prt-file-page.prt-file-missing img { display: none; }
+
 @media print {
   body { background: #fff; }
   .prt-toolbar { display: none; }
@@ -230,4 +237,7 @@ table.prt-page > thead > tr > td, table.prt-page > tbody > tr > td { padding: 0;
   .prt-sheet { width: auto; box-shadow: none; }
   .prt-msg { display: none; }
   .prt-sheet + .prt-sheet { margin-top: 0; break-before: page; }
+  .prt-files-mode .prt-root { display: block; }
+  .prt-file-page { width: auto; height: 275mm; box-shadow: none; break-after: page; }
+  .prt-file-page:last-child { break-after: auto; }
 }
