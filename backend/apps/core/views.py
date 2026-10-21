@@ -34,6 +34,12 @@ def home(request):
 
 
 @require_safe
+def print_page(request):
+    """P12 PRT-SC-01 인쇄용 페이지(새 탭). 데이터는 화면이 GET /api/v1/print/sheet로 읽는다."""
+    return render(request, "print.html")
+
+
+@require_safe
 def system_test(request):
     return render(request, "test.html")
 

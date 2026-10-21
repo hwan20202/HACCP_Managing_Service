@@ -73,13 +73,13 @@ class MeasurementSummaryTests(P11TestCase):
 
     def test_tc007_3p_summary_and_specimen(self):
         document_id = ccp_doc("CCP-3P", 12)
-        add_rows(document_id, "checks", [r3p("09:00", fe_c="X")])
+        add_rows(document_id, "checks", [r3p("09:00", fe_only="X")])
         add_rows(document_id, "summary", [summary(2)])
         bad = self.summary_of(document_id)["nonconforming"]
         by_section = {b["section_def"]: b for b in bad}
         self.assertEqual(
             by_section["checks"]["reasons"],
-            [{"field": "fe_c", "label": "Fe 중", "value": "X", "expect": {"eq": "○"}}],
+            [{"field": "fe_only", "label": "Fe만 통과", "value": "X", "expect": {"eq": "○"}}],
         )
         self.assertEqual(by_section["checks"]["at"], at("09:00"))
         self.assertEqual(

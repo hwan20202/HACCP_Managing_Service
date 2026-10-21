@@ -480,11 +480,11 @@ class CreateUpdateRuleTests(P4TestCase):
 
     def test_tc152_ccp3p(self):
         document_id = new_ccp("CCP-3P", "3P")["document"]["document_id"]
-        ok = dict.fromkeys(("fe_l", "fe_c", "fe_r", "sus_l", "sus_c", "sus_r"), "○")
-        ok.update(product_only="X", product_fe="○", product_sus="○")
+        ok = {"fe_only": "○", "sts_only": "○", "product_only": "X"}  # v2(P12 DP-03)
+        ok.update(product_fe="○", product_sus="○")
         checks = [
             {"phase": "시작", "passed_at": at("08:40"), **ok},
-            {"phase": "종료", "passed_at": at("17:00"), **ok, "sus_r": "X"},
+            {"phase": "종료", "passed_at": at("17:00"), **ok, "sts_only": "X"},
         ]
         patch(document_id, {"add": [{"section_def": "checks", "values": v} for v in checks]})
         self.assertEqual(
@@ -493,7 +493,8 @@ class CreateUpdateRuleTests(P4TestCase):
         set_info(document_id, {"inspector": 4})
         first = rows_of(document_id, "checks")[1]
         patch(
-            document_id, {"update": [{"section_id": first["section_id"], "values": {"sus_r": "○"}}]}
+            document_id,
+            {"update": [{"section_id": first["section_id"], "values": {"sts_only": "○"}}]},
         )
         patch(
             document_id,

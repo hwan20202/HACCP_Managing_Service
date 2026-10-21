@@ -18,7 +18,7 @@ SUMMARY_TOTALS = {"CCP-3P": ("summary", "detected_qty")}
 NOTE_FIELDS = {
     "CCP-1P": {"rounds": "note"},
     "CCP-2B": {"rounds": "note"},
-    "CCP-3P": {"checks": "note", "summary": "note"},
+    "CCP-3P": {"summary": "note"},  # 3P v2(P12 DP-03 M2): 감도 행 비고 없음 — 제품 통과 특이사항만
 }
 # 이탈 줄·다른 개선조치 줄에 그대로 내려 주는 개선조치 내용(DOC N8 deviations)
 ACTION_KEYS = ("version", "description", "action_result", "actor_id")
