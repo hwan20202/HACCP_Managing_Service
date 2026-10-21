@@ -52,6 +52,10 @@ def schema_files(code):
 def require_code_only_compatibility(current, stage):
     if schema_files(current) != schema_files(stage):
         raise SystemExit("Migration/SQL changes require a separate manual database deployment")
+    require_runtime_compatibility(current, stage)
+
+
+def require_runtime_compatibility(current, stage):
     for name in ("requirements",):
         before = {p.name: p.read_bytes() for p in (current / name).glob("*.txt")}
         after = {p.name: p.read_bytes() for p in (stage / name).glob("*.txt")}
@@ -59,6 +63,19 @@ def require_code_only_compatibility(current, stage):
             raise SystemExit("Dependency changes require a separately prepared virtualenv")
     if (current / ".python-version").read_bytes() != (stage / ".python-version").read_bytes():
         raise SystemExit("Python version changes require manual preparation")
+
+
+def require_inventory_feedback_compatibility(current, stage):
+    """Explicit manual exception for the reviewed additive inventory 0008 only."""
+    before, after = schema_files(current), schema_files(stage)
+    expected = "backend/apps/inventory/migrations/0008_movement_ea_and_unused_purge.py"
+    if set(after) - set(before) != {expected} or any(
+        after.get(name) != content for name, content in before.items()
+    ):
+        raise SystemExit(
+            "Manual inventory deployment permits only the added inventory 0008 migration"
+        )
+    require_runtime_compatibility(current, stage)
 
 
 def check_schema_without_writes(code, env_file):
@@ -91,19 +108,53 @@ def configured_site(proxy):
     return parsed.netloc
 
 
-def business_fingerprint(data):
+def business_columns(data):
+    """Capture the old schema so additive columns do not hide changes to old values."""
+    with closing(sqlite3.connect((data / "db/app.sqlite3").as_uri() + "?mode=ro", uri=True)) as db:
+        names = db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+            " AND name NOT LIKE 'sqlite_%' AND name != 'django_migrations' ORDER BY name"
+        ).fetchall()
+        return {
+            name: [
+                row[1] for row in db.execute('PRAGMA table_info("' + name.replace('"', '""') + '")')
+            ]
+            for (name,) in names
+        }
+
+
+def check_inventory_feedback_data(data):
+    with closing(sqlite3.connect((data / "db/app.sqlite3").as_uri() + "?mode=ro", uri=True)) as db:
+        if db.execute("SELECT COUNT(*) FROM inventory_purge_scope").fetchone()[0]:
+            raise RuntimeError("Inventory deletion scope must be empty after migration")
+        if db.execute("SELECT COUNT(*) FROM stock_movements WHERE ea_count IS NOT NULL").fetchone()[
+            0
+        ]:
+            raise RuntimeError("Migration must not invent EA for existing movements")
+
+
+def business_fingerprint(data, columns=None):
     """Compare all stored business rows while writes are stopped, without logging content."""
     digest = hashlib.sha256()
     with closing(
         sqlite3.connect(f"file:{(data / 'db/app.sqlite3').as_posix()}?mode=ro", uri=True)
     ) as db:
-        tables = db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-            " AND name NOT LIKE 'sqlite_%' AND name != 'django_migrations' ORDER BY name"
-        ).fetchall()
+        tables = (
+            [(name,) for name in columns]
+            if columns is not None
+            else db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+                " AND name NOT LIKE 'sqlite_%' AND name != 'django_migrations' ORDER BY name"
+            ).fetchall()
+        )
         for (name,) in tables:
             quoted = '"' + name.replace('"', '""') + '"'
-            rows = sorted(repr(row) for row in db.execute(f"SELECT * FROM {quoted}"))
+            selected = (
+                ",".join('"' + column.replace('"', '""') + '"' for column in columns[name])
+                if columns is not None
+                else "*"
+            )
+            rows = sorted(repr(row) for row in db.execute(f"SELECT {selected} FROM {quoted}"))
             digest.update(json.dumps([name, rows], ensure_ascii=True).encode())
     return digest.hexdigest()
 
@@ -194,9 +245,20 @@ def main():
         "--code-only", action="store_true", help="Never migrate or seed the server DB"
     )
     parser.add_argument("--branch", default="main")
+    parser.add_argument(
+        "--inventory-feedback-migration",
+        action="store_true",
+        help="Manual deployment of the reviewed additive inventory 0008, preserving all old values",
+    )
     args = parser.parse_args()
     if args.code_only and (args.fresh_data_once or args.rollback):
         parser.error("--code-only cannot be combined with data refresh or rollback")
+    if args.inventory_feedback_migration and (
+        args.code_only or args.fresh_data_once or args.rollback
+    ):
+        parser.error(
+            "Manual inventory migration cannot be combined with code-only, refresh or rollback"
+        )
     if os.geteuid() != 0:
         raise SystemExit("Run as root on the QA server.")
     import fcntl
@@ -274,16 +336,19 @@ def main():
             raise SystemExit("Dependency change needs a separately prepared virtualenv")
     if args.code_only:
         require_code_only_compatibility(CURRENT, stage)
+    if args.inventory_feedback_migration:
+        require_inventory_feedback_compatibility(CURRENT, stage)
+        check_schema_without_writes(CURRENT, APP_ENV)
     owner = pwd.getpwnam("biodot-qa")
     isolated_regressions(stage, owner.pw_uid, owner.pw_gid)
     (stage / "QA-DEPLOYED-REVISION.txt").write_text(args.branch + "\n" + args.commit + "\n")
     new_data = Path("/srv/biodot/qa-data-" + stamp) if args.fresh_data_once else old_data
     static_dir = (
         BASE / ("static-" + args.commit[:12] + "-" + stamp)
-        if args.code_only
+        if args.code_only or args.inventory_feedback_migration
         else new_data / "static"
     )
-    if args.code_only:
+    if args.code_only or args.inventory_feedback_migration:
         static_dir.mkdir(mode=0o755)
         os.chown(static_dir, owner.pw_uid, owner.pw_gid)
     old_code = BASE / ("previous-code-" + stamp)
@@ -296,6 +361,7 @@ def main():
         "new_data": str(new_data),
         "fresh_data": args.fresh_data_once,
         "code_only": args.code_only,
+        "inventory_feedback_migration": args.inventory_feedback_migration,
         "static_dir": str(static_dir),
         "isolated_regressions": "passed",
         "previous_revision": (CURRENT / "QA-DEPLOYED-REVISION.txt").read_text()
@@ -343,7 +409,12 @@ def main():
     try:
         stopped = True
         run("systemctl", "stop", "caddy", "biodot-qa")
-        before_data = business_fingerprint(old_data) if not args.fresh_data_once else None
+        preserved_columns = (
+            business_columns(old_data) if args.inventory_feedback_migration else None
+        )
+        before_data = (
+            business_fingerprint(old_data, preserved_columns) if not args.fresh_data_once else None
+        )
         # Stop all application writes before copying DB + WAL + attachments + static.
         with tarfile.open(backup / "qa-data.tar.gz", "w:gz") as archive:
             archive.add(old_data, arcname=old_data.name)
@@ -403,11 +474,15 @@ def main():
             "--settings=config.settings.qa",
         )
         if before_data is not None:
-            if business_fingerprint(old_data) != before_data:
+            if business_fingerprint(old_data, preserved_columns) != before_data:
                 raise RuntimeError(
                     "Business data changed during code-only deployment; inspect backup"
                 )
             record["business_data_preserved"] = True
+            record_path.write_text(json.dumps(record, indent=2))
+        if args.inventory_feedback_migration:
+            check_inventory_feedback_data(old_data)
+            record["old_business_columns_preserved"] = True
             record_path.write_text(json.dumps(record, indent=2))
         new_data.chmod(0o711)
         for directory, _, files in os.walk(static_dir):

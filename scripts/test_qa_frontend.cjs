@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 function page(file, name, document = {}) {
   const context = vm.createContext({console, document, App: {}, URLSearchParams, clearTimeout: () => {}, setTimeout: () => {}, window: {}, crypto: {randomUUID: () => 'test-key'}});
+  vm.runInContext(fs.readFileSync('frontend/static/prototype/js/modules/mass-units.js','utf8'),context);
   vm.runInContext(fs.readFileSync(file, 'utf8') + `\nthis.page = ${name};`, context);
   return context.page;
 }

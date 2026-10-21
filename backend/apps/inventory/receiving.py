@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from django.db import transaction
 
 from . import document_bridge
+from .ea import optional_ea
 from .errors import InventoryError, NotFound
 from .expiration import incoming_number_date, resolve_status
 from .fields import KST, kst_now
@@ -52,6 +53,7 @@ class ReceiptNotFound(ReceivingError, NotFound):
 
 @dataclass(frozen=True)
 class ReceiptInput:
+    # EA is supplied independently of the item's base-unit quantity.
     item_id: int
     supplier_id: int
     staff_id: int
@@ -70,6 +72,7 @@ class ReceiptInput:
     # Visual inspection values entered with the receipt, passed to the document app's D03
     # (keys and options: document side 2.1/2.2). None = filled in later on the document.
     inspection: dict | None = None
+    ea_count: int | None = None
 
 
 def _active(model, pk, label):
@@ -122,12 +125,17 @@ def _existing_receipt(idempotency_key, data, quantity_e6):
     if movement is None:
         return None
     receipt = IncomingReceipt.objects.select_related("lot").get(stock_movement=movement)
-    if receipt.lot.item_id != data.item_id or receipt.quantity_e6 != quantity_e6:
+    if (
+        receipt.lot.item_id != data.item_id
+        or receipt.quantity_e6 != quantity_e6
+        or movement.ea_count != optional_ea(data.ea_count)
+    ):
         raise ReceivingError("같은 요청 키로 다른 내용의 입고가 이미 등록되어 있습니다.")
     return receipt
 
 
 def register_receipt(data: ReceiptInput) -> IncomingReceipt:
+    ea_count = optional_ea(data.ea_count)
     if not data.idempotency_key:
         raise ReceivingError("요청 키(idempotency_key)가 필요합니다.")
     judgment = _receipt_judgment(data)
@@ -177,6 +185,7 @@ def register_receipt(data: ReceiptInput) -> IncomingReceipt:
         movement = StockMovement.objects.create(
             lot=lot,
             movement_type_id="RECEIPT",
+            ea_count=ea_count,
             quantity_e6=quantity_e6,
             staff=staff,
             occurred_at=occurred_at,
@@ -286,6 +295,7 @@ def cancel_receipt(*, receipt_id: int, staff_id: int, reason: str) -> IncomingRe
         StockMovement.objects.create(
             lot=receipt.lot,
             movement_type_id="CORRECTION_OUT",
+            ea_count=receipt.stock_movement.ea_count,
             quantity_e6=received,
             corrects_movement=receipt.stock_movement,
             staff=staff,

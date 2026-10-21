@@ -1,12 +1,17 @@
 """Read-only navigation context for ledger rows; quantities remain owned by ledger.py."""
 
-from .models import IncomingReceipt, ProductionMaterialUsage, ProductionOutput
+from .models import IncomingReceipt, ProductionMaterialUsage, ProductionOutput, StockMovement
 
 
 def attach_sources(items):
     lines = [line for item in items for lot in item["lots"] for line in lot["lines"]]
     roots = {line["corrects_movement_id"] or line["movement_id"] for line in lines}
     lot_ids = {lot["lot_id"] for item in items for lot in item["lots"]}
+    ea_counts = dict(
+        StockMovement.objects.filter(pk__in=[line["movement_id"] for line in lines]).values_list(
+            "pk", "ea_count"
+        )
+    )
     receipts = {row.lot_id: row for row in IncomingReceipt.objects.filter(lot_id__in=lot_ids)}
     batches = {}
     for model in (ProductionMaterialUsage, ProductionOutput):
@@ -15,6 +20,7 @@ def attach_sources(items):
     for item in items:
         for lot in item["lots"]:
             for line in lot["lines"]:
+                line["ea_count"] = ea_counts.get(line["movement_id"])
                 root = line["corrects_movement_id"] or line["movement_id"]
                 line["source"] = {
                     "receipt_id": receipts[lot["lot_id"]].pk if lot["lot_id"] in receipts else None,

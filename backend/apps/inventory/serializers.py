@@ -109,6 +109,7 @@ def receipt(obj):
         "supplier_lot_number": obj.supplier_lot_number,
         "received_date": iso(obj.received_date),
         "quantity": qty(obj.quantity_e6),
+        "ea_count": obj.stock_movement.ea_count,
         "unit": lot_obj.item.base_unit,
         "manufactured_date": iso(lot_obj.manufactured_date),
         "expiration_date": iso(lot_obj.expiration_date),
@@ -229,6 +230,7 @@ def batch(obj):
         },
         "unit": obj.item.base_unit,
         "bom_id": obj.bom_id,
+        "bom_version": obj.bom.version if obj.bom_id else None,
         "planned_date": iso(obj.planned_date),
         "planned_quantity": qty(obj.planned_quantity_e6),
         "manufactured_date": iso(obj.manufactured_date),
@@ -303,6 +305,8 @@ def bom(obj, lines):
         "base_quantity": qty(obj.base_quantity_e6),
         "effective_from": iso(obj.effective_from),
         "is_active": obj.is_active,
+        "notes": obj.notes,
+        "used": obj.production_batches.exists(),
         "lines": [
             {
                 "id": line.pk,
