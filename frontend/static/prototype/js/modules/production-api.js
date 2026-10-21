@@ -526,7 +526,8 @@ const ProductionApiPage = {
     return `<div id="prodUseForm" style="margin-top:0.75rem;border-top:1px solid var(--border-subtle);padding-top:0.75rem">
       <strong>${this.esc(line.item_code)} ${this.esc(line.name)} 투입</strong>
       <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-end;margin:0.75rem 0">
-        ${this.field(`이번 투입 총량 (${this.esc(line.unit)})`,`<input type="number" min="0" step="any" name="use_quantity" class="form-control" value="${this.esc(u.quantity)}" oninput="ProductionApiPage.changeUseQuantity(this.value)" onchange="ProductionApiPage.proposeAllocation()">`)}
+        ${this.field('입력 단위',`<select class="form-control" onchange="ProductionApiPage.s.use.inputUnit=this.value;ProductionApiPage.renderDetail()">${this.unitOptions(line.unit,u.inputUnit)}</select>`)}
+        ${this.field('이번 투입 총량',`<input type="number" min="0" step="any" name="use_quantity" class="form-control" value="${u.quantity?this.esc(MassUnits.convert(u.quantity,line.unit,u.inputUnit||line.unit)):''}" oninput="ProductionApiPage.changeDisplayedUseQuantity(this.value)" onchange="ProductionApiPage.proposeAllocation()">`)}
         ${line.allowed_items.length>1?this.field('사용 원료',`<select class="form-control" name="use_item" onchange="ProductionApiPage.changeUseItem(this.value)"><option value="">기준 원료 우선 · 부족 시 등록 대체 원료</option>${line.allowed_items.map(i=>`<option value="${i.id}" ${String(i.id)===String(u.itemId)?'selected':''}>${this.esc(i.item_code)} ${this.esc(i.name)}</option>`).join('')}</select>`):''}
         <button class="btn btn-secondary" onclick="ProductionApiPage.proposeAllocation()">배분 다시 계산</button>
       </div>
@@ -584,6 +585,13 @@ const ProductionApiPage = {
     this.fefo=null;
     document.getElementById('prodUseBtn').disabled=true;
     document.getElementById('prodAllocationSummary').textContent='총량이 바뀌었습니다. 입력을 마치면 다시 배분합니다.';
+  },
+
+  unitOptions(base,selected=base) {return (['kg','g'].includes(base)?['kg','g']:[base]).map(u=>`<option value="${this.esc(u)}" ${u===selected?'selected':''}>${this.esc(u)}</option>`).join('');},
+  changeDisplayedUseQuantity(value) {
+    const u=this.s.use,line=this.detail.readiness.lines.find(l=>l.bom_line_id===u.lineId);
+    try {this.changeUseQuantity(value?MassUnits.convert(value,u.inputUnit||line.unit,line.unit,true):'');}
+    catch(error) {this.changeUseQuantity('');this.toast('error','투입량',error.message);}
   },
 
   async changeUseItem(value) {
@@ -722,7 +730,7 @@ const ProductionApiPage = {
       ${draft.rows.map((r,index)=>`<tr>
         <td><input type="checkbox" aria-label="${this.esc(r.name)} 선택" ${r.selected?'checked':''} onchange="ProductionApiPage.editBulk(${index},'selected',this.checked)"></td>
         <td>${this.esc(r.item_code)} ${this.esc(r.name)}</td><td>${this.esc(r.standard)} ${this.esc(r.unit)}</td><td>${this.esc(r.actual)} ${this.esc(r.unit)}</td>
-        <td><span style="display:inline-flex;gap:0.25rem;align-items:center"><input class="form-control" style="width:110px" type="number" min="0" step="any" aria-label="${this.esc(r.name)} 이번 실제 투입량" value="${this.esc(r.quantity)}" oninput="ProductionApiPage.editBulk(${index},'quantity',this.value)"> ${this.esc(r.unit)}</span></td>
+        <td><span style="display:inline-flex;gap:0.25rem;align-items:center"><input class="form-control" style="width:110px" type="number" min="0" step="any" aria-label="${this.esc(r.name)} 이번 실제 투입량" value="${r.quantity?this.esc(MassUnits.convert(r.quantity,r.unit,r.inputUnit||r.unit)):''}" oninput="ProductionApiPage.editDisplayedBulk(${index},this.value)"><select class="form-control" aria-label="${this.esc(r.name)} 입력 단위" onchange="ProductionApiPage.bulkUse.rows[${index}].inputUnit=this.value;ProductionApiPage.renderDetail()">${this.unitOptions(r.unit,r.inputUnit)}</select></span></td>
         <td><div data-bulk-summary="${index}">${this.bulkSummary(r)}</div>
           <details><summary>LOT · 배분량 직접 수정</summary>
           ${r.allowed_items.length>1?`<label>자동 배분 원료 <select class="form-control" onchange="ProductionApiPage.editBulk(${index},'item_id',this.value)"><option value="">기준 원료 우선 · 부족 시 대체 원료</option>${r.allowed_items.map(i=>`<option value="${i.id}" ${String(r.item_id)===String(i.id)?'selected':''}>${this.esc(i.name)}</option>`).join('')}</select></label>`:''}
@@ -745,6 +753,12 @@ const ProductionApiPage = {
     const picks=row.choices.filter(l=>row.allocations[l.lot_id]).map(l=>`${this.esc(l.lot_number)} ${this.esc(row.allocations[l.lot_id])} ${this.esc(l.unit)}`).join(' / ');
     const shortage=quantity!==null && total!==null && quantity>total?this.unscaled(quantity-total):'0';
     return `${picks||'배분된 LOT 없음'}<br><strong>${total!==null?this.esc(this.unscaled(total)):'수량 확인'} / ${this.esc(row.quantity)} ${this.esc(row.unit)}</strong> · ${total===quantity && quantity>0n?'배분 완료':`배분 확인 · 부족 ${this.esc(shortage)} ${this.esc(row.unit)}`}`;
+  },
+
+  editDisplayedBulk(index,value) {
+    const row=this.bulkUse.rows[index];
+    try {this.editBulk(index,'quantity',value?MassUnits.convert(value,row.inputUnit||row.unit,row.unit,true):'');}
+    catch(error) {this.editBulk(index,'quantity','');this.toast('error','투입량',error.message);}
   },
 
   editBulk(index,field,value) {
@@ -953,6 +967,10 @@ const ProductionApiPage = {
     if(!popup) {this.toast('error','생산지시 출력','팝업을 허용하세요.');return;}
     const e=v=>this.esc(v);
     popup.document.write(`<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${e(b.batch_number)}</title><style>body{font:14px sans-serif;padding:24px;color:#111}table{width:100%;border-collapse:collapse;margin:16px 0}th,td{border:1px solid #aaa;padding:8px;text-align:left}@media print{button{display:none}}</style></head><body><h1>생산지시서</h1><p>배치: ${e(b.batch_number)} · 상태: ${e(this.STATUS[b.status]?.[0])}</p><p>품목: ${e(b.item.item_code)} ${e(b.item.name)}</p><p>계획일: ${e(b.planned_date||'—')} · 제조일: ${e(b.manufactured_date||'—')} · 계획량: ${e(b.planned_quantity||'—')} ${e(b.unit)}</p><p>BOM 버전: ${e(b.bom_version||'—')}</p><h2>원료 투입</h2><table><thead><tr><th>원료</th><th>LOT</th><th>실제 투입량</th></tr></thead><tbody>${b.usages.map(u=>`<tr><td>${e(u.item.name)}</td><td>${e(u.lot_number)}</td><td>${e(u.net_quantity)} ${e(u.unit)}</td></tr>`).join('')}</tbody></table><h2>산출</h2><table><thead><tr><th>LOT</th><th>실제 산출량</th></tr></thead><tbody>${b.outputs.map(o=>`<tr><td>${e(o.lot_number)}</td><td>${e(o.net_quantity)} ${e(o.unit)}</td></tr>`).join('')}</tbody></table><p>메모: ${e(b.notes||'')}</p><button onclick="window.print()">인쇄 / PDF 저장</button></body></html>`);
+    const requirements=b.readiness?.lines||[];
+    const recipe=popup.document.createElement('section');
+    recipe.innerHTML=`<h2>BOM 계획 소요량</h2><table><thead><tr><th>원료</th><th>기준 소요량</th></tr></thead><tbody>${requirements.map(l=>`<tr><td>${e(l.item_code)} ${e(l.name)}</td><td>${e(l.required)} ${e(l.unit)}</td></tr>`).join('')}</tbody></table>`;
+    popup.document.body.insertBefore(recipe,popup.document.body.querySelector('h2'));
     popup.document.close();
     popup.focus();
   },

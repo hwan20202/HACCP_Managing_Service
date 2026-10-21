@@ -91,3 +91,49 @@ class InventoryFeedbackTests(ApiTestCase):
         self.assertEqual(result.status_code, 400, result.content)
         receipt = self.receive()
         self.assertIsNone(receipt["ea_count"])
+
+    def test_production_used_lot_cannot_be_removed(self):
+        from .judgment import apply_incoming_judgment
+        from .models import Bom, BomLine
+        from .production import add_usage, create_batch, start_batch
+
+        receipt = self.receive()
+        apply_incoming_judgment(lot_id=receipt["lot_id"], result="PASS", staff_id=self.staff.pk)
+        semi = Item.objects.create(
+            item_code="TEST-USED", name="테스트 제조품", item_type_id="SEMI", base_unit="kg"
+        )
+        bom = Bom.objects.create(
+            item=semi, version=1, base_quantity_e6=1000000, effective_from=self.today
+        )
+        BomLine.objects.create(bom=bom, line_no=1, component_item=self.raw, quantity_e6=1000000)
+        batch = create_batch(item_id=semi.pk, staff_id=self.staff.pk, planned_quantity="1")
+        start_batch(batch_id=batch.pk, staff_id=self.staff.pk)
+        add_usage(
+            batch_id=batch.pk,
+            lot_id=receipt["lot_id"],
+            quantity="1",
+            staff_id=self.staff.pk,
+            idempotency_key="TEST-USED-LOT",
+        )
+        response = self.post(
+            "/items/delete/",
+            {
+                "staff_id": self.staff.pk,
+                "item_ids": [self.raw.pk],
+                "dry_run": False,
+                "confirmation": "DELETE_UNUSED_ITEMS",
+            },
+        )
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertTrue(Item.objects.filter(pk=self.raw.pk).exists())
+        self.assertEqual(Inventory.objects.get(lot_id=receipt["lot_id"]).quantity_e6, 49000000)
+
+    def test_ordinary_sql_movement_deletion_is_still_blocked(self):
+        from django.db import IntegrityError, connection, transaction
+
+        receipt = self.receive()
+        with self.assertRaises(IntegrityError), transaction.atomic(), connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM stock_movements WHERE id = %s", [receipt["stock_movement_id"]]
+            )
+        self.assertTrue(StockMovement.objects.filter(pk=receipt["stock_movement_id"]).exists())

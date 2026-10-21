@@ -654,6 +654,12 @@ select.form-control { cursor: pointer; }
   overflow-y: auto;
 }
 .modal-container.active { opacity: 1; pointer-events: all; transform: translate(-50%, -50%); }
+.modal-container.inventory-detail-modal { width: calc(100vw - 2rem); max-width: 1200px; }
+.inventory-detail-modal .table-wrapper { overflow-x: auto; max-width: 100%; }
+#bomLines select[data-key="item_id"] { min-width: 230px; }
+#bomLines select[data-key="unit"] { min-width: 80px; }
+#bomLines select[data-key="alternatives"] { min-width: 230px; }
+#bomLines input[data-key="quantity"] { min-width: 110px; }
 
 .modal-header {
   display: flex; align-items: center; justify-content: space-between;

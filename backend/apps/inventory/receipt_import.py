@@ -46,7 +46,15 @@ def import_receipts(data):
                     "idempotency_key": f"{key}:{index}",
                     "judgment": row.get("judgment") or "PASS",
                 }
-                results.append(serializers.receipt(create_receipt(payload)))
+                receipt = create_receipt(payload)
+                if (
+                    receipt.supplier_id != supplier.pk
+                    or str(receipt.received_date) != str(payload.get("received_date"))
+                    or str(receipt.lot.expiration_date or "")
+                    != str(payload.get("expiration_date") or "")
+                ):
+                    raise InventoryError("같은 업로드 요청 키의 입고 내용이 변경되었습니다.")
+                results.append(serializers.receipt(receipt))
             except (InventoryError, ValueError, TypeError) as error:
                 raise InventoryError(f"{index}행: {error}") from error
         if dry_run:

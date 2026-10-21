@@ -4,7 +4,7 @@ from django.db import connection, transaction
 from django.db.models import Q
 from django.db.models.deletion import Collector, ProtectedError
 
-from apps.documents.models import Document, DocumentRef
+from apps.documents.models import Document, DocumentFile, DocumentRef
 
 from .bom_management import delete_bom, integer
 from .errors import InventoryError
@@ -43,6 +43,8 @@ def inspect_item(item):
     refs = DocumentRef.objects.filter(Q(lot_id__in=lots) | Q(item_id=item.pk))
     doc_ids = list(refs.values_list("document_id", flat=True).distinct())
     documents = Document.objects.filter(pk__in=doc_ids)
+    if DocumentFile.objects.filter(document_id__in=doc_ids).exists():
+        raise InventoryError("첨부파일이 등록된 문서가 있어 삭제할 수 없습니다.")
     if documents.exclude(status__in=["draft", "completed"]).exists():
         raise InventoryError("결재·정정 등에 사용된 문서가 있어 삭제할 수 없습니다.")
     # A document linking any other item/LOT/batch belongs to another business record.
