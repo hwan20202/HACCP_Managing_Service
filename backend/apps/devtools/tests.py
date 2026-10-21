@@ -4,6 +4,7 @@ import datetime
 
 from django.conf import settings
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.utils import timezone
 
 
 class DevConsolePageTests(SimpleTestCase):
@@ -329,3 +330,132 @@ class S3FixtureTests(TestCase):
         self.assertEqual(
             [statuses[day] for day in sorted(statuses)], ["completed", "skipped", "draft"]
         )
+
+
+class SeedPrintTests(TestCase):
+    """P12 S5 출력 확인용 시드: CCP-1P 승인(개선조치 확인), 2B 결재중, 3P 정정 중.
+
+    다시 실행하면 그대로.
+    """
+
+    def test_states_and_print(self):
+        from apps.devtools.seed_print import seed_print
+        from apps.document_workflow import printing
+        from apps.document_workflow.tests.base import invariant_violations
+        from apps.documents import services as doc
+
+        out = seed_print("2026-10-12")
+        self.assertTrue(out.pop("created"))
+        status = {code: doc.get_document(i)["status"] for code, i in out.items()}
+        self.assertEqual(
+            status, {"CCP-1P": "approved", "CCP-2B": "submitted", "CCP-3P": "correcting"}
+        )
+        self.assertEqual(invariant_violations(), [])
+        p1 = printing.print_sheet(out["CCP-1P"])
+        self.assertEqual([b["staff_id"] for b in p1["boxes"]], [3, 5])
+        self.assertEqual(p1["document"]["deviations"][0]["checked_by"], 5)
+        p2 = printing.print_sheet(out["CCP-2B"])
+        self.assertEqual([b["staff_id"] for b in p2["boxes"]], [3, None])
+        self.assertEqual(p2["document"]["measured_until"], "2026-10-13")
+        p3 = printing.print_sheet(out["CCP-3P"])
+        times = [r["values"]["passed_at"][11:] for r in p3["document"]["sections"]["checks"]]
+        self.assertIn("12:40", times)  # 승인본(지금 값은 12:45)
+        self.assertEqual(len(p3["document"]["deviations"]), 1)
+        again = seed_print("2026-10-12")
+        self.assertFalse(again.pop("created"))
+        self.assertEqual(again, out)
+
+    def test_receiving_seed_two_pages(self):
+        """D03 입고일 묶음 시드: 10줄(LOT 번호 순, 상태 섞임) + 문서 없는 LOT은 줄 없음."""
+        from apps.devtools.seed_print import seed_print_receiving
+        from apps.document_workflow import printing
+        from apps.document_workflow.tests.base import invariant_violations
+
+        day = timezone.localdate().isoformat()
+        out = seed_print_receiving(day)
+        self.assertTrue(out["created"])
+        self.assertEqual(invariant_violations(), [])
+        data = printing.print_by_query({"kind": "receiving", "type": "D03", "date": day})
+        lines = data["lines"]
+        self.assertEqual(sorted(line["document_id"] for line in lines), sorted(out["documents"]))
+        numbers = [line["lot"]["lot_number"] for line in lines]
+        self.assertEqual(numbers, sorted(numbers))  # LOT 번호 순(품목 약어가 앞이라 품목별로 모임)
+        by_id = {line["document_id"]: line for line in lines}
+        line = [by_id[i] for i in out["documents"]]  # 시드 순서
+        self.assertEqual(
+            [x["state"] for x in line],
+            ["ok", "ok", "ok", "ok", "ok", "draft", "rejected", "ok", "ok", "ok"],
+        )
+        self.assertEqual(data["printable_count"], 8)
+        self.assertEqual({x["lot"]["material_kind"] for x in lines}, {"원료", "부자재"})
+        self.assertEqual([b["staff_id"] for b in line[0]["approval"]], [3, 5])
+        self.assertEqual([b["staff_id"] for b in line[3]["approval"]], [3, None])
+        self.assertEqual(line[7]["values"]["verdict"], "PASS")  # 정정 중 → 승인본
+        self.assertEqual(len(data["deviations"]), 2)  # 부적합 1(확인됨) + 정정 중 추가 1
+        self.assertEqual(sorted(d["checked_by"] or 0 for d in data["deviations"]), [0, 5])
+        again = seed_print_receiving(day)
+        self.assertFalse(again["created"])
+
+    def test_weekly_seed(self):
+        """D10 주 시드: 월 정정 중 · 화 승인(부적합) · 수 결재중 · 목 작성 안 함 · 금 없음 · 토."""
+        from apps.devtools.seed_print import seed_print_weekly
+        from apps.document_workflow import printing
+        from apps.document_workflow.tests.base import invariant_violations
+
+        out = seed_print_weekly("2026-10-21")
+        self.assertTrue(out["created"])
+        self.assertEqual(out["week_start"], "2026-10-12")
+        self.assertEqual(invariant_violations(), [])
+        data = printing.print_by_query({"kind": "weekly", "type": "D10", "date": out["week_start"]})
+        self.assertEqual([d["weekday"] for d in data["days"]], list("월화수목금토"))
+        self.assertEqual(
+            [d["state"] for d in data["days"]], ["ok", "ok", "ok", "skipped", "missing", "ok"]
+        )
+        self.assertEqual(data["days"][0]["values"]["d_hyg_clothes"], "O")  # 정정 중 → 승인본
+        self.assertEqual(data["inspector_id"], 3)  # 토요일 문서
+        self.assertEqual(
+            [b["staff_id"] for b in data["boxes"]], [3, 1]
+        )  # 작성자 = 수(3), 팀장 = 화(1)
+        self.assertEqual(data["latest_dates"]["y_water_test_date"], "2026-10-12")
+        self.assertEqual(len(data["deviations"]), 1)
+        self.assertFalse(seed_print_weekly("2026-10-21")["created"])
+
+    def test_weekly_d12_seed(self):
+        """D12 주 시드: 요일마다 결재 칸·공정명, 정정 중 승인본, 토 작성 안 함."""
+        from apps.devtools.seed_print import seed_print_weekly_d12
+        from apps.document_workflow import printing
+        from apps.document_workflow.tests.base import invariant_violations
+
+        out = seed_print_weekly_d12("2026-10-21")
+        self.assertTrue(out["created"])
+        self.assertEqual(invariant_violations(), [])
+        data = printing.print_by_query({"kind": "weekly", "type": "D12", "date": out["week_start"]})
+        days = data["days"]
+        self.assertEqual([d["weekday"] for d in days], list("월화수목금"))  # 토(작성 안 함) 칸 없음
+        self.assertEqual([d["state"] for d in days], ["ok", "ok", "ok", "ok", "draft"])
+        self.assertEqual(
+            [d.get("process_name") for d in days[:4]], ["내포장", "외포장", "내포장", "농축"]
+        )
+        self.assertEqual([b["staff_id"] for b in days[1]["approval"]], [2, 1])
+        self.assertEqual([b["staff_id"] for b in days[3]["approval"]], [3, None])
+        self.assertEqual(days[2]["values"]["worker_hair"], "O")  # 정정 중 → 승인본
+        self.assertEqual(len(data["deviations"]), 1)
+        self.assertFalse(seed_print_weekly_d12("2026-10-21")["created"])
+
+    def test_monthly_seed(self):
+        """D11 월 시드(지난달 9월 — 월요일 4개): 승인·부적합·정정 중·작성 안 함."""
+        from apps.devtools.seed_print import seed_print_monthly
+        from apps.document_workflow import printing
+        from apps.document_workflow.tests.base import invariant_violations
+
+        out = seed_print_monthly("2026-10-15")
+        self.assertTrue(out["created"])
+        self.assertEqual(out["month"], "2026-09")
+        self.assertEqual(invariant_violations(), [])
+        data = printing.print_by_query({"kind": "monthly", "type": "D11", "month": "2026-09"})
+        self.assertEqual([w["state"] for w in data["weeks"]], ["ok", "ok", "ok", "skipped"])
+        self.assertEqual(data["weeks"][2]["values"]["food_trace"], "O")  # 정정 중 → 승인본
+        self.assertEqual(data["weeks"][1]["values"]["fly_trap_lamp"], "X")
+        self.assertEqual([r["week_no"] for r in data["remarks"]], [1, 2])
+        self.assertEqual([b["staff_id"] for b in data["boxes"]], [3, 5])  # 3주 승인이 가장 최근
+        self.assertFalse(seed_print_monthly("2026-10-15")["created"])

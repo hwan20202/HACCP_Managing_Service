@@ -1,0 +1,23 @@
+{% load static %}
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>HACCP 출력</title>
+    <link rel="icon" href="{% static 'images/mark.svg' %}" type="image/svg+xml">
+    <link rel="stylesheet" href="{% static 'print/print.css' %}">
+    <script src="{% static 'print/print.js' %}" defer></script>
+  </head>
+  <body>
+    <!-- P12 PRT-SC-01 인쇄용 페이지: 버튼 줄은 화면에서만(인쇄할 때 숨김) -->
+    <div class="prt-toolbar" id="prtToolbar">
+      <span class="prt-toolbar-title" id="prtTitle">출력</span>
+      <span class="prt-spacer"></span>
+      <button type="button" class="prt-btn prt-btn-primary" id="prtPrint" disabled>인쇄</button>
+      <button type="button" class="prt-btn" id="prtClose">닫기</button>
+    </div>
+    <main class="prt-root" id="prtRoot"><p class="prt-msg">불러오는 중…</p></main>
+  </body>
+</html>

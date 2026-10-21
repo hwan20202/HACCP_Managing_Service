@@ -45,18 +45,18 @@
     return `${Math.floor(min / 1440)}일 전`;
   }
 
-  // 최근 측정 값(S1b 3.2): 1P 자력·청소, 2B 온도·시간, 3P 9칸이 모두 기준대로면 "정상", 아니면 어긋난 칸 이름
+  // 최근 측정 값(S1b 3.2): 1P 자력·청소, 2B 온도·시간, 3P 5칸이 모두 기준대로면 "정상", 아니면 어긋난 칸 이름
+  // 3P는 캔디류 양식 v2(P12 DP-03 — 좌·중·우 6칸 → Fe만·STS만 통과 2칸)
   const P3_EXPECT = [
-    ['fe_l', 'Fe 좌', '○'], ['fe_c', 'Fe 중', '○'], ['fe_r', 'Fe 우', '○'],
-    ['sus_l', 'SUS 좌', '○'], ['sus_c', 'SUS 중', '○'], ['sus_r', 'SUS 우', '○'],
-    ['product_only', '제품만', 'X'], ['product_fe', '제품+Fe', '○'], ['product_sus', '제품+SUS', '○'],
+    ['fe_only', 'Fe만', '○'], ['sts_only', 'STS만', '○'],
+    ['product_only', '제품만', 'X'], ['product_fe', 'Fe+제품', '○'], ['product_sus', 'STS+제품', '○'],
   ];
   const VALUE_TEXT = {
     'CCP-1P': (v) => `${num(v.gauss)}G · 청소 ${esc(v.rod_cleaned ?? '-')}`,
     'CCP-2B': (v) => `${esc(v.temp_c ?? '-')}℃ · ${fmtMinutes(v.dry_minutes)}`,
     'CCP-3P': (v) => {
       const off = P3_EXPECT.filter(([k, , want]) => v[k] !== want).map(([, label]) => label);
-      return off.length ? `어긋남 ${esc(off.join('·'))}` : '9칸 정상';
+      return off.length ? `어긋남 ${esc(off.join('·'))}` : '5칸 정상';
     },
   };
 

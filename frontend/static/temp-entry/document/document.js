@@ -24,6 +24,32 @@
   // P8 F29 최근 값 제안(D12 공정명 — p8-s0 F5). 화면이 아는 양식 필드 목록
   const RECENT_FIELDS = { D12: ['process_name'] };
   const WEEK_TYPES = ['D10', 'D12'];  // 주 묶음 양식(DOC BUNDLE_UNITS week · REQ WEEK_BUNDLE_TYPES와 같음)
+  // P12 출력: 출력하는 양식(WF PRINT_SHEETS)과 출력 가능 상태(작성중·반려·작성 안 함 제외).
+  // CCP = 문서 1건 = 종이 1장, D03 = 그 문서의 입고일 장(p12-d03-policy.md 11), D10 = 그 문서의 주(주말 포함 — DP-12)
+  const PRINT_TYPES = ['CCP-1P', 'CCP-2B', 'CCP-3P', 'D03', 'D10', 'D12', 'D11'];  // D11 = 그 달(DP-17)
+  const WEEK_PRINT_TYPES = ['D10', 'D12'];  // 주 묶음 [주 출력](DP-12·13)
+  const PRINTABLE = ['completed', 'submitted', 'approved', 'correcting'];
+  // P12 DP-19 첨부 원본 인쇄(D01·D02 등 증빙 파일): 사진은 인쇄용 페이지(/print/?files=…)가 A4에 맞춰 한 장씩,
+  // PDF는 화면 밖 iframe에서 브라우저 PDF 인쇄 — 안 되는 브라우저면 새 탭으로 열어 거기서 인쇄
+  const isPdf = (x) => x.mime_type === 'application/pdf';
+  function printImages(ids) {
+    if (ids.length) window.open(`/print/?files=${ids.join(',')}&auto=1`, '_blank');
+  }
+  function printPdf(fileId) {
+    const url = `/api/v1/files/${fileId}`;
+    document.querySelectorAll('iframe[data-te-pdf-print]').forEach((f) => f.remove());
+    const frame = document.createElement('iframe');
+    frame.dataset.tePdfPrint = String(fileId);
+    frame.setAttribute('aria-hidden', 'true');
+    frame.style.cssText = 'position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none';
+    frame.addEventListener('load', () => {
+      setTimeout(() => {
+        try { frame.contentWindow.focus(); frame.contentWindow.print(); } catch (e) { window.open(url, '_blank', 'noopener'); }
+      }, 300);
+    });
+    frame.src = url;
+    document.body.appendChild(frame);
+  }
   // P8 점검표 섹션: 1행 섹션이고 필드에 표시용 키 group(관리 구분)이 있으면 종이처럼 표로(p8-s1-screens 2장)
   const isChecklist = (section) => !section.repeat && section.fields.some((fd) => fd.group);
   const isResult = (fd) => fd.type === 'select' && (fd.options || []).includes('O') && (fd.options || []).includes('X');
@@ -262,6 +288,9 @@
         .join('');
       // [육안검사 오늘](P7 DOC-SC-01): 오늘 묶음 상세(DOC-SC-10)를 연다(P6a-S1-Q6 목록 필터 대체)
       const d03 = templates.find((t) => t.type_code === 'D03');
+      // P12 D11 [월 출력](S1 7장): 양식 필터가 D11일 때만 [월 ▾] + [월 출력]
+      const d11Ids = templates.filter((t) => t.type_code === 'D11').map((t) => String(t.template_id));
+      const thisMonth = today(0).slice(0, 7);
       this.root.innerHTML = `
         <div class="fade-in" id="teDocList">
           ${this.boxHead()}
@@ -277,6 +306,10 @@
               <label class="te-check" title="정정 중 + 정정 꼬리표가 붙은 작성완료·결재중"><input type="checkbox" id="fCorrecting" ${f.correcting ? 'checked' : ''}> 정정 진행 중 전체</label>
               <button class="btn btn-secondary" id="fSearch">조회</button>
               ${d03 ? '<button class="btn btn-secondary" id="fD03Today" title="오늘 입고된 LOT의 육안검사 묶음 상세">육안검사 오늘</button>' : ''}
+              <span class="te-month-print" id="fMonthWrap" ${d11Ids.includes(String(f.template_id)) ? '' : 'hidden'}>
+                <input type="month" class="form-control" id="fMonth" value="${(f.month || thisMonth)}" max="${thisMonth}" title="출력할 달">
+                <button class="btn btn-secondary" id="fMonthPrint" title="그 달 방충방서점검표(주 문서 4~5주)">월 출력</button>
+              </span>
             </div>
             <div class="te-table-wrap" id="teListBody">${this.skeleton()}</div>
           </div>
@@ -293,6 +326,12 @@
         this.loadList();
       };
       $('#fSearch').addEventListener('click', search);
+      $('#fTemplate').addEventListener('change', () => { $('#fMonthWrap').hidden = !d11Ids.includes($('#fTemplate').value); });
+      $('#fMonthPrint').addEventListener('click', () => {
+        const month = $('#fMonth').value || thisMonth;
+        f.month = month;
+        window.open(`/print/?kind=monthly&type=D11&month=${month}`, '_blank');
+      });
       if (d03) {
         $('#fD03Today').addEventListener('click', () => this.showBundle(today(0), { page: 'list' }));
       }
@@ -623,7 +662,7 @@
           ${assign ? btn('bdInspector', '점검자 지정', n.inspector) : `<button class="btn btn-secondary btn-sm" id="bdInspector" disabled title="${esc(T.INSPECTOR_WHY)}">점검자 지정 (${n.inspector})</button>`} ${btn('bdSubmit', '선택 상신', n.submit)} ${btn('bdApprove', '선택 승인', n.approve)}
           <span class="te-hint" id="bdPicked">선택 ${picked.length}건${over ? ` — <span class="te-error-text">한 번에 ${max}건까지</span>` : ''}</span>
           <span style="flex:1"></span>
-          <button class="btn btn-secondary btn-sm" disabled title="입고일 묶음 출력(DOC-SC-12)은 스프린트 3">출력 미리보기 <span class="te-hint">(스프린트 3)</span></button>
+          <button class="btn btn-secondary btn-sm" id="bdPrint" title="이 입고일의 원료/부자재 육안검사일지(작성완료 뒤 문서만 검사 값)">출력</button>
         </div>
         ${assign ? '' : `<div class="te-perm-note" id="bdInspectorWhy">${esc(T.INSPECTOR_WHY)} ${T.roleLink()}</div>`}
         <div class="te-table-wrap"><table class="data-table" id="bdTable">
@@ -666,6 +705,7 @@
         onDone: () => { this.bundle.selected = new Set(); this.showBundle(this.bundle.day, this.bundle.origin); },
         openDoc: (id) => { this.bundle.selected = new Set(); this.openFromBundle(id); },
       };
+      $('#bdPrint').addEventListener('click', () => window.open(`/print/?kind=receiving&type=D03&date=${this.bundle.day}`, '_blank'));
       $('#bdApprove').addEventListener('click', () => B.openApprove(picked, { origin: 'bundle', ...after }));
       $('#bdSubmit').addEventListener('click', () => B.openSubmit(picked, data.approval_line, after));
       $('#bdInspector').addEventListener('click', () => B.guardOpen(async () => this.openInspector(picked, after, max)));
@@ -770,7 +810,9 @@
           ${assign ? btn('wkInspector', '점검자 지정', n.inspector) : `<button class="btn btn-secondary btn-sm" id="wkInspector" disabled title="${esc(T.INSPECTOR_WHY)}">점검자 지정 (${n.inspector})</button>`} ${btn('wkSubmit', '선택 상신', n.submit)} ${btn('wkApprove', '선택 승인', n.approve)} ${btn('wkSkip', '작성 안 함', n.skip)}
           <span class="te-hint" id="wkPicked">선택 ${picked.length}건${over ? ` — <span class="te-error-text">한 번에 ${max}건까지</span>` : ''}</span>
           <span style="flex:1"></span>
-          <button class="btn btn-secondary btn-sm" disabled title="주 출력(PRT-SC-04·05)은 P12">주 출력 <span class="te-hint">(P12)</span></button>
+          ${WEEK_PRINT_TYPES.includes(data.type_code)
+            ? `<button class="btn btn-secondary btn-sm" id="wkPrint" ${this.week.start > today() ? 'disabled title="아직 오지 않은 주입니다"' : 'title="이 주의 점검표(주말 문서가 있으면 그 요일 칸 포함)"'}>주 출력</button>`
+            : '<button class="btn btn-secondary btn-sm" disabled title="주 출력은 다음 단계(P12)">주 출력 <span class="te-hint">(P12)</span></button>'}
         </div>
         ${assign ? '' : `<div class="te-perm-note" id="wkInspectorWhy">${esc(T.INSPECTOR_WHY)} ${T.roleLink()}</div>`}
         <div class="te-table-wrap"><table class="data-table" id="wkTable">
@@ -780,6 +822,7 @@
         </table></div>
         ${data.weekend.length ? `<div class="te-bundle-missing" id="wkWeekend">주말 문서 ${data.weekend.length}건 별도: ${data.weekend.map((x) => `<a href="#" class="te-lot-link" data-open-doc="${x.document.document_id}">${mmdd(x.work_date)} (${WEEKDAY[x.weekday % 7]}) #${x.document.document_id}</a>`).join(', ')}</div>` : ''}`;
       const $ = (sel) => body.querySelector(sel);
+      $('#wkPrint')?.addEventListener('click', () => window.open(`/print/?kind=weekly&type=${encodeURIComponent(data.type_code)}&date=${this.week.start}`, '_blank'));
       body.querySelectorAll('[data-pick]').forEach((c) => c.addEventListener('change', () => {
         const id = Number(c.dataset.pick);
         if (c.checked) selected.add(id); else selected.delete(id);
@@ -1613,6 +1656,7 @@
               <div class="card-title">${statusCell(d.status, !!fixing)} ${requirementChip(d)}</div>
               <div class="page-actions">
                 <button class="btn btn-secondary btn-sm" id="btnList">${this.detailBack ? '뒤로' : '목록'}</button>
+                ${PRINT_TYPES.includes(d.template.type_code) ? `<button class="btn btn-secondary btn-sm" id="btnPrint" ${PRINTABLE.includes(d.status) ? (d.template.type_code === 'D03' ? `title="입고일 ${d.work_date} 육안검사일지(그날 D03 전체)"` : WEEK_PRINT_TYPES.includes(d.template.type_code) ? 'title="이 문서가 들어간 주의 점검표"' : d.template.type_code === 'D11' ? 'title="이 문서가 들어간 달의 방충방서점검표"' : '') : 'disabled title="작성완료 뒤 출력할 수 있습니다"'}>출력</button>` : ''}
                 ${canEdit ? `<button class="btn btn-primary btn-sm" id="btnEdit" ${writeOff}>수정</button>` : ''}
                 ${canComplete ? `<button class="btn btn-primary te-btn-complete btn-sm" id="btnComplete" ${writeOff}>작성완료</button>` : ''}
                 ${canReopen ? `<button class="btn btn-secondary btn-sm" id="btnReopen" ${writeOff}>작성 재개</button>` : ''}
@@ -1648,6 +1692,8 @@
       this.rerenderTopBar(() => this.showDetail(id));
       const $ = (sel) => this.root.querySelector(sel);
       $('#btnList').addEventListener('click', () => this.goBack());
+      // P12: 새 탭 인쇄용 페이지(PRT-SC-01). 사용자 선택과 무관(읽기 전용)
+      $('#btnPrint')?.addEventListener('click', () => window.open(`/print/?document_id=${d.document_id}`, '_blank'));
       $('#btnEdit')?.addEventListener('click', () => this.openForm({ document: d }));
       $('#btnDelete')?.addEventListener('click', () => this.confirmDelete(d));
       $('#btnComplete')?.addEventListener('click', () => this.confirmComplete(d, schema));
@@ -1778,7 +1824,8 @@
       };
       el.innerHTML = `
         <div class="te-section te-files" id="teFileArea">
-          <div class="te-section-head"><span class="te-section-title">증빙 파일 <span class="te-hint" id="teFileCount">${d.files.length}개 · PDF·JPG·PNG, 파일당 20MB 이하${rule.min ? ` · 작성완료에는 ${rule.min}개 이상` : ''}</span></span></div>
+          <div class="te-section-head"><span class="te-section-title">증빙 파일 <span class="te-hint" id="teFileCount">${d.files.length}개 · PDF·JPG·PNG, 파일당 20MB 이하${rule.min ? ` · 작성완료에는 ${rule.min}개 이상` : ''}</span></span>
+            ${d.files.length ? `<button class="btn btn-secondary btn-sm" id="teFilePrintAll" data-file-print-all title="첨부 원본을 모두 인쇄(사진은 한 번에, PDF는 파일마다 인쇄 창)">모두 인쇄</button>` : ''}</div>
           ${rule.kinds ? `<p class="te-hint">서류 종류(${rule.kinds.map(esc).join(' / ')})는 기본정보의 [서류 종류]에서 고릅니다.</p>` : ''}
           ${results.length ? `<ul class="te-result-list" id="teFileResults">${results.map((x) => (x.ok
             ? `<li class="te-result-ok-line">✅ <b>${esc(x.name)}</b> <span>${esc(x.text)}</span></li>`
@@ -1791,6 +1838,7 @@
               <td class="te-nowrap">${T.personHtml(x.uploaded_by)} · ${T.fmtDateTime(x.uploaded_at)}</td>
               <td>${shared(x)}</td>
               <td class="te-nowrap"><a class="btn btn-secondary btn-sm" href="/api/v1/files/${x.file_id}" target="_blank" rel="noopener" data-file-view="${x.file_id}">보기</a>
+                <button class="btn btn-secondary btn-sm" data-file-print="${x.file_id}" title="이 파일 원본 인쇄">인쇄</button>
                 ${can ? `<button class="btn btn-secondary btn-sm" data-file-detach="${x.file_id}" title="이 문서에서 연결 끊기" ${on ? '' : 'disabled'}>✕</button>` : ''}</td>
             </tr>`).join('') || `<tr><td colspan="5" class="te-empty">${can ? '아직 올린 파일이 없습니다. 아래에서 파일을 고르거나 끌어 놓으세요.' : '파일이 없습니다.'}</td></tr>`}</tbody>
           </table></div>
@@ -1802,7 +1850,10 @@
               <button class="btn btn-secondary btn-sm" id="teFilePick" ${on ? '' : 'disabled'}>이전 파일 불러오기</button>
               ${api.staffId ? (on ? '' : '<span class="te-hint">작성 권한이 없습니다(위 안내).</span>') : '<span class="te-hint">현재 사용자를 선택하세요.</span>'}
             </div>` : (lockedNote[d.status] ? `<p class="te-hint">${lockedNote[d.status]}</p>` : '')}
+          ${this.filePreviewsHtml(d.files)}
         </div>`;
+      // P12 DP-19: 미리보기·인쇄는 상태·쓰기 권한과 무관(원본 서류)
+      this.bindFilePrint(el, d.files);
       if (!can || !on) return;
       const input = el.querySelector('#teFileInput');
       const drop = el.querySelector('#teDrop');
@@ -1815,6 +1866,49 @@
         const file = d.files.find((x) => x.file_id === Number(b.dataset.fileDetach));
         this.detachFile(d, file);
       }));
+    },
+
+    // P12 DP-19 첨부 원본 미리보기 카드 — 문서 상세와 결재 요청 상세(상신 당시 파일)가 같이 씀
+    filePreviewsHtml(files, id = 'teFilePreviews') {
+      if (!files.length) return '';
+      const icon = (mime) => (mime === 'application/pdf' ? '📄' : '🖼');
+      return `<div class="te-file-previews" id="${id}">${files.map((x) => `
+            <figure class="te-file-preview" data-file-preview="${x.file_id}">
+              ${isPdf(x)
+                ? `<iframe src="/api/v1/files/${x.file_id}#toolbar=0&navpanes=0&view=FitH" title="${esc(x.original_name)}" loading="lazy"></iframe>`
+                : `<a href="/api/v1/files/${x.file_id}" target="_blank" rel="noopener"><img src="/api/v1/files/${x.file_id}" alt="${esc(x.original_name)}" loading="lazy"></a>`}
+              <figcaption><span title="${esc(x.original_name)}">${icon(x.mime_type)} ${esc(x.original_name)}</span>
+                <button class="btn btn-secondary btn-sm" data-file-print="${x.file_id}">인쇄</button></figcaption>
+            </figure>`).join('')}</div>`;
+    },
+
+    // [인쇄]·[모두 인쇄] 연결. files는 살아 있는 목록 — 결재 화면이 지워진 파일을 빼면 [모두 인쇄]에서도 빠짐.
+    // 미리보기·인쇄는 상태·쓰기 권한과 무관(원본 서류)
+    bindFilePrint(el, files) {
+      el.querySelectorAll('[data-file-print]').forEach((b) => b.addEventListener('click', () => {
+        const file = files.find((x) => x.file_id === Number(b.dataset.filePrint));
+        if (!file) return;
+        if (isPdf(file)) printPdf(file.file_id); else printImages([file.file_id]);
+      }));
+      el.querySelector('[data-file-print-all]')?.addEventListener('click', () => this.printAllFiles(files));
+    },
+
+    // P12 DP-19 [모두 인쇄]: 사진은 인쇄용 페이지 한 번, PDF는 파일마다 인쇄 창 — 다음 PDF는 확인 뒤
+    async printAllFiles(files) {
+      const images = files.filter((x) => !isPdf(x)).map((x) => x.file_id);
+      const pdfs = files.filter(isPdf);
+      printImages(images);
+      for (let i = 0; i < pdfs.length; i += 1) {
+        if (i > 0 || images.length) {
+          const go = await T.modal({
+            title: '다음 파일 인쇄',
+            body: `<p>앞 인쇄 창을 닫은 뒤 [인쇄]를 누르세요.</p><p><b>${esc(pdfs[i].original_name)}</b> <span class="te-hint">(PDF ${i + 1}/${pdfs.length})</span></p>`,
+            buttons: [{ label: '그만', value: false }, { label: '인쇄', value: true, cls: 'btn-primary' }],
+          });
+          if (!go) return;
+        }
+        printPdf(pdfs[i].file_id);
+      }
     },
 
     // 파일마다 한 요청. 버전 충돌이면 최신 버전을 읽어 한 번 더(다른 사람이 그사이 저장한 경우)

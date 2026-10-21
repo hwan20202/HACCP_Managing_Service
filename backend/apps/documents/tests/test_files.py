@@ -495,6 +495,11 @@ class FileApiTests(FileApiTestCase):
         self.assertTrue(shown["Content-Disposition"].startswith("inline"))
         self.assertIn("filename*=utf-8''", shown["Content-Disposition"])
         self.assertEqual(b"".join(shown.streaming_content)[:5], b"%PDF-")
+        # P12 DP-19: 문서 화면 안 미리보기·인쇄(같은 출처 iframe)
+        # — 파일 보기만 SAMEORIGIN, 나머지는 DENY
+        self.assertEqual(shown["X-Frame-Options"], "SAMEORIGIN")
+        other = self.client.get(f"/api/v1/documents/{document_id}")
+        self.assertEqual(other["X-Frame-Options"], "DENY")
         deleted = self.client.delete(
             f"/api/v1/documents/{document_id}/files/{file_id}?expected_version=2",
             HTTP_X_STAFF_ID="3",

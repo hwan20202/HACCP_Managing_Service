@@ -867,6 +867,33 @@
       });
     },
 
+    // P12 DP-19 r1: 상신 뒤 연결이 끊겨 지워진 파일(정정 등)은 "파일 없음"으로 바꾸고 [인쇄]·[모두 인쇄]에서 뺀다.
+    // 지금 문서에도 붙어 있는 파일은 있는 것으로 보고, 나머지만 응답 머리(상태)만 읽고 끊어 확인
+    async markMissingFiles(area, files, currentFiles) {
+      const alive = new Set(currentFiles.map((x) => x.file_id));
+      for (const file of [...files]) {
+        if (alive.has(file.file_id)) continue;
+        let gone = false;
+        const ctrl = new AbortController();
+        try {
+          const r = await fetch(`/api/v1/files/${file.file_id}`, { signal: ctrl.signal, cache: 'no-store' });
+          gone = r.status === 404;
+          ctrl.abort();
+        } catch (e) { /* 네트워크 오류는 그대로 둠 */ }
+        if (!gone) continue;
+        files.splice(files.indexOf(file), 1);
+        const card = area.querySelector(`[data-file-preview="${file.file_id}"]`);
+        if (card) {
+          card.classList.add('te-file-missing');
+          card.querySelector('iframe, a')?.replaceWith(Object.assign(document.createElement('div'), {
+            className: 'te-file-missing-body', textContent: '파일 없음 — 상신 뒤 연결이 끊겨 지워졌습니다',
+          }));
+          card.querySelector('[data-file-print]')?.setAttribute('disabled', '');
+        }
+      }
+      if (!files.length) area.querySelector('[data-file-print-all]')?.setAttribute('disabled', '');
+    },
+
     // ================================================= WF-SC-04 결재 요청 상세
     async showRequest(requestId, origin = { from: 'inbox' }) {
       const root = T.container;
@@ -889,6 +916,8 @@
       const changed = current.ok && current.data.version !== req.document_version;
       const sections = window.TempEntryDocument && snap.sections
         ? window.TempEntryDocument.sectionsHtml(template.schema || { sections: [] }, snap) : '';
+      // P12 DP-19 r1: 상신 당시 증빙 파일(스냅샷 files) 미리보기·인쇄 — 문서 상세와 같은 카드
+      const snapFiles = [...(snap.files || [])];
       root.innerHTML = `
         <div class="fade-in" id="teRequest">
           ${T.topBar(`결재 요청 #${req.request_id} · 문서 #${req.document_id} · ${req.attempt}회차`, '결재 요청 상세 — 상신 당시 문서 내용(스냅샷)', req.document_id)}
@@ -921,9 +950,19 @@
               ${sections || '<p class="te-hint">표시할 내용이 없습니다.</p>'}
               ${window.TempEntryDocument && snap.sections ? window.TempEntryDocument.deviationsHtml(template.schema || { sections: [] }, snap, '상신 당시 이탈·개선조치') : ''}
             </div>
+            ${snapFiles.length && window.TempEntryDocument ? `<div class="te-section te-files" id="rqFiles">
+              <div class="te-section-head"><span class="te-section-title">상신 당시 증빙 파일 <span class="te-hint">${snapFiles.length}개</span></span>
+                <button class="btn btn-secondary btn-sm" id="rqFilePrintAll" data-file-print-all title="첨부 원본을 모두 인쇄(사진은 한 번에, PDF는 파일마다 인쇄 창)">모두 인쇄</button></div>
+              ${window.TempEntryDocument.filePreviewsHtml(snapFiles, 'rqFilePreviews')}
+            </div>` : ''}
           </div>
         </div>`;
       T.bindTopBar(root, () => this.showRequest(requestId, origin));
+      const fileArea = root.querySelector('#rqFiles');
+      if (fileArea) {
+        window.TempEntryDocument.bindFilePrint(fileArea, snapFiles);
+        this.markMissingFiles(fileArea, snapFiles, current.ok ? current.data.files || [] : []);
+      }
       const openDoc = () => T.open('temp-doc', { documentId: req.document_id });
       root.querySelector('#rqInbox').addEventListener('click', () => (origin.from === 'doc' ? T.open('temp-approval') : this.showInbox()));
       root.querySelector('#rqDoc').addEventListener('click', origin.from === 'doc' ? back : openDoc);

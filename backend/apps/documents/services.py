@@ -3176,6 +3176,76 @@ def _db_date(value):
     return connection.ops.adapt_datefield_value(value)
 
 
+# ------------------------------------------------ P12 N9 출력용 문서 묶음 (p12-s2-spec 3.1)
+
+PRINT_BATCH = 100  # 한 번에 읽는 문서 수 상한 — WF가 나눠 부른다(B5, ISS-021)
+
+
+def documents_for_print(document_ids):
+    """N9: 문서들의 상세(get_document 모양) + open_correction·skip_reason. SQL 6개(문서 수 무관).
+
+    파일·힌트는 읽지 않는다(출력에 없음 — D01·D02 출력 없음). 삭제된·없는 문서는 빠진다.
+    반환 {document_id: 상세}. 100건 넘으면 ValueError(호출자가 나눔).
+    """
+    ids = sorted({i for i in document_ids if isinstance(i, int) and not isinstance(i, bool)})
+    if len(ids) > PRINT_BATCH:
+        raise ValueError(f"documents_for_print는 한 번에 {PRINT_BATCH}건까지")
+    if not ids:
+        return {}
+    with step("DOC-PRT-01", "DOC", "출력용 문서·섹션·참조·개선조치·정정 기록"):
+        documents = list(
+            Document.objects.select_related("template").filter(pk__in=ids, deleted_at__isnull=True)
+        )
+        found = [d.document_id for d in documents]
+        rows = {}
+        for row in DocSection.objects.filter(document_id__in=found):
+            rows.setdefault(row.document_id, []).append(row)
+        refs = _refs_by_document(found)
+        items = list(
+            DeviationAction.objects.filter(document_id__in=found, deleted_at__isnull=True).order_by(
+                "deviation_id"
+            )
+        )
+        checkers = {}
+        for row in DeviationChecker.objects.filter(
+            deviation_id__in=[d.deviation_id for d in items]
+        ).order_by("staff_id"):
+            checkers.setdefault(row.deviation_id, []).append(row.staff_id)
+        deviations = {}
+        for item in items:
+            deviations.setdefault(item.document_id, []).append(
+                _deviation_row(item, checkers.get(item.deviation_id, []))
+            )
+        history = {}
+        for c in DocumentCorrection.objects.filter(document_id__in=found).order_by(
+            "-started_at", "-correction_id"
+        ):
+            history.setdefault(c.document_id, []).append(c)
+    result = {}
+    for document in documents:
+        mine = history.get(document.document_id, [])
+        current = next((c for c in mine if c.closed_at is None), None)
+        corrections = (
+            None if current is None else _correction_row(current, document),
+            [_correction_row(c) for c in mine],
+        )
+        data = _assemble(
+            document,
+            rows.get(document.document_id, []),
+            refs[document.document_id],
+            None,
+            deviations.get(document.document_id, []),
+            None,
+            corrections,
+        )
+        data["open_correction"] = current is not None
+        data["skip_reason"] = document.skip_reason
+        data["guide"] = document.template.schema_json.get("guide", [])
+        data["schema_sections"] = document.template.schema_json["sections"]
+        result[document.document_id] = data
+    return result
+
+
 # ---------------------------------------------------------------- P11 CCP 대시보드·개선조치 확인
 # (dev-notes/dashboard/p11-s2-spec.md 2.2·3장). DOC는 "CCP"를 모른다 — 측정 섹션은 양식 키
 # phase_order, 이탈은 nonconforming, 확인 노출은 deviation.check_visibility로 판단한다.
