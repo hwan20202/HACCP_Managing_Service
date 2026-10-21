@@ -333,7 +333,10 @@ class S3FixtureTests(TestCase):
 
 
 class SeedPrintTests(TestCase):
-    """P12 S5 출력 확인용 시드: CCP-1P 승인(개선조치 확인), 2B 결재중, 3P 정정 중. 다시 실행하면 그대로."""
+    """P12 S5 출력 확인용 시드: CCP-1P 승인(개선조치 확인), 2B 결재중, 3P 정정 중.
+
+    다시 실행하면 그대로.
+    """
 
     def test_states_and_print(self):
         from apps.devtools.seed_print import seed_print

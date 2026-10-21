@@ -891,8 +891,14 @@
     return hit.template_id;
   }
   // P7: D03은 목록에서 입고일 묶음 줄(kind bundle)로 온다 → 그 입고일 묶음 조회(REQ-A03)로 문서 id를 푼다
+  // P12 ISP-06: D10·D12 주 묶음(bundle_unit week, work_date = 월요일)은 주 묶음 조회(REQ-A04)로 — 월~금 + 주말 칸
   async function docIdsOf(item, status) {
     if (item.kind !== 'bundle') return [item.document_id];
+    if (item.bundle_unit === 'week') {
+      const w = await quietGetAs(`periodic-bundles?type_code=${encodeURIComponent(item.type_code)}&week_start=${item.work_date}`, 3);
+      return w ? [...w.days, ...w.weekend].map((c) => c.document)
+        .filter((d) => d && (!status || d.status === status)).map((d) => d.document_id) : [];
+    }
     const b = await quietGetAs(`incoming-inspections?received_date=${item.work_date}`, 3);
     return b ? b.lots.filter((l) => l.document && (!status || l.document.status === status)).map((l) => l.document.document_id) : [];
   }

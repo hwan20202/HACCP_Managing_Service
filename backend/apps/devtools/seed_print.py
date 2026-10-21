@@ -80,10 +80,14 @@ def seed_print(today=None):
     # CCP-1P 승인 + 확인된 개선조치
     p1 = result["CCP-1P"]
     _add_rows(OWNER, p1, "rounds", [
-        {"phase": "작업시작 전", "measured_at": _at(today, "08:50"), "gauss": 10500, "rod_cleaned": "O"},
-        {"phase": "작업 중", "measured_at": _at(today, "09:50"), "gauss": 9800, "rod_cleaned": "O"},
-        {"phase": "작업 중", "measured_at": _at(today, "10:50"), "gauss": 10400, "rod_cleaned": "O"},
-        {"phase": "작업종료 후", "measured_at": _at(today, "17:00"), "gauss": 10200, "rod_cleaned": "O"},
+        {"phase": "작업시작 전", "measured_at": _at(today, "08:50"), "gauss": 10500,
+         "rod_cleaned": "O"},
+        {"phase": "작업 중", "measured_at": _at(today, "09:50"), "gauss": 9800,
+         "rod_cleaned": "O"},
+        {"phase": "작업 중", "measured_at": _at(today, "10:50"), "gauss": 10400,
+         "rod_cleaned": "O"},
+        {"phase": "작업종료 후", "measured_at": _at(today, "17:00"), "gauss": 10200,
+         "rod_cleaned": "O"},
     ])  # fmt: skip
     _set_info(OWNER, p1, {"inspector": INSPECTOR})
     deviation = doc.create_deviation(
@@ -105,10 +109,12 @@ def seed_print(today=None):
     # CCP-2B 결재중(담당자 칸만 승인), 측정이 다음 날까지
     p2 = result["CCP-2B"]
     _add_rows(OWNER, p2, "rounds", [
-        {"phase": "건조시작 전", "measured_at": _at(today, "09:00"), "temp_c": 70.1, "dry_minutes": 120},
-        {"phase": "작업 중", "measured_at": _at(today, "15:00"), "temp_c": 70.4, "dry_minutes": 121},
-        {"phase": "건조종료 전", "measured_at": _at(today + timedelta(days=1), "11:00"), "temp_c": 69.8,
-         "dry_minutes": 119},
+        {"phase": "건조시작 전", "measured_at": _at(today, "09:00"), "temp_c": 70.1,
+         "dry_minutes": 120},
+        {"phase": "작업 중", "measured_at": _at(today, "15:00"), "temp_c": 70.4,
+         "dry_minutes": 121},
+        {"phase": "건조종료 전", "measured_at": _at(today + timedelta(days=1), "11:00"),
+         "temp_c": 69.8, "dry_minutes": 119},
     ])  # fmt: skip
     _set_info(OWNER, p2, {"inspector": INSPECTOR})
     _complete(OWNER, p2)
