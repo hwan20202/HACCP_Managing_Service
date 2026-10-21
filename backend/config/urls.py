@@ -1,6 +1,3 @@
-from django.conf import settings
-from django.urls import include, path
-
 from apps.core.views import (
     home,
     live,
@@ -10,6 +7,8 @@ from apps.core.views import (
     ready,
     system_test,
 )
+from django.conf import settings
+from django.urls import include, path
 
 urlpatterns = [
     path("", home, name="home"),
