@@ -59,7 +59,7 @@
           <th class="vert" rowspan="2">기록<br>확인</th>
           ${boxes.map((b) => `<th class="box">${esc(b.label)}</th>`).join('')}
         </tr>
-        <tr>${boxes.map((b) => `<td class="sign">${b.staff_id ? `<div class="who">${esc(who(b.staff_id))}</div><div class="sm">${esc(mmdd(b.date))}</div>` : ''}</td>`).join('')}</tr>
+        <tr>${boxes.map((b) => `<td class="sign">${b.staff_id ? `<div class="who">${esc(who(b.staff_id))}</div>` : ''}</td>`).join('')}</tr>
       </table>
       <table class="prt">
         <colgroup><col style="width:24mm"><col><col style="width:22mm"><col style="width:40mm"></colgroup>
@@ -205,7 +205,7 @@
       <colgroup><col style="width:52mm"><col><col style="width:24mm"><col style="width:26mm"></colgroup>
       <thead><tr><th>한계기준 이탈내용</th><th>개선조치 및 결과</th><th>조 치 자</th><th>확 인</th></tr></thead>
       <tbody>${rows.map((d) => (d ? `<tr><td class="l">${esc(d.description)}</td><td class="l">${esc(d.action_result)}</td>
-        <td>${esc(who(d.actor_id))}</td><td>${d.checked_by ? `${esc(who(d.checked_by))}<div class="sm">${esc(mmdd(d.checked_on))}</div>` : ''}</td></tr>`
+        <td>${esc(who(d.actor_id))}</td><td>${d.checked_by ? esc(who(d.checked_by)) : ''}</td></tr>`
         : '<tr><td></td><td></td><td></td><td></td></tr>')).join('')}</tbody></table>`;
   }
 
@@ -327,7 +327,7 @@
       <tbody>${rows.map((d) => (d ? `<tr><td>${esc(slash(d.work_date))}</td>
         <td class="l">${items[d.document_id] ? `[${esc(items[d.document_id])}] ` : ''}${esc(d.description)}</td>
         <td class="l">${esc(d.action_result)}</td>
-        <td>${d.checked_by ? `${esc(who(d.checked_by))} <span class="sm">${esc(mmdd(d.checked_on))}</span>` : ''}</td></tr>`
+        <td>${d.checked_by ? esc(who(d.checked_by)) : ''}</td></tr>`
         : '<tr><td>/</td><td></td><td></td><td></td></tr>')).join('')}</tbody></table>`;
   }
 
@@ -438,7 +438,7 @@
         <td class="l"><span class="day">[${esc(weekday[d.work_date] || '')} ${esc(slash(d.work_date))}]</span> ${esc(d.description)}</td>
         <td class="l">${esc(d.action_result)}</td>
         <td>${d.actor_id ? signD03(d.actor_id) : ''}</td>
-        <td>${d.checked_by ? `${signD03(d.checked_by)}<div class="sm">${esc(mmdd(d.checked_on))}</div>` : ''}</td></tr>`
+        <td>${d.checked_by ? signD03(d.checked_by) : ''}</td></tr>`
         : '<tr><td></td><td></td><td></td><td></td></tr>')).join('')}</tbody></table>`;
   }
 
