@@ -29,10 +29,7 @@ from apps.documents import flows as doc_flows
 from apps.documents import services as doc
 from apps.documents.signals import document_transitioned
 
-SLOTS = [
-    {"slot_no": 1, "label": "담당", "approver_id": 3},
-    {"slot_no": 2, "label": "HACCP팀장", "approver_id": 1},
-]
+# P14: 결재선은 역할 설정(roles.json) — 칸 1 담당자(staff 3), 칸 2 HACCP팀장(staff 1)
 PASS = {"appearance": "양호", "packaging": "양호", "labeling": "양호", "verdict": "PASS"}
 FAIL = {**PASS, "packaging": "불량", "verdict": "FAIL"}
 
@@ -96,7 +93,7 @@ class EffTestCase(TestCase):
 
     def submit(self, document_id):
         version = self.detail(document_id)["version"]
-        return wf.submit(3, document_id, version, [dict(s) for s in SLOTS])["request"]
+        return wf.submit(3, document_id, version)["request"]
 
     def approve(self, document_id):
         ids = {s["slot_no"]: s["approval_id"] for s in self.submit(document_id)["slots"]}
@@ -562,7 +559,7 @@ class FlowMatchTests(TestCase):
     """S4b 검토 B1: 신호 안의 단계만 건너뛰고, 그 밖에 끼어든 다른 묶음 단계는 불일치."""
 
     def test_signal_window_only(self):
-        base = ["DOC-CMP-01", "DOC-CMP-02", "DOC-CMP-03", "DOC-SIG-01"]
+        base = ["DOC-CMP-01", "DOC-WRT-01", "DOC-WRT-02", "DOC-CMP-02", "DOC-CMP-03", "DOC-SIG-01"]
         nested = ["EFF-JDG-01", "EFF-JDG-02", "DOC-GET-01", "DOC-GET-02", "EFF-JDG-04"]
         self.assertTrue(doc_flows.matches("DOC-CMP", [*base, *nested, "DOC-CMP-04"]))
         self.assertFalse(

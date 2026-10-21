@@ -10,3 +10,6 @@ DATABASES = {
         "OPTIONS": {"transaction_mode": "IMMEDIATE"},
     }
 }
+
+# P14: 테스트마다 직원·설정이 바뀌므로 역할 설정을 호출마다 다시 읽는다
+HACCP_ROLES_RELOAD = True

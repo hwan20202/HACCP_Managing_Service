@@ -22,7 +22,6 @@ from apps.document_workflow.tests.base import (
     new_document,
     setup_reference_data,
     slot_ids,
-    slots,
 )
 from apps.documents import errors as doc_errors
 from apps.documents import services as doc
@@ -87,7 +86,7 @@ class WfConcurrencyTests(TransactionTestCase):
         return results
 
     def submitted(self):
-        out = services.submit(3, new_document(self.t), 2, slots())  # v2 = 작성완료
+        out = services.submit(3, new_document(self.t), 2)  # v2 = 작성완료
         return out["document"]["document_id"], slot_ids(out["request"])
 
     def count_mark(self):
@@ -119,7 +118,7 @@ class WfConcurrencyTests(TransactionTestCase):
         document_id = new_document(self.t)
         self.pause_after(doc, "get_document")  # 잠금(첫 쓰기) 직후 멈춤
         r = self.race(
-            lambda: services.submit(3, document_id, 2, slots()),
+            lambda: services.submit(3, document_id, 2),
             lambda: doc.reopen_document(3, document_id, 2),
         )
         self.assertEqual(r["first"][0], "ok", r)
@@ -129,7 +128,7 @@ class WfConcurrencyTests(TransactionTestCase):
         document_id = new_document(self.t)
         r = self.race(
             self.hold(lambda: doc.reopen_document(3, document_id, 2)),
-            lambda: services.submit(3, document_id, 2, slots()),
+            lambda: services.submit(3, document_id, 2),
         )
         self.assertEqual(r["first"][0], "ok", r)
         self.assertIsInstance(r["second"][1], doc_errors.DocumentLocked)  # 404 → 상태 → 버전
@@ -152,26 +151,40 @@ class WfConcurrencyTests(TransactionTestCase):
         """마지막 칸: 먼저 처리가 회차를 끝내므로 APR 판정 순서상 RequestClosed가 먼저다."""
         document_id, ids = self.submitted()
         services.decide(3, ids[1], "approved")
-        services.decide(2, ids[2], "approved")
         self.count_mark()
         self.pause_after(apr, "decide")
         r = self.race(
-            lambda: services.decide(1, ids[3], "approved"),
-            lambda: services.decide(1, ids[3], "approved"),
+            lambda: services.decide(5, ids[2], "approved"),
+            lambda: services.decide(5, ids[2], "approved"),
         )
         self.assertEqual(r["first"][1]["request_status"], "approved", r)
         self.assertIsInstance(r["second"][1], apr_errors.RequestClosed)
         self.assertEqual(self.calls["mark_approved"], 1)
         self.assertEqual(doc.get_document(document_id)["status"], "approved")
 
+    def test_role_tc20_two_candidates_same_slot(self):
+        """ROLE-TC-20: 같은 역할 칸을 두 후보(3·1)가 동시 승인 → 한 명만.
+
+        결재자 = 먼저 처리한 사람, 둘째는 409 ALREADY_DECIDED.
+        """
+        document_id, ids = self.submitted()
+        self.pause_after(apr, "decide")
+        r = self.race(
+            lambda: services.decide(3, ids[1], "approved"),
+            lambda: services.decide(1, ids[1], "approved"),
+        )
+        self.assertEqual(r["first"][1]["request_status"], "in_progress", r)
+        self.assertIsInstance(r["second"][1], apr_errors.AlreadyDecided)
+        slot = apr.list_requests(document_id)["items"][0]["slots"][0]
+        self.assertEqual((slot["approver_id"], slot["state"]), (3, "approved"))
+
     def test_tc022_last_two_approvals(self):
         document_id, ids = self.submitted()
-        services.decide(3, ids[1], "approved")
         self.count_mark()
         self.pause_after(apr, "decide")
         r = self.race(
-            lambda: services.decide(2, ids[2], "approved"),
-            lambda: services.decide(1, ids[3], "approved"),
+            lambda: services.decide(3, ids[1], "approved"),
+            lambda: services.decide(5, ids[2], "approved"),
         )
         self.assertEqual(r["first"][1]["request_status"], "in_progress", r)
         self.assertEqual(r["second"][1]["request_status"], "approved", r)
@@ -182,8 +195,8 @@ class WfConcurrencyTests(TransactionTestCase):
         document_id, ids = self.submitted()
         self.pause_after(apr, "decide")
         r = self.race(
-            lambda: services.decide(2, ids[2], "rejected", "누락"),
-            lambda: services.decide(1, ids[3], "approved"),
+            lambda: services.decide(5, ids[2], "rejected", "누락"),
+            lambda: services.decide(3, ids[1], "approved"),
         )
         self.assertEqual(r["first"][1]["request_status"], "rejected", r)
         self.assertIsInstance(r["second"][1], apr_errors.RequestClosed)
@@ -193,8 +206,8 @@ class WfConcurrencyTests(TransactionTestCase):
         document_id = new_document(self.t)
         self.pause_after(doc, "get_document")
         r = self.race(
-            lambda: services.submit(3, document_id, 2, slots()),
-            lambda: services.submit(2, document_id, 2, slots()),
+            lambda: services.submit(3, document_id, 2),
+            lambda: services.submit(1, document_id, 2),  # 1 = 담당자이면서 팀장
         )
         self.assertEqual(r["first"][0], "ok", r)
         self.assertIsInstance(r["second"][1], doc_errors.DocumentLocked)

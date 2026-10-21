@@ -46,7 +46,7 @@ def batch_documents(request, batch_id):
 @require_http_methods(["GET"])
 @_api
 def incoming_inspections(request):
-    """REQ-A03: 입고일 묶음 조회 ?received_date=YYYY-MM-DD (X-Staff-Id 필수)."""
+    """REQ-A03: 입고일 묶음 조회 ?received_date=YYYY-MM-DD (X-Staff-Id 선택 — r14 D-202 Q7 b)."""
     with step("REQ-BDL-01", "API", "날짜 형식·현재 사용자"):
         raw = request.GET.get("received_date") or ""
         try:
@@ -64,14 +64,14 @@ def incoming_inspections(request):
                     }
                 ]
             ) from None
-        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+        actor = optional_actor_from_header(request.headers.get("X-Staff-Id"))
     return json_response(services.incoming_bundle(actor, day))
 
 
 @require_http_methods(["GET"])
 @_api
 def periodic_bundles(request):
-    """REQ-A04: 주 묶음 조회 ?type_code=D10&week_start=YYYY-MM-DD(월요일) (X-Staff-Id 필수)."""
+    """REQ-A04: 주 묶음 조회 ?type_code=D10&week_start=YYYY-MM-DD(월) (X-Staff-Id 선택, r14)."""
     with step("REQ-PWB-01", "API", "형식·현재 사용자"):
         raw = request.GET.get("week_start") or ""
         try:
@@ -88,7 +88,7 @@ def periodic_bundles(request):
                     }
                 ]
             )
-        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+        actor = optional_actor_from_header(request.headers.get("X-Staff-Id"))
     return json_response(services.periodic_bundle(actor, request.GET.get("type_code") or "", day))
 
 

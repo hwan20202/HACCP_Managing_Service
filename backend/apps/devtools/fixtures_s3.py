@@ -38,7 +38,7 @@ from apps.documents import services as doc
 from apps.documents.models import Document
 
 from . import inventory_dev
-from .fixtures import ACTOR, SLOTS, _bad, _new_lot, _version
+from .fixtures import ACTOR, _bad, _new_lot, _version
 
 PERIODIC_TYPES = ("D10", "D12", "D11")
 PERIODIC_STATES = (
@@ -80,7 +80,7 @@ def _day(raw, name):
 
 
 def _submit(document_id):
-    out = wf.submit(ACTOR, document_id, _version(document_id), [dict(s) for s in SLOTS])
+    out = wf.submit(ACTOR, document_id, _version(document_id))  # P14: 결재선은 역할 설정
     return {s["slot_no"]: s["approval_id"] for s in out["request"]["slots"]}
 
 

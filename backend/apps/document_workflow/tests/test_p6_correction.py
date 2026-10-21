@@ -21,7 +21,6 @@ from apps.document_workflow.tests.base import (
     new_document,
     setup_reference_data,
     slot_ids,
-    slots,
     sql,
     version_of,
 )
@@ -59,11 +58,11 @@ class P6TestCase(TestCase):
 
     # ---- 준비 도우미 (DOC·WF 공개 함수만)
     def submit(self, document_id):
-        return services.submit(3, document_id, version_of(document_id), slots())["request"]
+        return services.submit(3, document_id, version_of(document_id))["request"]
 
     def approve(self, request):
         ids = slot_ids(request)
-        for slot_no, actor in ((1, 3), (2, 2), (3, 1)):
+        for slot_no, actor in ((1, 3), (2, 5)):
             services.decide(actor, ids[slot_no], "approved")
 
     def reject(self, request, reason="온도 누락"):
@@ -330,34 +329,34 @@ class AprCorrectionViewTests(P6TestCase):
 
     def test_tc021_inbox(self):
         document_id = CorrectionLifecycleTests.build_tc016(self)
-        pending_doc, _ = self.f2()  # staff 2 대기 칸(정정 상신)
-        pending = apr.list_inbox(2, "pending")["items"]
+        pending_doc, _ = self.f2()  # staff 5(팀장) 대기 칸(정정 상신)
+        pending = apr.list_inbox(5, "pending")["items"]
         row = next(i for i in pending if i["request"]["document_id"] == pending_doc)
         self.assertEqual(
             (row["request"]["is_correction"], row["request"]["correction_reason"]), (True, REASON)
         )
         # 처리 완료 탭을 1건씩 나눠 1회차와 그것을 대체한 회차가 다른 페이지에 있게 한다
         with mock.patch.object(apr_services, "PAGE_SIZE", 1):
-            first = apr.list_inbox(2, "done", page=1)
+            first = apr.list_inbox(5, "done", page=1)
             seen = {}
             for page in range(1, first["total"] + 1):
-                for item in apr.list_inbox(2, "done", page=page)["items"]:
+                for item in apr.list_inbox(5, "done", page=page)["items"]:
                     req = item["request"]
                     if req["document_id"] == document_id:
                         seen[req["attempt"]] = req["superseded"]
-        # staff 2는 회차 1·3·4를 승인(2는 staff 3이 반려해 staff 2 칸은 skipped)
+        # staff 5는 회차 1·3·4를 승인(2는 staff 3이 반려해 팀장 칸은 skipped)
         self.assertEqual(seen, {1: True, 3: True, 4: False})
 
     def test_tc022_sql_counts(self):
         document_id = CorrectionLifecycleTests.build_tc016(self)
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):  # P14: + 결재 후보 1(역할 칸)
             apr.list_requests(document_id)
         with self.assertNumQueries(3):
-            apr.list_inbox(2, "done")
+            apr.list_inbox(5, "done")
         requests = {r["attempt"]: r["request_id"] for r in apr.list_requests(document_id)["items"]}
-        with self.assertNumQueries(3):  # 승인 회차: + 다음 승인 회차 1개
+        with self.assertNumQueries(4):  # 승인 회차: + 다음 승인 회차 1개, + 후보 1
             apr.get_request(requests[1])
-        with self.assertNumQueries(2):  # 반려 회차는 그대로
+        with self.assertNumQueries(3):  # 반려 회차: + 후보 1
             apr.get_request(requests[2])
 
 
@@ -402,12 +401,11 @@ class DocCorrectionViewTests(P6TestCase):
         document_id, request = self.f2()
         ids = slot_ids(request)
         services.decide(3, ids[1], "approved")
-        services.decide(2, ids[2], "approved")
         # 어긋난 데이터: 회차는 진행 중인데 문서를 completed로(WF-TC-015와 같은 방법, 끝에서 되돌림)
         sql("UPDATE document SET status='completed' WHERE document_id=%s", [document_id])
         before = (db_state(document_id), corrections(document_id))
         with self.assertRaises(doc_errors.InvalidTransition):
-            services.decide(1, ids[3], "approved")
+            services.decide(5, ids[2], "approved")
         self.assertEqual((db_state(document_id), corrections(document_id)), before)
         self.assertEqual(corrections(document_id)[0][4:], (0, None))  # 정정 열림 그대로
         sql("UPDATE document SET status='submitted' WHERE document_id=%s", [document_id])
@@ -444,8 +442,7 @@ class CorrectionTraceTests(P6TestCase):
         document_id, request = self.f2()
         ids = slot_ids(request)
         services.decide(3, ids[1], "approved")
-        services.decide(2, ids[2], "approved")
-        _, steps = self.traced(lambda: services.decide(1, ids[3], "approved"))
+        _, steps = self.traced(lambda: services.decide(5, ids[2], "approved"))
         apv = next(s for s in steps if s.step_id == "DOC-APV-01")
         self.assertEqual(len(apv.sql), 2)
         self.assertIn("document_correction", apv.sql[1]["sql"])

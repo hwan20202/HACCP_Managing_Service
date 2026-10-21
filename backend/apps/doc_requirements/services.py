@@ -12,6 +12,7 @@ from django.utils import timezone
 from apps.approvals import services as apr
 from apps.core.trace import step
 from apps.documents import services as doc
+from apps.staff import roles
 from apps.staff import services as staff_services
 
 from . import ccp, errors, rules, sources
@@ -377,7 +378,37 @@ def docs_for_batch(batch_id):
 # ---------------------------------------------------------------- F05 incoming_bundle (P7)
 
 
-def _bundle_document(brief, approved, progress):
+def _submit_check(actor_id, type_code, status, line):
+    """P14 묶음 문서별 상신 가능 여부(D-190 S1-Q7). 반환 (can_submit, submit_block)."""
+    if line["reason"] == "config_invalid":
+        return False, "config_invalid"
+    if not roles.can_submit(actor_id, type_code):  # ROLE-R01: 담당자·작성 권한자·팀장(D-198)
+        return False, "role_required"
+    if not line["ok"]:
+        return False, line["reason"]
+    if status not in doc.SUBMITTABLE:
+        return False, "status"
+    return True, None
+
+
+def _my_slots(progress):
+    return [] if progress is None else progress["my_slots"]
+
+
+def _write_check(actor_id, type_code, brief):
+    """P14 r13 묶음 문서별 작성 가능(ROLE-R07, 상태 무관 — 점검자는 문서마다 다름)."""
+    return roles.can_write(actor_id, type_code, brief["inspector_id"])
+
+
+def _bundle_permissions(actor_id, type_code):
+    """P14 r13 묶음 권한(묶음은 한 양식): 점검자 지정(ROLE-R08)."""
+    return {
+        "assign_inspector": type_code in doc.INSPECTOR_TYPES
+        and roles.can_assign_inspector(actor_id, type_code)
+    }
+
+
+def _bundle_document(brief, approved, progress, submit=(False, None), can_write=False):
     """LOT 줄의 문서 값(p7-s2-spec 3.4). 승인본 판정은 F03과 같은 규칙(_approved_verdict)."""
     return {
         "document_id": brief["document_id"],
@@ -397,10 +428,14 @@ def _bundle_document(brief, approved, progress):
             k: progress[k]
             for k in ("request_id", "attempt", "status", "total", "approved", "pending")
         },
-        "my_slot": None if progress is None else progress["my_slot"],
+        "my_slots": _my_slots(progress),  # P14: 내 칸이 2개일 수 있음(D-183)
+        "can_submit": submit[0],
+        "submit_block": submit[1],
+        "can_write": can_write,  # r13 ROLE-R07
     }
 
 
+@roles.scope()
 def incoming_bundle(actor_id, received_date):
     """F05: 입고일 묶음 조회(REQ-BDL). 그날 입고 LOT 전부 + LOT별 D03 + 판정·결재 진행·내 칸.
 
@@ -428,12 +463,13 @@ def incoming_bundle(actor_id, received_date):
         if not document_ids:
             s.skip("문서 없음")
     with step("REQ-BDL-06", "REQ", "결재 진행·내 칸(APR A10)") as s:
-        progress = {"documents": {}, "latest_slots": []}
+        progress = {"documents": {}}
         if document_ids:
             progress = apr.document_progress(document_ids, actor_id)
         else:
             s.skip("문서 없음")
     with step("REQ-BDL-07", "REQ", "조립"):
+        line = roles.approval_line(rules.D03)  # P14: 묶음 결재선 요약(일괄 상신 모달)
         rows, status_counts, correcting, mine = [], {}, 0, 0
         for lot in lots:
             brief = briefs.get(by_lot.get(lot["lot_id"]))
@@ -443,10 +479,12 @@ def incoming_bundle(actor_id, received_date):
                     brief,
                     latest.get(brief["document_id"]),
                     progress["documents"].get(brief["document_id"]),
+                    _submit_check(actor_id, rules.D03, brief["status"], line),
+                    _write_check(actor_id, rules.D03, brief),
                 )
                 status_counts[brief["status"]] = status_counts.get(brief["status"], 0) + 1
                 correcting += brief["correcting"]
-                mine += document["my_slot"] is not None
+                mine += bool(document["my_slots"])
             rows.append(
                 {
                     "lot_id": lot["lot_id"],
@@ -468,14 +506,15 @@ def incoming_bundle(actor_id, received_date):
                 "correcting_count": correcting,
                 "my_pending": mine,
             },
-            "default_slots": progress["latest_slots"],
+            "approval_line": line,
+            "permissions": _bundle_permissions(actor_id, rules.D03),  # r13 ROLE-R08
         }
 
 
 # ---------------------------------------------------------------- P8 REQ-F06 주 묶음 조회
 
 
-def _week_document(brief, progress):
+def _week_document(brief, progress, submit=(False, None), can_write=False):
     """하루 칸의 문서 값(P7 _bundle_document와 같은 조립 — 승인본 판정 대신 점검 결과 수)."""
     return {
         "document_id": brief["document_id"],
@@ -491,10 +530,14 @@ def _week_document(brief, progress):
             k: progress[k]
             for k in ("request_id", "attempt", "status", "total", "approved", "pending")
         },
-        "my_slot": None if progress is None else progress["my_slot"],
+        "my_slots": _my_slots(progress),  # P14: 내 칸이 2개일 수 있음(D-183)
+        "can_submit": submit[0],
+        "submit_block": submit[1],
+        "can_write": can_write,  # r13 ROLE-R07
     }
 
 
+@roles.scope()
 def periodic_bundle(actor_id, type_code, week_start):
     """F06: 주 묶음 조회(REQ-PWB). 그 주 월~금 하루 문서(없는 날 null) + 요약·결재 진행·내 칸.
 
@@ -531,22 +574,28 @@ def periodic_bundle(actor_id, type_code, week_start):
         else:
             s.skip("문서 없음")
     with step("REQ-PWB-05", "REQ", "결재 진행·내 칸(APR A10)") as s:
-        progress = {"documents": {}, "latest_slots": []}
+        progress = {"documents": {}}
         if document_ids:
             progress = apr.document_progress(document_ids, actor_id)
         else:
             s.skip("문서 없음")
     with step("REQ-PWB-06", "REQ", "조립"):
+        line = roles.approval_line(type_code)  # P14: 묶음 결재선 요약(일괄 상신 모달)
         cells, weekend, status_counts, correcting, mine = [], [], {}, 0, 0
         for day in days:
             key = day.isoformat()
             brief = briefs.get(by_day.get(key))
             document = None
             if brief is not None:
-                document = _week_document(brief, progress["documents"].get(brief["document_id"]))
+                document = _week_document(
+                    brief,
+                    progress["documents"].get(brief["document_id"]),
+                    _submit_check(actor_id, type_code, brief["status"], line),
+                    _write_check(actor_id, type_code, brief),
+                )
                 status_counts[brief["status"]] = status_counts.get(brief["status"], 0) + 1
                 correcting += brief["correcting"]
-                mine += document["my_slot"] is not None
+                mine += bool(document["my_slots"])
             cell = {"work_date": key, "weekday": day.isoweekday(), "document": document}
             if day.isoweekday() <= 5:
                 cells.append(cell)
@@ -564,5 +613,6 @@ def periodic_bundle(actor_id, type_code, week_start):
                 "correcting_count": correcting,
                 "my_pending": mine,
             },
-            "default_slots": progress["latest_slots"],
+            "approval_line": line,
+            "permissions": _bundle_permissions(actor_id, type_code),  # r13 ROLE-R08
         }

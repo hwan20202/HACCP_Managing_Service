@@ -43,7 +43,9 @@ class ApiTestCase(TestCase):
 class ReadApiTests(ApiTestCase):
     def test_tc002_staff(self):
         response = self.client.get("/api/v1/staff")
-        self.assertEqual(response.json(), {"items": [1, 2, 3, 4, 5]})
+        items = response.json()["items"]  # P14: 이름 표시용 {id, staff_code, name}
+        self.assertEqual([i["id"] for i in items], [1, 2, 3, 4, 5])
+        self.assertEqual(set(items[0]), {"id", "staff_code", "name"})
 
     def test_tc004_templates(self):
         self.assertEqual(len(self.client.get("/api/v1/templates").json()["items"]), 2)

@@ -21,7 +21,7 @@ from apps.staff.services import actor_from_header, optional_actor_from_header
 
 from . import errors, files, services
 
-CREATE_KEYS = ("template_id", "subject", "work_date", "assignee_id", "due_at", "sections")
+CREATE_KEYS = ("template_id", "subject", "work_date", "due_at", "sections")  # P14: assignee_id 없앰
 PATCH_KEYS = ("expected_version", "document", "sections")
 PATCH_SECTION_KEYS = ("add", "update", "delete")
 
@@ -48,7 +48,22 @@ def _actor(request, step_id):
 @require_http_methods(["GET"])
 @_api
 def staff_list(request):
-    return json_response({"items": services.list_staff()})
+    # P14 S5 r1(Q1 b): ?include_inactive=1이면 비활성 포함 + is_active(명세 10.2)
+    value = request.GET.get("include_inactive")
+    if value not in (None, "", "0", "1"):
+        raise ApiError(
+            "조회 조건을 확인하세요.",
+            [{"path": "include_inactive", "code": "invalid", "message": "0 또는 1"}],
+        )
+    return json_response({"items": services.list_staff(include_inactive=value == "1")})
+
+
+@require_http_methods(["GET"])
+@_api
+def roles_view(request):
+    """P14 ROLE-A01 역할 보기(읽기 전용, 헤더 선택 — 있으면 me)."""
+    actor = optional_actor_from_header(request.headers.get("X-Staff-Id"))
+    return json_response(services.roles_summary(actor))
 
 
 @require_http_methods(["GET"])
@@ -77,7 +92,7 @@ def document_collection(request):
                 "template_id",
                 "status",
                 "author_id",
-                "assignee_id",
+                "owner_id",
                 "target",
                 "correcting",
             )
@@ -121,7 +136,9 @@ def _check_patch_shape(body):
 @_api
 def document_item(request, document_id):
     if request.method == "GET":
-        return json_response(services.get_document(document_id))
+        actor = optional_actor_from_header(request.headers.get("X-Staff-Id"))
+        document = services.get_document(document_id)
+        return json_response({**document, **services.document_roles(document, actor)})
 
     if request.method == "PATCH":
         with step("DOC-UPD-01", "API", "요청 형식 확인"):

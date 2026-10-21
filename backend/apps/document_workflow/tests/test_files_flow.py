@@ -12,8 +12,6 @@ from apps.document_workflow import services
 from apps.document_workflow.tests.base import (
     invariant_violations,
     setup_reference_data,
-    slot_ids,
-    slots,
     version_of,
 )
 from apps.documents.tests.p4 import goc, lot_ref, setup_p4
@@ -58,13 +56,14 @@ class FileWorkflowTests(MediaMixin, TestCase):
     def approve(self, document_id):
         submitted = self.post(
             f"documents/{document_id}/submit",
-            {"expected_version": version_of(document_id), "slots": slots()},
+            {"expected_version": version_of(document_id)},
         )
         self.assertEqual(submitted.status_code, 201, submitted.content)
         request = submitted.json()["request"]
-        ids = slot_ids(request)
-        for slot_no, actor in ((1, 3), (2, 2), (3, 1)):
-            services.decide(actor, ids[slot_no], "approved")
+        # P14: 칸 구성은 양식마다(D01·D02 = 담당자 1칸, CCP = 담당자 → 팀장) — 담당자 3, 팀장 5
+        for slot in request["slots"]:
+            actor = 3 if slot["role"] == "owner" else 5
+            services.decide(actor, slot["approval_id"], "approved")
         return request["request_id"]
 
     def test_ftc09_lot_documents_complete_submit_approve(self):

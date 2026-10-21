@@ -188,16 +188,16 @@ class BatchInspectorTests(P7DocCase):
             doc.batch_set_inspector(3, items, 4)
         finally:
             trace.stop(token)
-        steps = [s.step_id for s in record.steps]
+        steps = [s.step_id for s in record.steps if not s.step_id.startswith("ROLE-CFG")]
         self.assertEqual(
             steps,
             ["DOC-BIN-02", "DOC-BIN-03"]
-            + ["DOC-BIN-04", "DOC-BIN-05", "DOC-BIN-06"]
-            + ["DOC-BIN-04", "DOC-BIN-05", "DOC-BIN-05a", "DOC-BIN-07"],
+            + ["DOC-BIN-04", "DOC-WRT-03", "DOC-BIN-05", "DOC-BIN-06"]  # P14 r13: R08 문서마다
+            + ["DOC-BIN-04", "DOC-WRT-03", "DOC-BIN-05", "DOC-BIN-05a", "DOC-BIN-07"],
         )
         same_step = [s for s in record.steps if s.step_id == "DOC-BIN-05a"][0]
         self.assertEqual(same_step.result, "pass")  # 같은 값 = 성공
-        self.assertTrue(doc_flows.matches("DOC-BIN", ["DOC-BIN-01", *steps[:5], "DOC-BIN-07"]))
+        self.assertTrue(doc_flows.matches("DOC-BIN", ["DOC-BIN-01", *steps[:6], "DOC-BIN-07"]))
 
 
 # ---------------------------------------------------------------- 7.5 조회
@@ -435,19 +435,15 @@ class AprP7Tests(P7DocCase):
         self.assertEqual(refs[ids[0]]["template_id"], d03_v2)
 
     def test_tc097_094_document_progress(self):
-        partial = d03("submitted_partial")  # 1/2, 내(staff 1) 칸 대기
+        partial = d03("submitted_partial")  # 1/2, 내(staff 1 = 팀장) 칸 대기
         two = d03("rejected")  # 1회차 반려 → 작성완료 → 2회차
         doc.complete_document(3, two["document_id"], version_of(two["document_id"]))
-        second = [
-            {"slot_no": 1, "label": "검토", "approver_id": 2},
-            {"slot_no": 2, "label": "승인", "approver_id": 1},
-        ]
-        wf.submit(3, two["document_id"], version_of(two["document_id"]), second)
+        wf.submit(3, two["document_id"], version_of(two["document_id"]))
         nothing = d03("completed")
         ids = [partial["document_id"], two["document_id"], nothing["document_id"]]
         with CaptureQueriesContext(connection) as ctx:
             out = apr.document_progress(ids, 1)
-        self.assertEqual(len(ctx.captured_queries), 2)
+        self.assertEqual(len(ctx.captured_queries), 1)  # P14: 최근 결재선(02) 없앰
         docs = out["documents"]
         self.assertNotIn(nothing["document_id"], docs)
         self.assertEqual(
@@ -459,28 +455,25 @@ class AprP7Tests(P7DocCase):
                 "total": 2,
                 "approved": 1,
                 "pending": 1,
-                "my_slot": {"approval_id": partial["slots"][2], "slot_no": 2, "label": "HACCP팀장"},
+                "my_slots": [
+                    {"approval_id": partial["slots"][2], "slot_no": 2, "label": "HACCP팀장"}
+                ],
             },
         )
         self.assertEqual(docs[two["document_id"]]["attempt"], 2)
+        self.assertNotIn("latest_slots", out)  # P14: 일괄 상신 결재선 기본값 없앰(D-109)
+        # 094: 내 칸은 이미 승인(다른 칸 대기) → my_slots 없음
         self.assertEqual(
-            out["latest_slots"],
-            [
-                {"slot_no": s["slot_no"], "label": s["label"], "approver_id": s["approver_id"]}
-                for s in second
-            ],
-        )
-        # 094: 내 칸은 이미 승인(다른 칸 대기) → my_slot 없음
-        self.assertIsNone(
             apr.document_progress([partial["document_id"]], 3)["documents"][partial["document_id"]][
-                "my_slot"
-            ]
+                "my_slots"
+            ],
+            [],
         )
 
     def test_tc109_empty(self):
         with CaptureQueriesContext(connection) as ctx:
             self.assertEqual(apr.slot_refs([]), {})
-            self.assertEqual(apr.document_progress([], 1), {"documents": {}, "latest_slots": []})
+            self.assertEqual(apr.document_progress([], 1), {"documents": {}})
         self.assertEqual(len(ctx.captured_queries), 0)
 
     def test_tc110_check_decision_input(self):

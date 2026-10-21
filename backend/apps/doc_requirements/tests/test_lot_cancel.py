@@ -14,9 +14,10 @@ from apps.document_workflow.tests.base import invariant_violations
 from apps.documents import services as doc
 from apps.documents.models import Document, DocumentCorrection
 from apps.staff.services import InvalidStaff
+from apps.staff.tests.base import RolesFileMixin, default_roles
 
 from .base import DAY, by_type, detail, in_tx, set_status, setup_req
-from .test_services import SLOTS, approve_d03, lot
+from .test_services import approve_d03, lot
 
 
 def cancel_receipt(lot_id):
@@ -37,12 +38,30 @@ def delete(lot_id, actor=3):
 def submit(document_id):
     set_status(document_id, "completed")
     with transaction.atomic():
-        return wf.submit(3, document_id, detail(document_id)["version"], [dict(s) for s in SLOTS])
+        return wf.submit(3, document_id, detail(document_id)["version"])  # P14: 결재선은 역할 설정
 
 
-class LotCancelTestCase(TestCase):
+def use_two_slots(case):
+    """P14: 이 시험은 입고 서류(D01·D02)에 2칸 회차가 필요하다 — 개발 설정은 담당자 1칸이라
+    owner_leader(1번 담당자 2·3, 2번 HACCP팀장 1·5)로 바꿔 끼운다(예전 직접 지정 칸 3·1과 같은
+    사람)."""
+    from apps.staff.models import Staff
+
+    data = default_roles()
+    # 실제 수불 시드(seed_master --sample)는 직원 코드가 DEV-nnn이 아니다
+    # — 같은 id(1·2·3·5)의 지금 코드로
+    code = dict(Staff.objects.filter(pk__in=(1, 2, 3, 5)).values_list("pk", "staff_code"))
+    data["haccp_leaders"] = [code[i] for i in (1, 5) if i in code]
+    for type_code in ("D01", "D02", "D03"):
+        data["forms"][type_code]["owners"] = [code[i] for i in (2, 3) if i in code]
+        data["forms"][type_code]["slots"] = "owner_leader"
+    case.use_roles(data)
+
+
+class LotCancelTestCase(RolesFileMixin, TestCase):
     def setUp(self):
         setup_req()
+        use_two_slots(self)  # 직원이 만들어진 뒤
 
     def tearDown(self):
         self.assertEqual(invariant_violations(), [])
@@ -332,7 +351,7 @@ class DevLotListTests(LotCancelTestCase):
         self.assertEqual(len(rows[89]["documents"]), 3)
 
 
-class RealInventoryCancelTests(TestCase):
+class RealInventoryCancelTests(RolesFileMixin, TestCase):
     """실제 수불 입고·입고 취소 서비스와 문서 삭제 훅의 통합 동작."""
 
     @classmethod
@@ -349,6 +368,9 @@ class RealInventoryCancelTests(TestCase):
         cls.raw = Item.objects.get(item_code="1000001")
         cls.supplier = Supplier.objects.get(supplier_code="V001")
         cls.staff = Staff.objects.get(staff_code="S001")
+
+    def setUp(self):
+        use_two_slots(self)
 
     def receive(self, key):
         import datetime

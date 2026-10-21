@@ -33,6 +33,7 @@ from .services import (
     _lock_failure,
     _refs_by_document,
     _target_summary,
+    require_write,
 )
 
 FILE_EDITABLE = EDITABLE  # p4-s2-spec 3장 — P6 이후 {draft, rejected, correcting}
@@ -156,6 +157,7 @@ def attach_file(actor_id, document_id, expected_version, upload):
         except errors.FileRejected as error:
             s.fail(error.details[0]["reason"])
             raise
+    require_write(actor_id, document_id)  # ROLE-R07(r13) — 실제 파일을 쓰기 전에
     now = timezone.now()
     with step("DOC-FUP-03", "DOC", "실제 파일 쓰기(트랜잭션 밖)") as s:
         storage_path, sha256, size = _write(upload, now)
@@ -189,6 +191,7 @@ def attach_file(actor_id, document_id, expected_version, upload):
 
 def link_file(actor_id, document_id, expected_version, file_id):
     """F15 다른 문서의 기존 파일을 복사 없이 연결한다. 같은 유형 문서의 파일만(F-002 Q3)."""
+    require_write(actor_id, document_id)  # ROLE-R07(r13)
     now = timezone.now()
     with transaction.atomic():
         _lock(document_id, expected_version, "DOC-FLK-02", now)
@@ -233,6 +236,7 @@ def link_file(actor_id, document_id, expected_version, file_id):
 
 def detach_file(actor_id, document_id, expected_version, file_id):
     """F16 연결을 끊는다. 어디에도 연결되지 않고 보존 표시도 없으면 파일까지 지운다(DOC-FR-24)."""
+    require_write(actor_id, document_id)  # ROLE-R07(r13)
     now = timezone.now()
     with transaction.atomic():
         _lock(document_id, expected_version, "DOC-FDT-02", now)

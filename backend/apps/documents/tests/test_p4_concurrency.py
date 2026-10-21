@@ -100,7 +100,8 @@ class P4ConcurrencyTests(TransactionTestCase):
         ]
         results = self.run_threads(
             self.hold_after(
-                lambda: services.update_deviation(2, deviation_id, 1, {"action_result": "A"}),
+                # P14 r13: 먼저 고치는 사람 = CCP-1P 담당자 3(2는 역할 없음 → 403), 뒤 = 점검자 4
+                lambda: services.update_deviation(3, deviation_id, 1, {"action_result": "A"}),
                 "DOC-DVU-02",
             ),
             lambda _l, _r: services.update_deviation(4, deviation_id, 1, {"action_result": "B"}),

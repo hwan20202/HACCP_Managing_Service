@@ -40,10 +40,7 @@ from apps.documents import services as doc
 from . import inventory_dev
 
 ACTOR = 3
-SLOTS = [
-    {"slot_no": 1, "label": "담당", "approver_id": 3},
-    {"slot_no": 2, "label": "HACCP팀장", "approver_id": 1},
-]
+# P14: 결재선은 역할 설정(roles.json) — D03·CCP = 담당자 {1, 3} → HACCP팀장 {1, 5}
 STATES = (
     "draft",
     "completed",
@@ -128,7 +125,7 @@ def _fill(document_id, verdict, inspector=4):
 
 
 def _submit(document_id):
-    out = wf.submit(ACTOR, document_id, _version(document_id), [dict(s) for s in SLOTS])
+    out = wf.submit(ACTOR, document_id, _version(document_id))  # P14: 결재선은 역할 설정
     return {s["slot_no"]: s["approval_id"] for s in out["request"]["slots"]}
 
 
@@ -187,7 +184,10 @@ def build_d03(
         doc.update_document(
             ACTOR,
             document_id,
-            {"expected_version": _version(document_id), "document": {"assignee_id": 2}},
+            {
+                "expected_version": _version(document_id),
+                "document": {"subject": "콘솔 준비: 정정 수정"},
+            },
         )
     if state == "correcting":
         return lot_id, document_id

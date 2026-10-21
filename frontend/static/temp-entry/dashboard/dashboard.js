@@ -74,7 +74,10 @@
   }
   const reasonText = (r) => `${esc(r.label)} ${num(r.value)}${expectText(r.expect) ? ` <span class="te-hint">(${expectText(r.expect)})</span>` : ''}`;
 
-  const staffList = (ids) => (ids || []).map((id) => `staff ${id}`).join('·');
+  // P14(D-185): 사람은 "이름(코드)" — staff n 표시 없음
+  const staffList = (ids) => (ids || []).map((id) => T.person(id)).join('·');
+  // P14 R05(FR-13): 개선조치 확인 = 지정 확인자 또는 HACCP팀장(확인자 없는 것도) — 역할 설정 파일 오류면 팀장 예외 없음
+  const isCheckLeader = (id) => !!id && T.isLeader(id) && !(T.roles && T.roles.config_error);
 
   // ================================================= DSH-SC-02 개선조치 확인 창
   // row: {deviation_id, version, title, description, action_result, actor_id}. 결과 { ok } — 실패해도 토스트를 띄우고 부른 쪽이 다시 조회
@@ -83,7 +86,7 @@
       <div class="te-dsh-check">
         <p><b>${esc(row.title || '')}</b></p>
         <p>이탈: ${esc(row.description || '-')}</p>
-        <p>조치: ${esc(row.action_result || '-')}${row.actor_id ? ` · staff ${esc(row.actor_id)}` : ''}</p>
+        <p>조치: ${esc(row.action_result || '-')}${row.actor_id ? ` · ${esc(T.person(row.actor_id))}` : ''}</p>
         <p class="te-dsh-warn">확인하면 되돌릴 수 없습니다(확인 뒤 수정해도 확인 기록은 남습니다).</p>
       </div>`;
     const ok = await T.modal({
@@ -96,7 +99,7 @@
     const code = r.data && r.data.code;
     if (code === 'ALREADY_CHECKED') {
       const d = ((r.data.details || [])[0]) || {};
-      T.toast(`이미 확인되었습니다(staff ${d.checked_by ?? '?'}, ${String(d.checked_at || '').slice(11, 16)})`, 'error');
+      T.toast(`이미 확인되었습니다(${d.checked_by ? T.person(d.checked_by) : '?'}, ${String(d.checked_at || '').slice(11, 16)})`, 'error');
     } else if (code === 'VERSION_CONFLICT') T.toast('다른 사용자가 먼저 처리했습니다', 'error');
     else if (code === 'NOT_CHECKER') T.toast('확인자로 지정되지 않았습니다', 'error');
     else if (code === 'DEVIATION_NOT_FOUND') T.toast('삭제된 개선조치입니다', 'error');
@@ -438,16 +441,17 @@
           ? ((x.reasons || []).map(reasonText).join('<br>') || '-')
           : `<span class="te-hint">${x.section_id ? '관련 행 적합' : '행 지정 없음'}</span>`;
         const action = dv.state === 'none' ? '<span class="te-hint">–</span>'
-          : `<span title="${esc(dv.action_result || '')}">${esc(this.cut(dv.action_result || dv.description || '-', 40))}</span>${dv.actor_id ? ` <span class="te-hint">· staff ${esc(dv.actor_id)}</span>` : ''}`;
+          : `<span title="${esc(dv.action_result || '')}">${esc(this.cut(dv.action_result || dv.description || '-', 40))}</span>${dv.actor_id ? ` <span class="te-hint">· ${T.personHtml(dv.actor_id)}</span>` : ''}`;
         const state = {
           none: '<span class="te-judge-ng">⚠ 개선조치 없음</span>',
           pending: `<span class="te-dsh-warn">● 확인 대기</span> <span class="te-hint">${esc(staffList(dv.checker_ids))}</span>`,
-          checked: `<span class="te-judge-ok">확인됨</span> staff ${esc(dv.checked_by)} ${esc(String(dv.checked_at || '').slice(11, 16))}`,
-          no_checker: '<span class="te-hint">확인자 없음</span>',
+          checked: `<span class="te-judge-ok">확인됨</span> ${T.personHtml(dv.checked_by)} ${esc(String(dv.checked_at || '').slice(11, 16))}`,
+          no_checker: '<span class="te-hint">확인자 없음 — HACCP팀장이 확인</span>',
         }[dv.state] || esc(dv.state);
         const btns = [
-          dv.state === 'pending' && me && (dv.checker_ids || []).includes(me) ? `<button class="btn btn-primary btn-sm" data-area-check="${esc(b.label)}|${i}">확인</button>` : '',
-          dv.state === 'none' ? `<button class="btn btn-secondary btn-sm" data-dev-new="${x.section_id}" data-dev-doc="${x.document_id}">개선조치 쓰기</button>` : '',
+          (dv.state === 'pending' || dv.state === 'no_checker') && me && ((dv.checker_ids || []).includes(me) || isCheckLeader(me)) ? `<button class="btn btn-primary btn-sm" data-area-check="${esc(b.label)}|${i}">확인</button>` : '',
+          // P14 r13 R07: 개선조치 쓰기는 그 양식 담당자·작성 권한자·팀장(점검자는 문서 상세에서 — 여기서는 양식 역할로 흐리게만)
+          dv.state === 'none' ? `<button class="btn btn-secondary btn-sm" data-dev-new="${x.section_id}" data-dev-doc="${x.document_id}" ${!me || T.canWriteForm(me, x.type_code) ? '' : `title="${esc(T.WRITE_WHY)} 점검자로 지정된 문서는 문서 상세에서 쓸 수 있습니다." data-dev-noperm`}>개선조치 쓰기</button>` : '',
           dv.state !== 'none' ? `<button class="btn btn-secondary btn-sm" data-dev-open="${x.document_id}">열기</button>` : '',
         ].join(' ');
         return `<tr class="${dv.state === 'none' ? 'te-row-ng' : ''}" data-dev-state="${esc(dv.state)}" data-dev-kind="${x.kind}"><td class="te-nowrap">${at}</td><td>${esc(proc)}</td><td>${what}</td><td>${action}</td><td>${state}</td><td class="te-nowrap">${btns}</td></tr>`;
@@ -502,21 +506,22 @@
           <td>${esc(x.type_code)} ${esc(this.targetText(x))}</td>
           <td>${esc(x.description || '')}</td>
           <td title="${esc(x.action_result || '')}">${esc(this.cut(x.action_result || '-', 40))}</td>
-          <td>${x.actor_id ? `staff ${esc(x.actor_id)}` : '-'}</td>
+          <td>${x.actor_id ? T.personHtml(x.actor_id) : '-'}</td>
           <td>${x.checker_ids.length ? `확인자 ${esc(staffList(x.checker_ids))}` : '<span class="te-hint">확인자 없음</span>'}</td>
           <td class="te-nowrap te-hint">${esc(agoText(x.created_at))}</td>
-          <td class="te-nowrap">${list === 'rows' && x.can_check && api.staffId ? `<button class="btn btn-primary btn-sm" data-check="${i}">확인</button>` : '<span class="te-hint">–</span>'}
+          <td class="te-nowrap">${x.can_check && api.staffId ? `<button class="btn btn-primary btn-sm" data-check="${list}|${i}">확인</button>` : '<span class="te-hint">–</span>'}
             <button class="btn btn-secondary btn-sm" data-popen="${x.document_id}">열기</button></td></tr>`;
       const table = (list, key) => `<div class="te-table-wrap"><table class="data-table te-dsh-pending"><thead><tr><th>작업일</th><th>양식·대상</th><th>이탈내용</th><th>개선조치 및 결과</th><th>조치자</th><th>확인자</th><th>쓴 지</th><th></th></tr></thead>
           <tbody>${list.map((x, i) => line(x, i, key)).join('')}</tbody></table></div>`;
       const body = rows.length ? table(rows, 'rows') : '<p class="te-empty">확인할 개선조치가 없습니다.</p>';
       const noChecker = this.showNoChecker && p.no_checker.count
-        ? `<div class="te-dsh-nochecker"><div class="te-hint">확인자 없는 개선조치 — 확인 대상이 아닙니다. 문서 상세에서 확인자를 지정할 수 있습니다.</div>${table(p.no_checker.rows, 'no_checker')}</div>` : '';
+        ? `<div class="te-dsh-nochecker"><div class="te-hint">확인자 없는 개선조치 — HACCP팀장이 확인할 수 있습니다(P14 R05). 확인자는 새 개선조치를 저장할 때 그 양식 담당자 + HACCP팀장으로 자동 지정됩니다.</div>${table(p.no_checker.rows, 'no_checker')}</div>` : '';
       box.innerHTML = head + body + noChecker + this.otherDaysHtml(p);
       box.querySelector('#dshMine')?.addEventListener('change', (e) => { this.mineOnly = e.target.checked; this.renderPending(); });
       box.querySelector('#dshNoChecker')?.addEventListener('click', (e) => { e.preventDefault(); this.showNoChecker = !this.showNoChecker; this.renderPending(); });
       box.querySelectorAll('[data-check]').forEach((b) => b.addEventListener('click', async () => {
-        const x = rows[Number(b.dataset.check)];
+        const [list, i] = b.dataset.check.split('|');
+        const x = (list === 'no_checker' ? p.no_checker.rows : rows)[Number(i)];
         const result = await confirmCheck({
           deviation_id: x.deviation_id, version: x.version, title: `${x.type_code} ${this.targetText(x)} (${md(x.work_date)})`,
           description: x.description, action_result: x.action_result, actor_id: x.actor_id,

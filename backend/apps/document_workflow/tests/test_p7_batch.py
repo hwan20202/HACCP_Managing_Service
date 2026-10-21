@@ -24,7 +24,6 @@ from apps.document_workflow.tests.p7 import (
     d03,
     setup_p7,
     slot_state,
-    slots,
     sql,
     status_of,
     version_of,
@@ -49,11 +48,9 @@ class P7Case(TestCase):
     def approve(self, ids, staff=1, **extra):
         return self.post("approvals/batch-decision", {"approval_ids": ids, **extra}, staff)
 
-    def submit(self, docs, staff=3, slot_list=None):
+    def submit(self, docs, staff=3):
         items = [{"document_id": d, "expected_version": version_of(d)} for d in docs]
-        return self.post(
-            "documents/batch-submit", {"items": items, "slots": slot_list or slots()}, staff
-        )
+        return self.post("documents/batch-submit", {"items": items}, staff)
 
     def assertError(self, response, status, code, detail=None):
         self.assertEqual(response.status_code, status, response.content)
@@ -232,7 +229,7 @@ class BatchApproveTests(P7Case):
     def test_tc019_correction_request(self):
         m = d03("correction_completed")
         ids = {}
-        request = wf.submit(3, m["document_id"], version_of(m["document_id"]), slots())["request"]
+        request = wf.submit(3, m["document_id"], version_of(m["document_id"]))["request"]
         ids = {s["slot_no"]: s["approval_id"] for s in request["slots"]}
         wf.decide(3, ids[1], "approved")
         body = wf.batch_approve(1, [ids[2]])
@@ -302,7 +299,7 @@ class BatchSubmitTests(P7Case):
         ]
         doc.reopen_document(3, b["document_id"], version_of(b["document_id"]))
         doc.complete_document(3, b["document_id"], version_of(b["document_id"]))
-        body = self.ok(self.post("documents/batch-submit", {"items": items, "slots": slots()}))
+        body = self.ok(self.post("documents/batch-submit", {"items": items}))
         self.assertEqual(body["results"][1]["error"]["code"], "VERSION_CONFLICT")
         self.assertEqual(body["succeeded"], 1)
 
@@ -332,13 +329,14 @@ class BatchSubmitTests(P7Case):
         m = d03("completed")
         item = {"document_id": m["document_id"], "expected_version": version_of(m["document_id"])}
         cases = [
-            ({"items": [], "slots": slots()}, "required"),
-            ({"items": [item] * 51, "slots": slots()}, "max"),
-            ({"items": [item, item], "slots": slots()}, "duplicate"),
-            ({"items": [{**item, "expected_version": 0}], "slots": slots()}, "invalid"),
-            ({"items": [{**item, "x": 1}], "slots": slots()}, "unknown_key"),
-            ({"items": [item]}, "required"),
-            ({"items": [item], "slots": slots(), "comment": "x"}, "unknown_key"),
+            ({"items": []}, "required"),
+            ({"items": [item] * 51}, "max"),
+            ({"items": [item, item]}, "duplicate"),
+            ({"items": [{**item, "expected_version": 0}]}, "invalid"),
+            ({"items": [{**item, "x": 1}]}, "unknown_key"),
+            ({}, "required"),
+            ({"items": [item], "comment": "x"}, "unknown_key"),
+            ({"items": [item], "slots": []}, "unknown_key"),  # ROLE-TC-14: 결재선은 받지 않음
         ]
         for body, code in cases:
             with self.subTest(body=body):
@@ -347,16 +345,16 @@ class BatchSubmitTests(P7Case):
                 )
         self.assertEqual(status_of(m["document_id"])[0], "completed")
 
-    def test_tc037_slots(self):
+    def test_tc037_role_per_item(self):
+        """ROLE-TC-15: 권한 없는 사람의 일괄 상신은 항목마다 ROLE_REQUIRED(응답 200, 변화 없음)."""
         made = [d03("completed") for _ in range(2)]
         ids = [m["document_id"] for m in made]
-        same = [{"slot_no": 1, "approver_id": 3}, {"slot_no": 2, "approver_id": 3}]
-        self.assertError(self.submit(ids, slot_list=same), 400, "INVALID_SLOTS")
-        items = [{"document_id": d, "expected_version": version_of(d)} for d in ids]
-        self.assertError(
-            self.post("documents/batch-submit", {"items": items, "slots": []}), 400, "INVALID_SLOTS"
-        )
+        body = self.ok(self.submit(ids, staff=4))  # staff 4 = D03 역할 없음
+        self.assertEqual(body["succeeded"], 0)
+        self.assertEqual({r["error"]["code"] for r in body["results"]}, {"ROLE_REQUIRED"})
         self.assertEqual({status_of(d)[0] for d in ids}, {"completed"})
+        body = self.ok(self.submit(ids, staff=1))  # 팀장은 상신 가능
+        self.assertEqual(body["succeeded"], 2)
 
     def test_tc038_missing_document(self):
         m = d03("completed")
@@ -364,7 +362,7 @@ class BatchSubmitTests(P7Case):
             {"document_id": m["document_id"], "expected_version": version_of(m["document_id"])},
             {"document_id": 99999, "expected_version": 1},
         ]
-        body = self.ok(self.post("documents/batch-submit", {"items": items, "slots": slots()}))
+        body = self.ok(self.post("documents/batch-submit", {"items": items}))
         self.assertEqual(body["results"][1]["error"]["code"], "DOCUMENT_NOT_FOUND")
         self.assertEqual(body["succeeded"], 1)
 
@@ -399,7 +397,6 @@ class BatchSubmitTests(P7Case):
                 {"document_id": a["document_id"], "expected_version": version_of(a["document_id"])},
                 {"document_id": b["document_id"], "expected_version": version},
             ],
-            slots(),
         )
         self.assertEqual(body["results"][1]["error"]["code"], "OPEN_REQUEST_EXISTS")
         self.assertEqual(status_of(b["document_id"]), ("completed", version))  # 잠금도 되돌림
@@ -415,7 +412,7 @@ class BatchSubmitTests(P7Case):
         ]
         record, token = trace.start("TEST", "/")
         try:
-            wf.batch_submit(3, items, slots())
+            wf.batch_submit(3, items)
         finally:
             trace.stop(token)
         steps = [s.step_id for s in record.steps]
@@ -432,11 +429,14 @@ class BatchSubmitTests(P7Case):
             for m in made
         ]
         with mock.patch.object(wf.batch, "run_each", return_value=[]):
-            with mock.patch.object(wf.apr, "validate_slots"):  # APR-VAL-02 staff 조회는 세지 않음
-                with CaptureQueriesContext(connection) as ctx:
-                    wf.batch_submit(3, items, slots())
-        reads = [q["sql"] for q in ctx.captured_queries if q["sql"].startswith("SELECT")]
-        self.assertEqual(len(reads), 3, reads)  # F26 3(세이브포인트 문장 제외)
+            with CaptureQueriesContext(connection) as ctx:
+                wf.batch_submit(3, items)
+        reads = [
+            q["sql"]
+            for q in ctx.captured_queries
+            if q["sql"].startswith("SELECT") and '"staff"' not in q["sql"]
+        ]  # 역할 설정 읽기(staff)는 운영에서 서버 시작 뒤 한 번 — 테스트는 매번이라 뺀다
+        self.assertEqual(len(reads), 6, reads)  # F26 3 + 문서마다 양식 유형 1(P14 WF-SUB-02b)
 
 
 # ---------------------------------------------------------------- 7.3 대상 요약(ISS-018)
@@ -447,7 +447,7 @@ class SubjectTests(P7Case):
         m = d03("completed")
         res = self.post(
             f"documents/{m['document_id']}/submit",
-            {"expected_version": version_of(m["document_id"]), "slots": slots()},
+            {"expected_version": version_of(m["document_id"])},
         )
         self.assertEqual(res.status_code, 201, res.content)
         expected = f"LOT {m['lot_number']} · 유자 · 고흥농협"
@@ -457,14 +457,14 @@ class SubjectTests(P7Case):
 
     def test_tc051_054_direct_document(self):
         m = ccp(self.t, "completed")  # subject "CCP-2B/라인A"
-        request = wf.submit(3, m["document_id"], version_of(m["document_id"]), slots())["request"]
+        request = wf.submit(3, m["document_id"], version_of(m["document_id"]))["request"]
         self.assertEqual(request["subject"], "CCP-2B/라인A")
         n = ccp(self.t, "draft")
         doc.update_document(
             3, n["document_id"], {"expected_version": 1, "document": {"subject": None}}
         )
         doc.complete_document(3, n["document_id"], version_of(n["document_id"]))
-        request = wf.submit(3, n["document_id"], version_of(n["document_id"]), slots())["request"]
+        request = wf.submit(3, n["document_id"], version_of(n["document_id"]))["request"]
         self.assertIsNone(request["subject"])
 
 

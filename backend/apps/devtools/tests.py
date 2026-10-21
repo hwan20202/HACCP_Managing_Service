@@ -71,7 +71,7 @@ class SeedP4Tests(TestCase):
             statuses, {"draft", "completed", "submitted", "approved", "rejected", "correcting"}
         )
         d03 = Document.objects.get(record_key="D03|lot:1")
-        self.assertEqual(d03.assignee_id, 2)  # P4 시드와 같게 D03·CCP는 담당자 2
+        self.assertIsNone(d03.assignee_id)  # P14: 문서별 담당자 대신 양식 담당자(roles.json)
         d03_status = dict(
             Document.objects.filter(
                 record_key__in=[f"D03|lot:{n}" for n in (1, 2, 3, 4)]
@@ -168,7 +168,7 @@ class D03FixtureTests(TestCase):
         self.assertEqual(self.lot_status(used["lot_id"]), "AVAILABLE")
         self.assertEqual(used["correction"]["reason"], "콘솔 준비: 판정 재확인")
         edited = self.post({"state": "correcting", "edited": True}).json()
-        self.assertEqual(doc.get_document(edited["document_id"])["assignee_id"], 2)
+        self.assertEqual(doc.get_document(edited["document_id"])["subject"], "콘솔 준비: 정정 수정")
         for body in ({"state": "x"}, {"verdict": "OK"}, {"change_to": "?"}):
             with self.subTest(body=body):
                 self.assertEqual(self.post(body).status_code, 400)
@@ -219,8 +219,8 @@ class D03FixtureTests(TestCase):
 
         request = apr.list_requests(partial["document_id"])["items"][0]
         self.assertEqual(
-            [(x["approver_id"], x["state"]) for x in request["slots"]],
-            [(3, "approved"), (1, "pending")],
+            [(x["role"], x["approver_id"], x["state"]) for x in request["slots"]],
+            [("owner", 3, "approved"), ("leader", None, "pending")],  # P14 역할 칸
         )
         rejected = self.post({"state": "rejected"}).json()
         self.assertEqual(rejected["status"], "rejected")

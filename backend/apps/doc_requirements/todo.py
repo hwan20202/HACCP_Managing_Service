@@ -11,6 +11,7 @@ import datetime
 
 from apps.core.trace import step
 from apps.documents import services as doc
+from apps.staff import roles
 
 from . import errors, periodic
 
@@ -53,6 +54,16 @@ def _check_input(base_date, mine):
     return base, mine
 
 
+def _is_mine(actor_id, source):
+    """P14 [내 문서](D-187·r13 D-201): 점검자 = 나, 또는 그 문서 양식의 담당자·작성 권한자에
+    내가 있음(작성자는 안 봄)."""
+    return (
+        actor_id == source["inspector_id"]
+        or roles.is_owner(actor_id, source["type_code"])
+        or roles.is_writer(actor_id, source["type_code"])
+    )
+
+
 def _row(source, **extra):
     row = {
         "kind": "document",
@@ -64,7 +75,8 @@ def _row(source, **extra):
         "status": source["status"],
         "document_id": source["document_id"],
         "version": source["version"],
-        "assignee_id": source["assignee_id"],
+        "assignee_id": source["assignee_id"],  # 옛 값(P14부터 쓰지 않음, Q3 a)
+        "owner_ids": sorted(roles.owners(source["type_code"])),  # P14 "점검자/담당자" 열
         "inspector_id": source["inspector_id"],
         "created_by": source["created_by"],
         "updated_at": source["updated_at"],
@@ -115,6 +127,7 @@ def _period(work_date, group, base, monday):
     return "past" if oldest <= day < base else None
 
 
+@roles.scope()
 def todo_list(actor_id, base_date=None, mine=False):
     """F10: 작성 필요 목록(REQ-TDO). actor_id는 API가 확인한 현재 사용자."""
     with step("REQ-TDO-02", "REQ", "날짜·mine 확인"):
@@ -146,7 +159,7 @@ def todo_list(actor_id, base_date=None, mine=False):
             status = source["status"]
             if status == "completed":
                 if oldest.isoformat() <= source["work_date"] <= base.isoformat():
-                    if not mine or actor_id in (source["assignee_id"], source["inspector_id"]):
+                    if not mine or _is_mine(actor_id, source):
                         awaiting.append(_row(source))
                 continue
             if status not in TODO_STATUSES:
@@ -155,7 +168,7 @@ def todo_list(actor_id, base_date=None, mine=False):
             if when is None:
                 older += 1  # 기간 앞쪽(그 주 월요일부터 −30일 전까지)
                 continue
-            if mine and actor_id not in (source["assignee_id"], source["inspector_id"]):
+            if mine and not _is_mine(actor_id, source):
                 continue
             extra = {"received_date": source["received_date"]} if code == "D03" else {}
             if group == "week":

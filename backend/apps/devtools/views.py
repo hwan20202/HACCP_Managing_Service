@@ -6,7 +6,7 @@ from django.shortcuts import render
 from django.views.decorators.http import require_safe
 
 from apps.approvals.flows import FLOWS as APR_FLOWS
-from apps.approvals.models import Approval, ApprovalRequest
+from apps.approvals.models import Approval, ApprovalCandidate, ApprovalRequest
 from apps.doc_effects.flows import FLOWS as EFF_FLOWS
 from apps.doc_requirements.flows import FLOWS as REQ_FLOWS
 from apps.document_workflow.flows import BATCH as WF_BATCH
@@ -176,6 +176,12 @@ def snapshot(request):
     slots = _rows(
         Approval.objects.filter(request__document_id=document_id).order_by("request_id", "slot_no")
     )
+    # P14: 역할 칸의 결재 후보(ERD v7.2 A21)
+    candidates = _rows(
+        ApprovalCandidate.objects.filter(approval__request__document_id=document_id).order_by(
+            "approval_id", "staff_id"
+        )
+    )
     # P4: 업무 대상 참조·개선조치
     refs = _rows(DocumentRef.objects.filter(document_id=document_id).order_by("ref_id"))
     deviations = _rows(
@@ -205,7 +211,8 @@ def snapshot(request):
         }
         | {row["recorded_by_id"] for row in sections if row["recorded_by_id"]}
         | {row["requested_by_id"] for row in requests}
-        | {row["approver_id"] for row in slots}
+        | {row["approver_id"] for row in slots if row["approver_id"]}
+        | {row["staff_id"] for row in candidates}
         | {
             row[k]
             for row in deviations
@@ -229,6 +236,7 @@ def snapshot(request):
         "staff": [{"staff_id": i} for i in staff_ids],
         "approval_request": requests,
         "approval": slots,
+        "approval_candidate": candidates,
         "document_ref": refs,
         "deviation_action": deviations,
         "deviation_checker": checkers,

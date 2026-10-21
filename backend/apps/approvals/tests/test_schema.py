@@ -1,4 +1,7 @@
-"""APR-TC-051: 마이그레이션 결과가 ERD v4(approval_request, approval)와 같은지 확인한다."""
+"""APR-TC-051: 마이그레이션 결과가 ERD와 같은지 확인한다.
+
+v4 approval_request·approval, v7.2 역할 칸·후보.
+"""
 
 from django.db import connection
 from django.test import TestCase
@@ -23,11 +26,13 @@ EXPECTED_COLUMNS = {
         "request_id": True,
         "slot_no": True,
         "label": False,
-        "approver_id": True,
+        "role": False,  # ERD v7.2 A20
+        "approver_id": False,  # ERD v7.2 M16 — 역할 칸은 처리 전 NULL
         "state": True,
         "comment": False,
         "decided_at": False,
     },
+    "approval_candidate": {"approval_id": True, "staff_id": True},  # ERD v7.2 A21
 }
 EXPECTED_FKS = {
     ("approval_request", "document_id"): "document",
@@ -35,6 +40,8 @@ EXPECTED_FKS = {
     ("approval_request", "requested_by"): "staff",
     ("approval", "request_id"): "approval_request",
     ("approval", "approver_id"): "staff",
+    ("approval_candidate", "approval_id"): "approval",
+    ("approval_candidate", "staff_id"): "staff",
 }
 
 
@@ -79,11 +86,14 @@ class SchemaMatchesErdV4Tests(TestCase):
         for name in ("ck_request_attempt", "ck_request_status", "ck_request_closed"):
             self.assertIn(name, ddl["approval_request"])
         self.assertIn('UNIQUE ("request_id", "slot_no")', ddl["approval"])
-        self.assertIn('UNIQUE ("request_id", "approver_id")', ddl["approval"])
+        self.assertNotIn('UNIQUE ("request_id", "approver_id")', ddl["approval"])  # v7.2 M17
+        self.assertIn('PRIMARY KEY ("approval_id", "staff_id")', ddl["approval_candidate"])
         for name in (
             "ck_approval_slot_no",
             "ck_approval_state",
             "ck_approval_decided",
             "ck_approval_reject_comment",
+            "ck_approval_role",  # v7.2 A20
+            "ck_approval_approver",
         ):
             self.assertIn(name, ddl["approval"])

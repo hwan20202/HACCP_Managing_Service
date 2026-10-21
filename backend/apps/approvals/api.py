@@ -4,7 +4,7 @@ from django.views.decorators.http import require_http_methods
 
 from apps.core.http import ApiError, error_response, json_response
 from apps.core.trace import step
-from apps.staff.services import actor_from_header
+from apps.staff.services import actor_from_header, optional_actor_from_header
 
 from . import services
 
@@ -35,10 +35,12 @@ def approval_inbox(request):
 @require_http_methods(["GET"])
 @_api
 def request_detail(request, request_id):
-    return json_response(services.get_request(request_id))
+    actor = optional_actor_from_header(request.headers.get("X-Staff-Id"))  # P14 can_cancel
+    return json_response(services.get_request(request_id, actor))
 
 
 @require_http_methods(["GET"])
 @_api
 def document_requests(request, document_id):
-    return json_response(services.list_requests(document_id))
+    actor = optional_actor_from_header(request.headers.get("X-Staff-Id"))  # P14 can_cancel
+    return json_response(services.list_requests(document_id, actor))

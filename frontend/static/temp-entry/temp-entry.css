@@ -237,6 +237,30 @@
 .te-btn-outline-danger:hover { background: var(--color-danger, #dc3545); color: #fff; }
 .te-cancel-lines { margin: 0; padding-left: 1.1rem; line-height: 1.7; }
 
+/* ---------- P14 역할 기반 결재(p14-s1-screens 3장) ---------- */
+.te-person-code { color: var(--text-muted); font-size: 0.85em; }
+.te-person-unknown { color: var(--text-muted); }
+.te-person-off { color: var(--text-muted); }
+.te-person-inactive { font-size: 0.75em; color: var(--text-muted); border: 1px solid var(--border-color, #d0d5dd); border-radius: 4px; padding: 0 0.25rem; }
+.te-more { color: var(--text-muted); border-bottom: 1px dotted var(--text-muted); cursor: help; }
+.te-dim, .te-dim .te-person { color: var(--text-muted); }
+.te-perm-note { margin-top: 0.4rem; font-size: 0.8rem; color: var(--text-secondary); }
+/* P14 r13(명세 2.7): 작성 요구 문서의 작성자 "작성 요구(자동)" */
+.te-author-auto { color: var(--text-secondary); font-style: italic; }
+[data-inspector-ro] { display: inline-block; padding: 0.35rem 0; }
+/* S5 r4: 권한·상태로 막힌 버튼이 눈에 보이게(공통 .btn에는 :disabled 모양이 없음 — 정정 시작만 있었음) */
+.page-actions .btn:disabled, .te-section .btn:disabled, .te-bundle-actions .btn:disabled,
+.te-actions .btn:disabled, .te-cards .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.te-role-link { font-size: 0.8rem; white-space: nowrap; }
+.te-line-preview { margin-top: 0.75rem; }
+.te-line-preview .te-sub, .te-modal-body .te-sub { font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem; }
+.te-line-table { margin-bottom: 0.25rem; }
+.te-row-repeat td:nth-child(2), .te-row-repeat td:nth-child(3), .te-row-repeat td:nth-child(4) { color: var(--text-muted); }
+.te-row-mine td:first-child { box-shadow: inset 3px 0 0 var(--primary, #2563eb); }
+.te-blocked { margin: 0.6rem 0 0; padding-left: 1.1rem; font-size: 0.85rem; color: #b45309; }
+.te-role-warnings { margin: 0.6rem 0; font-size: 0.85rem; }
+.te-role-warnings summary { cursor: pointer; color: #b45309; font-weight: 600; }
+
 /* ---------- P11 CCP 대시보드 (DSH-SC-01·02, p11-s1-screens 3·4장) ---------- */
 .te-dsh-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; padding: 0.7rem 1rem; }
 .te-dsh-date { width: auto; }
@@ -311,3 +335,5 @@
 .te-dsh-prodinfo { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.1rem; white-space: nowrap; }
 .te-dsh-prodlink { float: right; padding: 0.1rem 0.5rem; font-size: 0.72rem; }
 .te-dsh-focus { box-shadow: 0 0 0 2px var(--brand-primary, #2563eb); }
+/* P14 r13 E5: 대시보드 [개선조치 쓰기] — 양식 역할이 없으면 흐리게(점검자는 문서 상세에서 쓸 수 있어 막지는 않음) */
+[data-dev-noperm] { opacity: 0.5; }

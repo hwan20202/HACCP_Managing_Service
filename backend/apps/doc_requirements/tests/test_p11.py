@@ -153,7 +153,7 @@ class CcpBatchAreaTests(P11ReqTestCase):
         d = ccp_doc("CCP-2B", 12)
         (row,) = add_rows(d, "rounds", [r2b("10:00", temp=73.5)])
         made = doc.create_deviation(
-            4,
+            3,  # P14 r13: 개선조치 쓰기는 작성 권한(R07) — CCP 담당자 3
             d,
             {
                 "section_id": row,

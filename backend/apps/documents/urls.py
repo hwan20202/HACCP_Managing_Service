@@ -4,6 +4,7 @@ from . import api
 
 urlpatterns = [
     path("staff", api.staff_list, name="api-staff-list"),
+    path("roles", api.roles_view, name="api-roles"),  # P14 역할 보기
     path("templates", api.template_list, name="api-template-list"),
     path("templates/<int:template_id>", api.template_detail, name="api-template-detail"),
     path("documents", api.document_collection, name="api-document-collection"),

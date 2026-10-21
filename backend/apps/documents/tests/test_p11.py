@@ -195,7 +195,7 @@ class PendingTests(P11TestCase):
         self.assertEqual(out["counts"], {"total": 2, "mine": 1})
         with CaptureQueriesContext(connection) as queries:
             self.assertEqual(self.pending(summary=True), {"my_total": 1})
-        self.assertEqual(len(queries), 1)
+        self.assertEqual(len(queries), 2)  # P14 R05: 역할(직원 코드 → id) 1 + 합계 1
 
     def test_tc015_deleted_and_checked_not_counted(self):
         ccp = ccp_doc("CCP-1P", 12)
@@ -218,7 +218,7 @@ class PendingTests(P11TestCase):
         deviation(ccp, checkers=())
         with CaptureQueriesContext(connection) as queries:
             out = self.pending()
-        self.assertLessEqual(len(queries), 5)
+        self.assertLessEqual(len(queries), 6)  # P14 R05: + 역할 1
         targets = {r["type_code"]: r["target_summary"] for r in out["rows"]}
         self.assertEqual(targets["CCP-1P"], "배치 PB-12 · 1P")
         self.assertTrue(targets["D03"].startswith("LOT RM-1013-01"), targets)

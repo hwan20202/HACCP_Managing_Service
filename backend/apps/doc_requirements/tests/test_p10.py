@@ -182,14 +182,18 @@ class TodoTests(TodoTestCase):
         )
 
     def test_tc005_mine(self):
-        periodic_doc("D12", WED, inspector=3)
-        mine_ccp = ccp(12, WED, assignee=3)
+        # P14: staff 4는 역할 없음 — 점검자로 지정된 문서만 내 문서
+        periodic_doc("D12", WED, inspector=4)
+        ccp(12, WED, assignee=4)  # 예전 문서 담당자(assignee_id)는 더 이상 기준 아님(D-187)
         d03(88, WED)  # 작성자만 staff 3
-        periodic_doc("D10", WED, inspector=4)
-        out = self.todo(WED, mine="1")
+        periodic_doc("D10", WED, inspector=2)
+        out = self.todo(WED, mine="1", actor=4)
         rows = group(out, "today")["rows"]
-        self.assertEqual(brief(rows), [("document", "D12", WED), ("document", "CCP-2B", WED)])
-        self.assertEqual(rows[1]["document_id"], mine_ccp)
+        self.assertEqual(brief(rows), [("document", "D12", WED)])
+        # ROLE-FR-14: 양식 담당자(staff 2: D03·D10·D12 등)는 그 양식 문서도 내 문서
+        owner_rows = group(self.todo(WED, mine="1", actor=2), "today")["rows"]
+        self.assertEqual(sorted(r["type_code"] for r in owner_rows), ["D03", "D10", "D12"])
+        self.assertTrue(all(2 in r["owner_ids"] for r in owner_rows))
         self.assertTrue(out["mine"])
         all_rows = [r for g in out["groups"] for r in g["rows"] + g["past"]["rows"]]
         self.assertFalse([r for r in all_rows if r["kind"] == "missing"])
@@ -237,16 +241,19 @@ class TodoTests(TodoTestCase):
 
     def test_tc011_d03_bundle(self):
         draft = d03(88, WED)
-        rejected = d03(89, WED, inspector=3)
+        rejected = d03(89, WED, inspector=4)
         corr = d03(91, WED)
         set_status(rejected, "rejected")
         set_status(corr, "correcting")
         row = next(r for r in group(self.todo(WED), "today")["rows"] if r["type_code"] == "D03")
         self.assertEqual((row["status"], row["bundle"]["count"]), ("rejected", 3))
         self.assertEqual(row["document_id"], min(draft, rejected, corr))
-        mine = group(self.todo(WED, mine=True), "today")["rows"]
+        mine = group(self.todo(WED, mine=True, actor=4), "today")["rows"]  # 역할 없음
         self.assertEqual([(r["type_code"], r["bundle"]["count"]) for r in mine], [("D03", 1)])
         self.assertEqual(mine[0]["status"], "rejected")
+        # P14: D03 담당자(staff 3)에게는 묶음 전부가 내 문서
+        owner = group(self.todo(WED, mine=True, actor=3), "today")["rows"]
+        self.assertEqual([(r["type_code"], r["bundle"]["count"]) for r in owner], [("D03", 3)])
 
     def test_tc012_week_past(self):
         self.write_rules(self.rule("D11", start_date="2026-10-05"))

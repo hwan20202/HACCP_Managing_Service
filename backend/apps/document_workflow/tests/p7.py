@@ -18,10 +18,8 @@ from apps.documents.tests.base import setup_reference_data
 from apps.documents.tests.p4 import stub
 
 DAY = "2026-10-13"
-SLOTS = [
-    {"slot_no": 1, "label": "담당", "approver_id": 3},
-    {"slot_no": 2, "label": "HACCP팀장", "approver_id": 1},
-]
+# P14: 결재선은 역할 설정(roles.json) — D03 = 담당자 {2, 3} → HACCP팀장 {1, 5},
+# CCP_MONITORING = 담당자 {1, 3} → 팀장 {1, 5}. 칸 1은 staff 3, 칸 2는 staff 1이 처리한다.
 CHECK = {
     "PASS": {"appearance": "양호", "packaging": "양호", "labeling": "양호", "verdict": "PASS"},
     "FAIL": {"appearance": "양호", "packaging": "불량", "labeling": "양호", "verdict": "FAIL"},
@@ -36,10 +34,6 @@ def setup_p7():
     templates = setup_reference_data()  # CCP_MONITORING(직접 만든 문서)
     stub("items", id=1, name="유자")
     return templates
-
-
-def slots():
-    return [dict(s) for s in SLOTS]
 
 
 def sql(statement, params=()):
@@ -84,7 +78,7 @@ def complete(document_id, actor=3):
 
 
 def submit(document_id):
-    request = wf.submit(3, document_id, version_of(document_id), slots())["request"]
+    request = wf.submit(3, document_id, version_of(document_id))["request"]
     return {s["slot_no"]: s["approval_id"] for s in request["slots"]}
 
 
