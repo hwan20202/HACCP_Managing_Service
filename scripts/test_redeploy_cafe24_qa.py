@@ -4,6 +4,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +12,66 @@ import redeploy_cafe24_qa as deploy
 
 
 class RedeployTests(unittest.TestCase):
+    def test_manual_inventory_mode_allows_only_reviewed_added_migration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            current, stage = Path(directory) / "old", Path(directory) / "new"
+            files = {
+                "backend/apps/inventory/migrations/0007_expiration_status.py": "old migration",
+                "requirements/base.txt": "Django==5.2.18",
+                "requirements/production.txt": "-r base.txt",
+                ".python-version": "3.14",
+            }
+            for root in (current, stage):
+                for name, content in files.items():
+                    target = root / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(content)
+            migration = (
+                stage / "backend/apps/inventory/migrations/0008_movement_ea_and_unused_purge.py"
+            )
+            migration.write_text("reviewed additive migration")
+            deploy.require_inventory_feedback_compatibility(current, stage)
+            with self.assertRaises(SystemExit):
+                deploy.require_code_only_compatibility(current, stage)
+            previous = stage / "backend/apps/inventory/migrations/0007_expiration_status.py"
+            previous.write_text("changed old migration")
+            with self.assertRaises(SystemExit):
+                deploy.require_inventory_feedback_compatibility(current, stage)
+            previous.write_text("old migration")
+            (stage / "requirements/base.txt").write_text("changed dependency")
+            with self.assertRaises(SystemExit):
+                deploy.require_inventory_feedback_compatibility(current, stage)
+
+    def test_additive_projection_preserves_old_values_and_rejects_invented_ea(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory)
+            (data / "db").mkdir()
+            db_path = data / "db/app.sqlite3"
+            with closing(sqlite3.connect(db_path)) as db, db:
+                db.execute(
+                    "CREATE TABLE stock_movements (id INTEGER PRIMARY KEY, quantity INTEGER)"
+                )
+                db.execute("INSERT INTO stock_movements VALUES (1, 500)")
+            columns = deploy.business_columns(data)
+            before = deploy.business_fingerprint(data, columns)
+            with closing(sqlite3.connect(db_path)) as db, db:
+                db.execute("ALTER TABLE stock_movements ADD COLUMN ea_count INTEGER")
+                db.execute("CREATE TABLE inventory_purge_scope (lot_id INTEGER PRIMARY KEY)")
+            self.assertEqual(deploy.business_fingerprint(data, columns), before)
+            deploy.check_inventory_feedback_data(data)
+            with closing(sqlite3.connect(db_path)) as db, db:
+                db.execute("UPDATE stock_movements SET quantity=499")
+            self.assertNotEqual(deploy.business_fingerprint(data, columns), before)
+            with closing(sqlite3.connect(db_path)) as db, db:
+                db.execute("UPDATE stock_movements SET quantity=500, ea_count=1")
+            with self.assertRaisesRegex(RuntimeError, "invent"):
+                deploy.check_inventory_feedback_data(data)
+            with closing(sqlite3.connect(db_path)) as db, db:
+                db.execute("UPDATE stock_movements SET ea_count=NULL")
+                db.execute("INSERT INTO inventory_purge_scope VALUES (1)")
+            with self.assertRaisesRegex(RuntimeError, "empty"):
+                deploy.check_inventory_feedback_data(data)
+
     def test_code_only_rejects_migration_sql_dependencies_and_python_changes(self):
         with tempfile.TemporaryDirectory() as directory:
             current, stage = Path(directory) / "old", Path(directory) / "new"

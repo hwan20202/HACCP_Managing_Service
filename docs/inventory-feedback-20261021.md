@@ -30,7 +30,7 @@
 ## 검증
 
 - 최신 main의 문서 출력 PR #24를 작업 브랜치에 병합했다.
-- `scripts/project.py check`: Django 테스트 1,029개, 실패 없음, 36개 건너뜀.
+- `scripts/project.py check`: Django 테스트 1,031개, 실패 없음, 36개 건너뜀.
 - `test_inventory_feedback_frontend.cjs`: 정밀 kg/g 환산, 윤년 기본값, LOT 필터, CSV 파싱.
 - 기존 JS 입고·재고·탐색 회귀 검사 통과.
 - 실제 Chrome + 격리 복사 DB: 입고 기본값, CSV 업로드, BOM 등록 및 사용 후 새 버전,
@@ -46,6 +46,21 @@ GitHub의 `QA_AUTO_DEPLOY=true`와 배포 키/접속 설정 존재를 확인했�
 기존 자동 배포는 `--code-only`로 migration·SQL 변경을 중단시키므로 **일반 main 병합만으로 배포 완료되지 않는다**.
 자동 배포 보호는 완화하지 않는다. 배포 전 기존 DB·첨부 백업과 대상 커밋을 확정하고,
 서버의 현재 migration 상태 및 백업 복구 절차를 확인한 뒤 별도의 DB 변경 배포가 필요하다.
+
+이번 변경의 수동 배포는 기존 재배포 스크립트의 `--inventory-feedback-migration`을 명시한다.
+이 모드는 기존 migration·SQL이 동일하고 새 파일이 inventory 0008 하나뿐인 경우만 허용한다.
+의존성·Python 변경과 미적용 기존 migration은 거부한다. 쓰기 중지 후 DB·첨부·설정을 백업하고,
+기존 모든 업무 테이블의 기존 컬럼 값을 배포 전후 지문으로 비교한다. 추가 EA가 모두 NULL이고
+삭제 예외 범위 테이블이 비었는지도 확인한다. Seeder·데이터 초기화는 실행하지 않는다.
+마이그레이션은 기존 컬럼·업무 값을 바꾸지 않는 추가형으로, 실패 시 코드·설정을 복원해도
+기존 앱이 동작할 수 있다. 새 컬럼을 지우거나 백업 DB로 덮어쓰는 자동 역마이그레이션은 하지 않는다.
+
+```text
+redeploy_cafe24_qa.py --archive <main 커밋의 git archive> --sha256 <SHA256>
+  --commit <검사한 main SHA> --branch main --inventory-feedback-migration
+```
+
+수동 배포가 완료되면 이후 main의 코드 전용 자동 배포는 기존과 같은 보호 조건으로 동작한다.
 
 마이그레이션은 수불에 nullable EA를 추가하고 미사용 품목 삭제의 제한된 DB 예외 범위를 추가한다.
 일반 수불 수정·삭제 API/ORM 차단은 유지한다. 수불 삭제 예외는 서비스 트랜잭션 내의 삭제 대상 LOT에만
