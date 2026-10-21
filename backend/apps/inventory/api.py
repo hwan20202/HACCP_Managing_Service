@@ -18,6 +18,7 @@ from decimal import Decimal
 
 from django.db import IntegrityError, transaction
 from django.db.models import Q
+from django.db.models.deletion import ProtectedError
 from django.http import JsonResponse
 from django.views.decorators.csrf import ensure_csrf_cookie
 
@@ -318,6 +319,16 @@ item_collection = _master_collection("items")
 item_detail = _master_detail("items")
 
 
+@endpoint("POST")
+def item_remove(request):
+    from .item_removal import remove_items
+
+    try:
+        return ok(remove_items(request.data))
+    except (IntegrityError, ProtectedError) as error:
+        raise Conflict("다른 업무에 연결된 기록이 있어 품목을 삭제할 수 없습니다.") from error
+
+
 # ---------------------------------------------------------------------------
 # Receipts
 # ---------------------------------------------------------------------------
@@ -334,29 +345,32 @@ def _inspection(value):
     return value
 
 
+def create_receipt(data):
+    _required(data, "item_id", "supplier_id", "staff_id", "received_date", "quantity")
+    receipt = register_receipt(
+        ReceiptInput(
+            item_id=_int(data["item_id"], "item_id"),
+            supplier_id=_int(data["supplier_id"], "supplier_id"),
+            staff_id=_int(data["staff_id"], "staff_id"),
+            received_date=_date(data["received_date"], "received_date", required=True),
+            quantity=data["quantity"],
+            idempotency_key=str(data.get("idempotency_key") or ""),
+            supplier_lot_number=data.get("supplier_lot_number"),
+            manufactured_date=_date(data.get("manufactured_date"), "manufactured_date"),
+            expiration_date=_date(data.get("expiration_date"), "expiration_date"),
+            expiration_status=data.get("expiration_status"),
+            judgment=str(data["judgment"]).upper() if data.get("judgment") else None,
+            inspection=_inspection(data.get("inspection")),
+            ea_count=data.get("ea_count"),
+        )
+    )
+    return IncomingReceipt.objects.select_related(*RECEIPT_RELATED).get(pk=receipt.pk)
+
+
 @endpoint("GET", "POST")
 def receipt_collection(request):
     if request.method == "POST":
-        data = request.data
-        _required(data, "item_id", "supplier_id", "staff_id", "received_date", "quantity")
-        receipt = register_receipt(
-            ReceiptInput(
-                item_id=_int(data["item_id"], "item_id"),
-                supplier_id=_int(data["supplier_id"], "supplier_id"),
-                staff_id=_int(data["staff_id"], "staff_id"),
-                received_date=_date(data["received_date"], "received_date"),
-                quantity=data["quantity"],
-                idempotency_key=str(data.get("idempotency_key") or ""),
-                supplier_lot_number=data.get("supplier_lot_number"),
-                manufactured_date=_date(data.get("manufactured_date"), "manufactured_date"),
-                expiration_date=_date(data.get("expiration_date"), "expiration_date"),
-                expiration_status=data.get("expiration_status"),
-                judgment=str(data["judgment"]).upper() if data.get("judgment") else None,
-                inspection=_inspection(data.get("inspection")),
-            )
-        )
-        receipt = IncomingReceipt.objects.select_related(*RECEIPT_RELATED).get(pk=receipt.pk)
-        return ok(out.receipt(receipt), status=201)
+        return ok(out.receipt(create_receipt(request.data)), status=201)
 
     rows = IncomingReceipt.objects.select_related(*RECEIPT_RELATED).order_by(
         "-received_date", "-pk"
@@ -383,6 +397,13 @@ def receipt_detail(request, pk):
     if receipt is None:
         raise NotFound(f"입고 건을 찾을 수 없습니다. (id={pk})")
     return ok(out.receipt(receipt))
+
+
+@endpoint("POST")
+def receipt_import(request):
+    from .receipt_import import import_receipts
+
+    return ok(import_receipts(request.data))
 
 
 @endpoint("POST")
@@ -770,6 +791,7 @@ def batch_output(request, pk):
     add_output(
         batch_id=pk,
         quantity=data["quantity"],
+        ea_count=data.get("ea_count"),
         staff_id=_int(data["staff_id"], "staff_id"),
         idempotency_key=str(data["idempotency_key"]),
         occurred_at=_datetime(data.get("occurred_at"), "occurred_at"),
@@ -821,9 +843,18 @@ def fefo(request):
     )
 
 
-@endpoint("GET")
+@endpoint("GET", "POST")
 def bom_collection(request):
-    """BOMs (read only — BOM data is loaded by the data team)."""
+    """BOM versions; authoring preserves versions referenced by production."""
+    if request.method == "POST":
+        from .bom_management import save_bom
+
+        with transaction.atomic():
+            try:
+                bom = save_bom(request.data)
+            except IntegrityError as error:
+                raise Conflict("BOM 저장이 충돌했습니다. 새로고침 후 다시 시도하세요.") from error
+        return ok(out.bom(bom, bom.lines.select_related("component_item").order_by("line_no")), 201)
     rows = Bom.objects.order_by("item_id", "-version")
     if item_id := _int(request.GET.get("item_id"), "item_id"):
         rows = rows.filter(item_id=item_id)
@@ -835,6 +866,27 @@ def bom_collection(request):
     ):
         lines.setdefault(line.bom_id, []).append(line)
     return ok({"results": [out.bom(b, lines.get(b.pk, [])) for b in rows]})
+
+
+@endpoint("GET", "PATCH")
+def bom_detail(request, pk):
+    if request.method == "PATCH":
+        from .bom_management import save_bom
+
+        try:
+            bom = save_bom(request.data, pk)
+        except IntegrityError as error:
+            raise Conflict("BOM 저장이 충돌했습니다. 새로고침 후 다시 시도하세요.") from error
+    else:
+        bom = _get(Bom, pk, "BOM")
+    return ok(out.bom(bom, bom.lines.select_related("component_item").order_by("line_no")))
+
+
+@endpoint("POST")
+def bom_remove(request, pk):
+    from .bom_management import delete_bom
+
+    return ok(delete_bom(pk, request.data))
 
 
 # ---------------------------------------------------------------------------

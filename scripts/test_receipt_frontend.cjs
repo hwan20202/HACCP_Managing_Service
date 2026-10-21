@@ -35,6 +35,7 @@ const context = vm.createContext({
     return new Promise(resolve => {resolveResponse = resolve;});
   },
 });
+vm.runInContext(fs.readFileSync('frontend/static/prototype/js/modules/mass-units.js','utf8'),context);
 vm.runInContext(fs.readFileSync('frontend/static/prototype/js/modules/inventory-api.js', 'utf8') + '\nthis.page = InventoryApiPage;', context);
 const page = context.page;
 page.receiptDetail = receipt;

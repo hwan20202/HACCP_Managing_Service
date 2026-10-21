@@ -423,6 +423,7 @@ def add_output(
     occurred_at=None,
     lot_number=None,
     expiration_date=None,
+    ea_count=None,
 ):
     """Put output quantity in stock under the batch's single LOT (10/15: 1 배치 = 1 산출 LOT).
 
@@ -435,13 +436,20 @@ def add_output(
     Expiration: given, else manufacturing date + the item's shelf life (shelf_life.py), else none.
     The new LOT is AVAILABLE (no product inspection flow yet).
     """
+    from .ea import optional_ea
+
+    ea_count = optional_ea(ea_count)
     quantity_e6 = _quantity_e6(quantity)
     key = _key("OUTPUT", idempotency_key)
     with transaction.atomic():
         existing = ProductionOutput.objects.filter(stock_movement__idempotency_key=key)
         if existing.exists():
             output = existing.select_related("lot").get()
-            if (output.batch_id, output.quantity_e6) != (batch_id, quantity_e6):
+            if (output.batch_id, output.quantity_e6, output.stock_movement.ea_count) != (
+                batch_id,
+                quantity_e6,
+                ea_count,
+            ):
                 raise InventoryError("같은 요청 키로 다른 내용의 산출이 이미 등록되어 있습니다.")
             return output
         batch = _batch(batch_id, lock_open=True)
@@ -492,6 +500,7 @@ def add_output(
         movement = StockMovement.objects.create(
             lot=lot,
             movement_type_id="PRODUCTION_OUTPUT",
+            ea_count=ea_count,
             quantity_e6=quantity_e6,
             staff=staff,
             occurred_at=when,
