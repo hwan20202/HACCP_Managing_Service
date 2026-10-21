@@ -1,6 +1,6 @@
 """역할(P14) — 설정 파일의 HACCP팀장·양식별 담당자·작성 권한자·결재 칸 구성. 테이블 없음.
 
-- 작성 권한자(``writers``, DR-20 — 명세 ROLE-C08): 양식별, 작성(ROLE-R07, r13 DR-23)과
+- 작성 권한자(``writers``, D-198 — 명세 ROLE-C08): 양식별, 작성(ROLE-R07, r13 D-201)과
   상신·재상신(ROLE-R01). 결재 칸 후보가 아니다.
 - 작성(R07) = 담당자·작성 권한자·팀장 + 그 문서 점검자(점검자 값은 DOC가 넘김 — 이 모듈은
   문서를 읽지 않는다). 점검자 지정(R08) = 담당자·팀장.
@@ -46,7 +46,7 @@ class RoleRequired(ApiError):
     status = 403
     code = "ROLE_REQUIRED"
     message = "이 양식의 담당자나 HACCP팀장만 할 수 있습니다."
-    SUBMIT = ("owner", "writer", "leader")  # ROLE-R01(r11 DR-20) — 정정 시작(R04)은 기본값
+    SUBMIT = ("owner", "writer", "leader")  # ROLE-R01(r11 D-198) — 정정 시작(R04)은 기본값
     SUBMIT_MESSAGE = "이 양식의 담당자·작성 권한자나 HACCP팀장만 상신할 수 있습니다."
 
     def __init__(self, required=("owner", "leader"), message=None):
@@ -76,7 +76,7 @@ class FormRole:
     owners: frozenset
     slots: tuple
     labels: dict
-    writers: frozenset = frozenset()  # 작성 권한자(DR-20·23) — 작성·상신, 결재 후보 아님
+    writers: frozenset = frozenset()  # 작성 권한자(D-198·D-201) — 작성·상신, 결재 후보 아님
 
 
 @dataclass
@@ -363,7 +363,7 @@ def is_writer(staff_id, type_code):
 
 
 def can_submit(staff_id, type_code):
-    """ROLE-R01(r11 DR-20): 담당자·작성 권한자·HACCP팀장.
+    """ROLE-R01(r11 D-198): 담당자·작성 권한자·HACCP팀장.
 
     설정 오류 여부는 보지 않는다(호출자가 먼저).
     """
@@ -391,7 +391,7 @@ def forms_of(staff_id):
 def require_owner_or_leader(staff_id, type_code):
     """ROLE-R04(정정 시작): 설정 오류가 먼저(ROLE-C07), 그다음 담당자 또는 팀장.
 
-    상신(R01)은 작성 권한자도 되므로 require_submitter(r11 DR-20).
+    상신(R01)은 작성 권한자도 되므로 require_submitter(r11 D-198).
     """
     config = load()
     if config.error:
@@ -400,7 +400,7 @@ def require_owner_or_leader(staff_id, type_code):
         raise RoleRequired()
 
 
-WRITE_REQUIRED = ("owner", "writer", "leader", "inspector")  # ROLE-R07(r13 DR-23)
+WRITE_REQUIRED = ("owner", "writer", "leader", "inspector")  # ROLE-R07(r13 D-201)
 WRITE_MESSAGE = "이 양식의 담당자·작성 권한자·HACCP팀장이나 지정된 점검자만 작성할 수 있습니다."
 INSPECTOR_MESSAGE = "점검자는 이 양식의 담당자나 HACCP팀장만 지정할 수 있습니다."
 

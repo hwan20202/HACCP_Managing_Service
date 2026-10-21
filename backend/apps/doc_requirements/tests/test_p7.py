@@ -122,7 +122,7 @@ class IncomingBundleTests(TestCase):
                 self.assertEqual((res.status_code, res.json()["code"]), (400, "VALIDATION_ERROR"))
         res = self.client.get("/api/v1/incoming-inspections")
         self.assertEqual(res.status_code, 400)
-        res = self.get(staff=None)  # P14 r14(DR-24 Q7 b): 헤더 선택 — 사용자 없음으로 200
+        res = self.get(staff=None)  # P14 r14(D-202 Q7 b): 헤더 선택 — 사용자 없음으로 200
         self.assertEqual(res.status_code, 200, res.content)
 
     def test_tc094_my_slot_done(self):
@@ -157,7 +157,7 @@ class IncomingBundleTests(TestCase):
 
 
 class WriterBundleTests(RolesFileMixin, TestCase):
-    """ROLE-TC-41(r11, DR-20): D03 작성 권한자 — 묶음 can_submit, 일괄 상신 성공(후보 아님)."""
+    """ROLE-TC-41(r11, D-198): D03 작성 권한자 — 묶음 can_submit, 일괄 상신 성공(후보 아님)."""
 
     def setUp(self):
         data = default_roles()

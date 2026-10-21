@@ -357,7 +357,7 @@ class ApiGuardTests(RoleCase):
 
 
 class WriterTests(RoleCase):
-    """ROLE-TC-39·40(r11, DR-20): 작성 권한자는 상신·재상신만.
+    """ROLE-TC-39·40(r11, D-198): 작성 권한자는 상신·재상신만.
 
     결재 후보 아님, 정정·남의 취소 안 됨.
 

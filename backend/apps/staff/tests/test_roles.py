@@ -75,7 +75,7 @@ class ConfigTests(RolesFileMixin, TestCase):
         self.assertIsNone(roles.config_error())  # 경고일 뿐 — 나머지는 그대로 쓴다
 
     def test_tc41_writers_file(self):
-        """ROLE-TC-41(r11, DR-20): writers — 형식 검사, 없는 코드 경고, 후보 아님, R01만."""
+        """ROLE-TC-41(r11, D-198): writers — 형식 검사, 없는 코드 경고, 후보 아님, R01만."""
         data = default_roles()
         data["forms"]["CCP_MONITORING"]["writers"] = ["DEV-004", "DEV-098"]
         self.use_roles(data)

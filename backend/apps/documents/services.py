@@ -51,7 +51,7 @@ REF_TARGETS = ("lot_id", "production_batch_id", "item_id", "process_code")
 DEVIATION_MAX_CHECKERS = 10
 PAGE_SIZE = 20
 MAX_RANGE_DAYS = 366
-# P14(Q3 a): 문서 머리 담당자(assignee_id)는 더 받지 않는다 — 담당자는 양식에 있음(DR-03)
+# P14(Q3 a): 문서 머리 담당자(assignee_id)는 더 받지 않는다 — 담당자는 양식에 있음(D-181)
 EDITABLE_FIELDS = ("subject", "work_date", "due_at")
 # P7(p7-s2-spec 3.2, Q9): DOC가 양식 코드를 직접 아는 첫 예외 — 스키마 표시로 옮기는 일은 ISS-020
 # P8(p8-s2-spec 4.1, Q5 a): 목록 묶음 단위 — day = 작업일마다 1줄, week = 그 주 월요일마다 1줄
@@ -408,7 +408,7 @@ def _detail(document_id):
 
 
 def list_staff(include_inactive=False):
-    """활성 직원 [{id, staff_code, name}](P14 ROLE-A02 — 예전에는 id 목록, DR-07).
+    """활성 직원 [{id, staff_code, name}](P14 ROLE-A02 — 예전에는 id 목록, D-185).
 
     include_inactive면 비활성 포함 + is_active(S5 r1 Q1 b — 지난 기록의 사람 표시용).
     """
@@ -1912,7 +1912,7 @@ def create_deviation(actor_id, document_id, data):
 
     P14(ROLE-FR-12): checker_ids 키가 없으면 확인자 기본값 = 그 양식 담당자 + HACCP팀장(담당자
     먼저, 각각 id 순, 10명까지 — 넘치면 checker_default_truncated). 빈 목록을 보내면 비운다.
-    기본값이 0명이면 저장하고 checker_warning(config_invalid·no_holders — r14 DR-24 Q5 a).
+    기본값이 0명이면 저장하고 checker_warning(config_invalid·no_holders — r14 D-202 Q5 a).
     권한: ROLE-R07(r13) — 404 → 403 순서라 문서 확인이 INSERT보다 먼저다.
     """
     with step("DOC-DVC-01", "DOC", "형식 검사") as s:
@@ -2015,7 +2015,7 @@ def _live_deviation(deviation_id, expected_version):
 def update_deviation(actor_id, deviation_id, expected_version, patch):
     """개선조치 수정(F20). 문서를 잠그지 않고 개선조치 자기 version으로 충돌을 감지한다.
 
-    권한: ROLE-R07(r13) 또는 그 개선조치의 지정 확인자(r14 DR-24 Q6 b — 수정만).
+    권한: ROLE-R07(r13) 또는 그 개선조치의 지정 확인자(r14 D-202 Q6 b — 수정만).
     """
     with step("DOC-DVU-01", "DOC", "형식 검사") as s:
         cleaned, problems = _clean_deviation(patch, partial=True)
@@ -2432,7 +2432,7 @@ def _write_targets(document_ids):
 def _check_write(actor_id, target, deviation_id=None):
     """DOC-WRT-02(·02b): ROLE-R07. 아니면 403 ROLE_REQUIRED. 반환: 통과한 역할 이름.
 
-    deviation_id(개선조치 수정만 — r14 DR-24 Q6 b): 역할·점검자가 아니어도 그 개선조치의 지정
+    deviation_id(개선조치 수정만 — r14 D-202 Q6 b): 역할·점검자가 아니어도 그 개선조치의 지정
     확인자면 통과.
     """
     type_code, inspector_id, _ = target
@@ -2515,7 +2515,7 @@ def document_roles(document, actor_id=None):
         line = roles.approval_line(type_code)
     with step("DOC-GET-05", "DOC", "권한(현재 사용자)") as s:
         usable = actor_id is not None and roles.config_error() is None
-        may_submit = usable and roles.can_submit(actor_id, type_code)  # R01 + 작성 권한자(DR-20)
+        may_submit = usable and roles.can_submit(actor_id, type_code)  # R01 + 작성 권한자(D-198)
         may_correct = usable and (roles.is_owner(actor_id, type_code) or roles.is_leader(actor_id))
         info = next((r["values"] for r in document["sections"] if r["section_def"] == "info"), {})
         permissions = {

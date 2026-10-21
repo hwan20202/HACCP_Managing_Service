@@ -191,7 +191,7 @@ schtasks /Run /TN "HACCP 주기 문서"      # 한 번 실행해 로그 확인
 
 상신하면 결재선이 역할 설정 파일로 자동으로 만들어집니다(HACCP팀장·양식별 담당자·양식별 결재 칸). 기본 파일 `backend/apps/staff/roles.json`에는 가상 개발 직원(DEV-001~005)만 있으므로 운영에서는 실제 직원 코드로 만든 파일을 지정합니다.
 
-1. `backend/apps/staff/roles.json`을 `C:\HACCPData\roles.json`으로 복사해 직원 코드(`staff_code`)를 고칩니다. 형식: `{"version": 1, "haccp_leaders": [코드...], "forms": {"양식유형": {"owners": [코드...], "writers": [코드...], "slots": "owner" | "owner_leader" | "leader", "labels": {"owner": "작성자"}}}}`(`writers`·`labels`는 선택). `writers`(작성 권한자)는 상신만 할 수 있고 결재 칸 후보가 아닙니다.
+1. `backend/apps/staff/roles.json`을 `C:\HACCPData\roles.json`으로 복사해 직원 코드(`staff_code`)를 고칩니다. 형식: `{"version": 1, "haccp_leaders": [코드...], "forms": {"양식유형": {"owners": [코드...], "writers": [코드...], "slots": "owner" | "owner_leader" | "leader", "labels": {"owner": "작성자"}}}}`(`writers`·`labels`는 선택). `writers`(작성 권한자)는 그 양식을 작성·상신할 수 있고, 결재 칸 후보가 아니며 정정 시작·점검자 지정은 하지 않습니다. 역할이 없는 직원은 읽기만 합니다(그 문서의 점검자로 지정되면 그 문서는 작성). 형식 오류일 때 작성 권한은 검사하지 않습니다(현장 기록이 멈추지 않게 — 상신·정정만 409).
 2. `.env.production`에 `HACCP_ROLES_FILE=C:/HACCPData/roles.json`을 넣습니다.
 3. 서비스를 다시 시작합니다(설정 파일은 서버 시작 뒤 처음 쓸 때 한 번 읽습니다 — 파일을 바꾸면 재시작해야 반영). 직원 등록·비활성(직원 마스터 가져오기)은 재시작 없이 바로 반영됩니다 — 비활성 직원은 역할에서 빠지고, 칸을 처리할 사람이 0명이 되면 그 양식은 상신이 막힙니다.
 4. `backend\manage.py check --settings=config.settings.production`으로 확인합니다. 형식 오류는 Error(`document_workflow.E002` — 이 상태로는 모든 상신이 409로 막힘), 없는 코드·비활성 직원·처리할 사람이 없는 칸은 Warning(`W002`)입니다. 화면에서는 [역할 보기](`GET /api/v1/roles`)에서 같은 내용을 봅니다.

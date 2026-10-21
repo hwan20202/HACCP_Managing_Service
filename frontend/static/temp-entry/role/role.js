@@ -2,7 +2,7 @@
 // 역할 보기 (P14 ROLE-SC-01, 읽기 전용)
 // 설계: dev-notes/roles/p14-s1-screens.md 4장 ROLE-SC-01 · API: p14-s2-spec.md 10.1 GET /api/v1/roles
 // 역할은 설정 파일(roles.json)에서만 바꾼다(ROLE-C01). 화면은 서버가 계산한 값을 보여 줄 뿐이다.
-// r4(DR-20)·r6(DR-23): 작성 권한자 열 — 작성·상신을 할 수 있고 결재 칸 후보가 아님
+// r4(D-198)·r6(D-201): 작성 권한자 열 — 작성·상신을 할 수 있고 결재 칸 후보가 아님
 // =============================================
 (function () {
   const T = window.TempEntry;

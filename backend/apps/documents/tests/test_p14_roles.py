@@ -58,7 +58,7 @@ class DetailPermissionTests(RolesFileMixin, TestCase):
         self.assertFalse(no_line["permissions"]["submit"])
 
     def test_tc41_writer_permissions(self):
-        """ROLE-TC-41(r11, DR-20): 작성 권한자는 submit만 true, 정정 시작은 false."""
+        """ROLE-TC-41(r11, D-198): 작성 권한자는 submit만 true, 정정 시작은 false."""
         data = default_roles()
         data["forms"]["CCP_MONITORING"]["writers"] = ["DEV-004"]
         self.use_roles(data)

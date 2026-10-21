@@ -1760,7 +1760,7 @@
 
   // ---------------------------------------------------------------- 프리셋 ROLE-PS-01~11·13 (P14, roles/p14-s1-screens.md 7장)
   // 개발 역할 파일(backend/apps/staff/roles.json): 팀장 1·5, D03·D01·D10·위생 담당자 2·3, CCP 담당자 1·3(1 = 겸직),
-  // D01·D02 작성 권한자 4(r4 DR-20 — 상신만, 후보 아님. 그 밖의 양식에서 4는 역할 없음).
+  // D01·D02 작성 권한자 4(r4 D-198 — 상신만, 후보 아님. 그 밖의 양식에서 4는 역할 없음).
   // ROLE-PS-12(개선조치 팀장 확인)는 P11 병합 뒤.
   const role = (preset) => ({ unit: 'ROLE', ...preset });
   async function freshOf(types) {
@@ -1784,7 +1784,7 @@
       } }),
     role({ id: 'ROLE-PS-04', label: '팀장 상신(owner 양식)', expect: '201 · 상신 staff 5 = 팀장(담당자 아님) · ④ approval +1(owner 칸 하나), approval_candidate = 그 양식 담당자(2·3) — 팀장은 후보 아님',
       prepare: async () => {
-        // 담당자 칸만 있는 양식(D01)의 작성완료 문서를 불러올 때 새로 만든다(S5 r2 ISR-05 — 시드의 D01은 작성중뿐이라
+        // 담당자 칸만 있는 양식(D01)의 작성완료 문서를 불러올 때 새로 만든다(S5 r2 ISS-054 — 시드의 D01은 작성중뿐이라
         // 예전에는 앞 프리셋 FILE-PS-03이 남긴 문서에 기대어 단독·두 번째 실행에서 준비 실패)
         const m = await fileDoc({ state: 'completed', files: 1 });
         return { func: 'submit', staff: '5', id: String(m.document_id), body: J({ expected_version: m.version }) };
@@ -1853,7 +1853,7 @@
         const m = await fileDoc({ state: 'completed', files: 1 });  // 새 LOT의 D01(작성완료)
         return { func: 'submit', staff: '4', id: String(m.document_id), body: J({ expected_version: m.version }) };
       } }),
-    // P14 r13(DR-23) 작성 권한 — 화면 r7 7장. D03 fixture 점검자 기본 = staff 4(역할 없음)
+    // P14 r13(D-201) 작성 권한 — 화면 r7 7장. D03 fixture 점검자 기본 = staff 4(역할 없음)
     role({ id: 'ROLE-PS-14', label: '작성 권한 없는 수정', expect: '403 ROLE_REQUIRED(required = owner·writer·leader·inspector) · DOC-UPD-01·02 → DOC-WRT-01 → DOC-WRT-02 실패, 잠금(DOC-UPD-03) 없음 · ④ 변화 없음',
       prepare: async () => {
         const { d } = await fixtureDoc({ state: 'draft', inspector: null });  // 점검자 없음 → staff 4는 D03 역할 없음

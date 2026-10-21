@@ -891,7 +891,7 @@ def document_progress(document_ids, actor_id):
 
     반환 {"documents": {id: {request_id, attempt, status, total, approved, pending, my_slots}}}.
     my_slots는 회차가 진행 중일 때 내가 처리할 수 있는 대기 칸 목록(칸 번호 순) — P14: 직접 지정 칸
-    결재자 = 나 또는 역할 칸 후보 = 나. 담당자이면서 팀장이면 2개일 수 있다(DR-05).
+    결재자 = 나 또는 역할 칸 후보 = 나. 담당자이면서 팀장이면 2개일 수 있다(D-183).
     P14에서 latest_slots(일괄 상신 결재선 기본값, D-109)는 없앴다 — 결재선은 설정으로 자동.
     회차가 없는 문서는 빠진다. 빈 목록이면 SQL 없음.
     """

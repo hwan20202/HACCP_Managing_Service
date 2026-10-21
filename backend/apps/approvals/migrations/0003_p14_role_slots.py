@@ -1,5 +1,5 @@
-# ERD v7.2 (P14 역할 기반 결재, DR-11): A20 approval.role · M16 approver_id NULL 허용 · M17 uq_approval_approver 없앰 · A21 approval_candidate
-# SQLite는 approval 표를 다시 만든다(데이터 유지, DR-07) — 운영 적용 전 백업
+# ERD v7.2 (P14 역할 기반 결재, D-189): A20 approval.role · M16 approver_id NULL 허용 · M17 uq_approval_approver 없앰 · A21 approval_candidate
+# SQLite는 approval 표를 다시 만든다(데이터 유지, D-185) — 운영 적용 전 백업
 
 import django.db.models.deletion
 from django.db import migrations, models

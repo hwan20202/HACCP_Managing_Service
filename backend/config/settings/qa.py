@@ -21,7 +21,17 @@ DATA_DIR = qa_path
 DATABASES = deepcopy(DATABASES)
 DATABASES["default"]["NAME"] = DATA_DIR / "db" / "app.sqlite3"
 MEDIA_ROOT = DATA_DIR / "uploads"
-STATIC_ROOT = DATA_DIR / "static"
+STATIC_ROOT = (
+    Path(os.environ.get("HACCP_STATIC_DIR", str(DATA_DIR / "static"))).expanduser().resolve()
+)
+if (
+    STATIC_ROOT == DATA_DIR
+    or DATA_DIR.is_relative_to(STATIC_ROOT)
+    or ROOT_DIR.is_relative_to(STATIC_ROOT)
+    or STATIC_ROOT.is_relative_to(ROOT_DIR)
+    or (STATIC_ROOT.is_relative_to(DATA_DIR) and STATIC_ROOT != DATA_DIR / "static")
+):
+    raise ImproperlyConfigured("QA static directory must be separate from code and business data.")
 # Collected public assets are readable by the separate proxy user; attachments stay 0600.
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},

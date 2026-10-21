@@ -25,7 +25,7 @@
     screens: {},
     PAGE_ALIAS,
     pageOf,
-    staff: null,      // P14 ROLE-A02: 활성 직원 [{id, staff_code, name}] — 고르는 칸·현재 사용자(DR-07)
+    staff: null,      // P14 ROLE-A02: 활성 직원 [{id, staff_code, name}] — 고르는 칸·현재 사용자(D-185)
     people: {},       // id → 직원(비활성 포함 — 지난 기록 표시, S5 r1 Q1 b)
     roles: null,      // P14 ROLE-A01 GET /roles(헤더 없이 — 팀장·양식 담당자, 현재 사용자 선택의 역할 표시)
     container: null,
@@ -122,7 +122,7 @@
     ownerForms(id) {
       return this.roles && id ? this.roles.forms.filter((f) => f.owners.some((p) => p.id === Number(id))).map((f) => f.type_code) : [];
     },
-    // r4(DR-20): 작성 권한자 양식 — 상신만
+    // r4(D-198): 작성 권한자 양식 — 상신만
     writerForms(id) {
       return this.roles && id ? this.roles.forms.filter((f) => (f.writers || []).some((p) => p.id === Number(id))).map((f) => f.type_code) : [];
     },
@@ -131,7 +131,7 @@
       return form ? form.owners.map((p) => p.id) : [];
     },
     leaderIds() { return this.roles ? this.roles.leaders.map((p) => p.id) : []; },
-    // P14 r13(DR-23) 작성 권한(ROLE-R07): 양식 담당자·작성 권한자·HACCP팀장 — 역할 설정 파일 오류면 검사 안 함(C07).
+    // P14 r13(D-201) 작성 권한(ROLE-R07): 양식 담당자·작성 권한자·HACCP팀장 — 역할 설정 파일 오류면 검사 안 함(C07).
     // 문서 화면은 서버가 준 permissions.write를 쓰고, 이 함수는 새 문서 양식 고르기·작성 폼(문서 점검자 포함)용
     canWriteForm(id, typeCode, inspectorId = null) {
       if (!id) return false;
@@ -210,7 +210,7 @@
     },
 
     // ---------- P10 사이드바 숫자 배지(p10-s1-screens 2장, S1-Q4 — 폴링 없음) ----------
-    // 문서함 = 작성 필요 전체(A08 mine=0 counts 합 — 상신 대기·30일 넘은 미완료 제외), 결재함 = 내 칸(대기 total — r7 DR-24 Q2 b).
+    // 문서함 = 작성 필요 전체(A08 mine=0 counts 합 — 상신 대기·30일 넘은 미완료 제외), 결재함 = 내 칸(대기 total — r7 D-202 Q2 b).
     // 화면을 열 때·사용자를 바꿀 때·내가 저장·작성완료·상신·결재·상신 취소·작성 안 함 한 뒤(api 쓰기 호출 성공) 다시 센다.
     // P11: CCP 대시보드 = 내 확인 대기(DOC-A22 summary=1 my_total, 날짜 무관 — p11-s1-screens 2장). 확인·개선조치 저장/삭제 뒤에도(쓰기 호출)
     badgeSeq: 0,
@@ -313,11 +313,13 @@
     TempEntry.open('role-view');
   });
 
-  // 쓰기 호출이 성공하면 배지를 다시 센다(여러 호출이 이어지면 한 번만)
+  // 쓰기 호출이 성공하면 배지를 다시 센다(여러 호출이 이어지면 한 번만).
+  // 409(이미 처리됨·회차 끝남 등 상태 충돌)도 다른 창에서 상태가 바뀐 것이라 다시 센다(ISS-056)
   let badgeTimer = null;
   HaccpApi.onCall((record) => {
     const method = record.request && record.request.method;
-    if (!record.ok || method === 'GET' || !String(record.request.url).startsWith('/api/v1/')) return;
+    const changed = record.ok || record.status === 409;
+    if (!changed || method === 'GET' || !String(record.request.url).startsWith('/api/v1/')) return;
     clearTimeout(badgeTimer);
     badgeTimer = setTimeout(() => TempEntry.refreshBadges(), 300);
   });
