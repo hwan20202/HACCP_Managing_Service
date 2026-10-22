@@ -104,8 +104,10 @@ def _fill(document_id, verdict, inspector=4):
     updates = [
         {"section_id": check["section_id"], "values": {**CHECK[verdict], "verdict": verdict}}
     ]
-    if inspector is not None:
-        updates.append({"section_id": info["section_id"], "values": {"inspector": inspector}})
+    # D-233: 입고(require_for_lot)가 점검자 = 입고 담당자로 채우므로,
+    # inspector=None("점검자 비움")은 명시적으로 지운다(json_patch의 null = 키 삭제).
+    # ACTOR는 D03 담당자라 지정 권한(ROLE-R08) 있음
+    updates.append({"section_id": info["section_id"], "values": {"inspector": inspector}})
     doc.update_document(
         ACTOR,
         document_id,

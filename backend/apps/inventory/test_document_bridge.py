@@ -12,7 +12,7 @@ from django.core.management import call_command
 from django.test import TestCase
 
 from apps.doc_requirements import services as req
-from apps.documents.models import Document, DocumentTemplate
+from apps.documents.models import DocSection, Document, DocumentTemplate
 
 from .fields import kst_now
 from .models import AuditLog, Bom, BomLine, IncomingReceipt, Item, Lot, LotStatus, Staff, Supplier
@@ -85,6 +85,28 @@ class ReceiptHookTests(DocumentBridgeTestCase):
             audit.after_json if isinstance(audit.after_json, dict) else json.loads(audit.after_json)
         )
         self.assertEqual((after["judgment"], after["document_id"]), ("PASS", d03["document_id"]))
+
+    def test_pass_judgment_without_inspection_fills_d03_all_pass(self):
+        receipt = self.receive(judgment="PASS")
+        d03 = next(d for d in receipt.documents["documents"] if d["type_code"] == "D03")
+        self.assertTrue(d03["inspection_applied"])
+        row = DocSection.objects.get(document_id=d03["document_id"], section_def="inspection")
+        self.assertEqual(row.values_json, PASS)
+        self.assertEqual(Lot.objects.get(pk=receipt.lot_id).status, LotStatus.AVAILABLE)
+
+    def test_receipt_staff_becomes_d03_inspector(self):
+        """D-233 Q1 b: 판정과 상관없이 새 D03 점검자 = 입고 담당자."""
+        for key, judgment in (("ins-pass", "PASS"), ("ins-none", None)):
+            with self.subTest(judgment=judgment):
+                receipt = self.receive(key, judgment=judgment)
+                d03 = next(d for d in receipt.documents["documents"] if d["type_code"] == "D03")
+                info = DocSection.objects.get(document_id=d03["document_id"], section_def="info")
+                self.assertEqual(info.values_json.get("inspector"), self.staff.pk)
+
+    def test_fail_judgment_without_inspection_leaves_d03_empty(self):
+        receipt = self.receive(judgment="FAIL")
+        d03 = next(d for d in receipt.documents["documents"] if d["type_code"] == "D03")
+        self.assertFalse(d03["inspection_applied"])
 
     def test_judgment_and_inspection_must_agree(self):
         with self.assertRaisesMessage(ReceivingError, "다릅니다"):

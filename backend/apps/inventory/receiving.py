@@ -201,7 +201,7 @@ def register_receipt(data: ReceiptInput) -> IncomingReceipt:
         # Document app first (D01 · D02 · D03, the inspection values go into the new D03), then the
         # judgment, linked to that D03 (document side 2.1: LOT judgment is applied by inventory).
         documents = document_bridge.incoming_received(
-            lot_id=lot.pk, staff_id=staff.pk, inspection=data.inspection
+            lot_id=lot.pk, staff_id=staff.pk, inspection=_receipt_inspection(data, judgment)
         )
         if judgment:
             apply_incoming_judgment(
@@ -230,6 +230,20 @@ def _receipt_judgment(data):
     if judgment is not None and verdict not in (None, "", judgment):
         raise ReceivingError(f"입고 판정({judgment})과 육안검사 최종판정({verdict})이 다릅니다.")
     return judgment or verdict or None
+
+
+# 입고 때 "적합"만 고르고 검사 값을 따로 보내지 않으면 D03 검사 항목을 모두 적합으로 채운다.
+# 값은 D03 v2 inspection 섹션 선택지(양호/불량, PASS/FAIL). 성적서 유무(has_coa)는 비워 둔다.
+PASS_INSPECTION = {"appearance": "양호", "packaging": "양호", "labeling": "양호", "verdict": "PASS"}
+
+
+def _receipt_inspection(data, judgment):
+    """D03에 넘길 검사 값: 보낸 inspection 그대로, 없고 판정이 PASS면 모두 적합, 그 밖엔 None."""
+    if data.inspection is not None:
+        return data.inspection
+    if judgment == Judgment.PASS:
+        return dict(PASS_INSPECTION)
+    return None
 
 
 def _inspection_document_id(documents):

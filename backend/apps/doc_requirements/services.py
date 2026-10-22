@@ -10,6 +10,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.approvals import services as apr
+from apps.core.http import ApiError
 from apps.core.trace import step
 from apps.documents import services as doc
 from apps.staff import roles
@@ -117,12 +118,32 @@ def _check_inspection(inspection):
     return dict(inspection)
 
 
+def _complete_pass(actor_id, document):
+    """D-233 Q3 b: 입고 때 판정 적합으로 새로 만든 D03은 바로 작성완료(DOC A09).
+
+    작성완료 신호로 EFF가 판정을 수불(apply_incoming_judgment)에 넘긴다
+    — D-080 "작성중 그대로·REQ는 인벤토리를 부르지 않음"을 바꿈.
+    작성완료가 도메인 오류(ApiError: 작성완료 검사·권한·수불 거부)로 막히면 세이브포인트만
+    되돌리고 작성중 그대로 둔다(Q3-2 a — 입고는 계속). 반환 (완료 여부, 오류 코드).
+    """
+    with step("REQ-LOT-04b", "REQ", "적합 D03 작성완료(DOC A09 → EFF 판정 전달)") as s:
+        try:
+            with transaction.atomic():
+                doc.complete_document(actor_id, document["document_id"], document["version"])
+        except ApiError as error:
+            s.note(f"작성완료 안 됨 — 작성중 유지: {error.code}")
+            return False, error.code
+        return True, None
+
+
 def require_for_lot(actor_id, lot_id, inspection=None):
     """F01: 원료 입고 LOT의 D01·D02·D03(LOT마다 1건, P6a — D-084)(REQ-LOT).
 
     inspection(D-080): 수불 입고 화면에서 육안검사까지 입력한 값. D03을 **새로 만들 때만**
-    inspection 섹션에 채운다(이미 있으면 덮지 않음 — inspection_applied false). 문서는 작성중
-    그대로이고, REQ는 인벤토리를 부르지 않는다(입고 때 판정 반영은 수불이 직접).
+    inspection 섹션에 채운다(이미 있으면 덮지 않음 — inspection_applied false).
+    D-233: 새 D03 점검자 = actor(입고 담당자). 최종판정이 PASS면 바로 작성완료(auto_completed),
+    작성완료 신호로 판정이 수불에 전달된다(D-080 "작성중 그대로" 변경). 막히면 작성중 그대로
+    (completion_error). PASS가 아니면 작성중 그대로.
     """
     with step("REQ-LOT-00", "REQ", "트랜잭션·입력 확인"):
         _require_transaction()
@@ -139,6 +160,11 @@ def require_for_lot(actor_id, lot_id, inspection=None):
     for n, type_code in enumerate(rules.LOT_DOCUMENTS, start=2):
         with step(f"REQ-LOT-0{n}", "REQ", f"{type_code} 찾기/만들기(N1)"):
             values = {"info": _info(type_code, lot, day)}
+            if type_code == rules.D03:
+                # D-233 Q1 b·Q2 a: 입고 담당자(actor)를 점검자로 — 새 D03에만
+                # (N1은 기존 문서를 안 씀). 점검자 지정 권한(ROLE-R08)은 입고 자동 채움에
+                # 묻지 않는다(입고 담당자가 직접 검사)
+                values["info"]["inspector"] = actor_id
             if type_code == rules.D03 and inspection is not None:
                 values[rules.D03_INSPECTION] = inspection  # 값은 N1(DOC-GOC-02)이 양식 규칙으로
             out = doc.get_or_create_document(
@@ -153,6 +179,11 @@ def require_for_lot(actor_id, lot_id, inspection=None):
             if type_code == rules.D03:
                 # 이미 있던 D03은 N1이 values를 쓰지 않는다 → 덮어쓰지 않음(FR-22)
                 extra["inspection_applied"] = inspection is not None and out["created"]
+                if extra["inspection_applied"] and inspection.get("verdict") == "PASS":
+                    done, code = _complete_pass(actor_id, out["document"])
+                    extra["auto_completed"] = done
+                    if code:
+                        extra["completion_error"] = code
             documents.append(
                 _item(
                     type_code,
@@ -418,6 +449,7 @@ def _bundle_document(brief, approved, progress, submit=(False, None), can_write=
         "inspector_id": brief["inspector_id"],
         "verdict": brief["verdict"],
         "nonconforming": brief["nonconforming"],
+        "inspection": brief["verdict_values"] or {},  # D-232: 검사 항목(외관·포장·표시·성적서)
         "approved": None
         if approved is None
         else {k: approved[k] for k in ("request_id", "attempt", "closed_at")},

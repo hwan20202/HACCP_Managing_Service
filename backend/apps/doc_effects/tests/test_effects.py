@@ -425,9 +425,32 @@ class InspectionInputTests(EffTestCase):
         detail = self.detail(d03["document_id"])
         values = next(s for s in detail["sections"] if s["section_def"] == "inspection")["values"]
         self.assertEqual({k: values[k] for k in PASS}, PASS)
-        self.assertEqual(detail["status"], "draft")
-        self.assertEqual(lot_status(88), "QUARANTINE")  # REQ는 인벤토리를 부르지 않는다
+        # D-233(D-080 변경): 점검자 = 입고 담당자, PASS면 바로 작성완료 → EFF가 판정 전달
+        info = next(s for s in detail["sections"] if s["section_def"] == "info")["values"]
+        self.assertEqual(info["inspector"], 3)
+        self.assertEqual((detail["status"], d03["auto_completed"]), ("completed", True))
+        self.assertEqual(lot_status(88), "AVAILABLE")
         self.assertNotIn("inspection_applied", by_type(out)["D01"])
+
+    def test_d233_fail_inspection_stays_draft(self):
+        with transaction.atomic():
+            out = req.require_for_lot(3, 88, FAIL)
+        d03 = by_type(out)["D03"]
+        self.assertNotIn("auto_completed", d03)
+        self.assertEqual(self.detail(d03["document_id"])["status"], "draft")
+        self.assertEqual(lot_status(88), "QUARANTINE")
+
+    def test_d233_completion_blocked_keeps_draft(self):
+        """Q3-2 a: 수불이 판정을 거부하면 작성완료만 되돌리고 D03은 작성중, 문서 생성은 그대로."""
+        set_lot_status(88, "REJECTED")  # 이미 부적합 판정 + 사유 없음 → 수불 거부
+        with transaction.atomic():
+            out = req.require_for_lot(3, 88, PASS)
+        d03 = by_type(out)["D03"]
+        self.assertEqual(
+            (d03["auto_completed"], d03["completion_error"]), (False, "INVENTORY_REJECTED")
+        )
+        self.assertEqual(self.detail(d03["document_id"])["status"], "draft")
+        self.assertEqual(lot_status(88), "REJECTED")
 
     def test_tc092_recall_does_not_overwrite(self):
         d = self.d03(88, PASS)
@@ -538,9 +561,8 @@ class EffApiTests(EffTestCase):
         ids = [s["step_id"] for s in body["trace"]["steps"]]
         self.assertTrue(req_flows.matches("REQ-DEV-LOT-INSP", ids), ids)
         d = by_type(body["result"])["D03"]["document_id"]
-        self.assertEqual(self.detail(d)["status"], "draft")
-        self.fill(d, {}, inspector=True)  # 점검자만 채움(검사 값은 입고 때 들어옴)
-        self.assertEqual(self.complete(d)["status"], "completed")  # 같은 판정 → 변화 없음
+        # D-233: 점검자 = 입고 담당자, PASS라 입고 때 바로 작성완료
+        self.assertEqual(self.detail(d)["status"], "completed")
         self.assertEqual(lot_status(lot_id), "AVAILABLE")
 
     @DEV

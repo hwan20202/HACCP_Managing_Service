@@ -228,6 +228,13 @@ class BriefTests(P7DocCase):
                 "verdict": "PASS",
                 "nonconforming": False,
                 "check_counts": None,  # P8 F26: 점검표 양식만
+                # D-232: 판정 섹션 값 전체(묶음 검사 항목 열)
+                "verdict_values": {
+                    "appearance": "양호",
+                    "packaging": "양호",
+                    "labeling": "양호",
+                    "verdict": "PASS",
+                },
             },
         )
         self.assertEqual(

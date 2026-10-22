@@ -2359,6 +2359,14 @@ def _one_row_sections(schema):
     return [section for section in schema["sections"] if not section.get("repeat")]
 
 
+def _verdict_section(schema):
+    """1행 섹션 중 필드 verdict가 있는 첫 섹션(D03은 inspection). 없으면 None."""
+    for section in _one_row_sections(schema):
+        if any(f["key"] == "verdict" for f in section["fields"]):
+            return section
+    return None
+
+
 def _verdict_of(schema, values_by_key):
     """1행 섹션 중 필드 verdict가 있는 첫 섹션의 값과 부적합 여부.
 
@@ -2584,6 +2592,7 @@ def brief_documents(document_ids):
             info = own.get("info") or {}
             verdict, nonconforming = _verdict_of(d.template.schema_json, own)
             counts = validation.check_counts(d.template.schema_json, own)  # P8 F26 변경
+            judged = _verdict_section(d.template.schema_json)
             items.append(
                 {
                     "document_id": document_id,
@@ -2598,6 +2607,10 @@ def brief_documents(document_ids):
                     "verdict": verdict,
                     "nonconforming": nonconforming,
                     "check_counts": counts,
+                    # D-232: 판정 섹션 값 전체(D03 묶음 검사 항목 열). 판정 섹션 없으면 None
+                    "verdict_values": None
+                    if judged is None
+                    else dict(own.get(judged["key"]) or {}),
                 }
             )
         return {"items": items, "missing": [i for i in ids if i not in documents]}
