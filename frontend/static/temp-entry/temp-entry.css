@@ -176,6 +176,22 @@
 .te-verdict-hint[hidden] { display: none; }
 .te-verdict-kv { border: 2px solid var(--brand-primary); border-radius: var(--radius-md); padding: 0.2rem 0.5rem; }
 .te-verdict-kv dd { font-weight: 800; font-size: 0.95rem; }
+/* D-232 r3·r5 육안검사 묶음(DOC-SC-10) — 영역: 머리(날짜 이동) · 작업 막대(요약·일괄 버튼, 회색 상자) · 목록(제목 + 표).
+   글자 크기는 공통 그대로(r5: r3·r4의 키움을 되돌림 — 표 본문 0.85rem·머리 0.8rem). 칸 여백만 촘촘하게 */
+.te-bundle-toolbar { background: var(--bg-base); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: 0.6rem 0.8rem; margin-bottom: 1.2rem; }
+.te-bundle-toolbar .te-bundle-actions { margin-bottom: 0; }
+.te-bundle-list-head { font-weight: 700; margin-bottom: 0.5rem; padding-left: 0.5rem; border-left: 4px solid var(--brand-primary); }
+#bdTable.te-bundle-compact thead th { padding: 0.45rem 0.5rem; }
+#bdTable.te-bundle-compact tbody td { padding: 0.35rem 0.5rem; }
+#bdTable .te-mark-col { text-align: center; width: 1%; white-space: nowrap; }
+#bdTable .te-bundle-item { line-height: 1.25; }
+/* D-235 성적서 바로가기 버튼(묶음 성적서 칸·상세 성적서 유무 옆) */
+.te-coa-go-btn { margin-left: 0.4rem; padding: 0.1rem 0.45rem; font-size: 0.72rem; }
+#bdTable .te-coa-go-btn { margin: 0.2rem 0 0; }
+/* D-232 r1 Q3 b: 판정 굵게, 부적합 줄 옅은 붉은 바탕(선택 줄 파랑이 위) */
+#bdTable .te-verdict-col { font-weight: 700; white-space: nowrap; }
+#bdTable tbody tr.te-row-ng td { background: #fdecec; }
+#bdTable tbody tr.te-row-ng.te-row-picked td { background: #eef6ff; }
 #bdTable .mono, .te-bundle-missing .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
 .te-excluded summary { cursor: pointer; font-weight: 600; }
 .te-excluded ul { margin: 0.3rem 0 0 1.1rem; display: grid; gap: 0.15rem; }

@@ -37,7 +37,7 @@ FLOWS = {
     ],
     "DOC-DEL": ["DOC-DEL-01", *WRT, "DOC-DEL-02", "DOC-DEL-03"],
     # 01b: 연결 파일 보존 표시(스프린트 3)
-    "DOC-LCK": ["DOC-LCK-00", "DOC-LCK-01", "DOC-LCK-01b", "DOC-LCK-02"],
+    "DOC-LCK": ["DOC-LCK-00", "DOC-LCK-01", "DOC-LCK-01b", "DOC-LCK-01c", "DOC-LCK-02"],
     # P6: 생명주기 함수는 상태 변경 뒤 DOC-SIG-01(신호)을 지난다(p6-s2-spec 4.7)
     "DOC-APV": ["DOC-APV-01", "DOC-SIG-01", "DOC-APV-02"],
     "DOC-RJT": ["DOC-RJT-01", "DOC-SIG-01", "DOC-RJT-02"],

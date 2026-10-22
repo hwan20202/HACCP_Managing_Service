@@ -14,8 +14,8 @@ from apps.doc_requirements import flows, sources
 from apps.doc_requirements import services as req
 from apps.document_workflow import services as wf
 from apps.document_workflow.tests.base import invariant_violations
+from apps.document_workflow.tests.p7 import CHECK, d03, fill, new_lot, setup_p7
 from apps.document_workflow.tests.p7 import DAY as P7_DAY
-from apps.document_workflow.tests.p7 import d03, fill, new_lot, setup_p7
 from apps.staff import roles
 from apps.staff.tests.base import RolesFileMixin, default_roles
 
@@ -44,7 +44,8 @@ class IncomingBundleTests(TestCase):
         with CaptureQueriesContext(connection) as ctx:
             res = self.get()
         self.assertEqual(res.status_code, 200, res.content)
-        self.assertLessEqual(len(ctx.captured_queries) - 1, 8)  # 사용자 확인(API) 제외
+        # 사용자 확인(API) 제외. D-234: + 성적서 유무 계산 1(F26)
+        self.assertLessEqual(len(ctx.captured_queries) - 1, 9)
         body = res.json()
         lots = body["lots"]
         self.assertEqual(
@@ -141,6 +142,22 @@ class IncomingBundleTests(TestCase):
         self.assertEqual((document["approved_verdict"], document["verdict"]), ("PASS", "FAIL"))
         self.assertTrue(document["correcting"])
         self.assertEqual(req.incoming_bundle(1, DAY)["summary"]["correcting_count"], 1)
+
+    def test_inspection_values_in_bundle(self):
+        """D-232: 묶음 문서 줄에 검사 항목 값(작성 전은 성적서 유무 계산 값만 — D-234)."""
+        empty = d03("empty", day=DAY)  # 검사·점검자 없음(작성중)
+        filled = d03("empty", day=DAY)
+        fill(filled["document_id"], "FAIL", actor=3)
+        docs = {
+            x["document"]["document_id"]: x["document"]
+            for x in req.incoming_bundle(1, DAY)["lots"]
+            if x["document"]
+        }
+        # D-234: 성적서 유무만 계산 값(저장 값 없음, D01 파일 없음 → 무)
+        self.assertEqual(docs[empty["document_id"]]["inspection"], {"has_coa": "무"})
+        self.assertEqual(docs[empty["document_id"]]["inspection_derived"], ["has_coa"])
+        got = docs[filled["document_id"]]["inspection"]
+        self.assertEqual({k: got.get(k) for k in CHECK["FAIL"]}, CHECK["FAIL"])
 
     def test_source_missing_and_trace(self):
         d03("draft", day=DAY)

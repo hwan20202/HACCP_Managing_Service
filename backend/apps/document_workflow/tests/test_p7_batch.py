@@ -436,7 +436,8 @@ class BatchSubmitTests(P7Case):
             for q in ctx.captured_queries
             if q["sql"].startswith("SELECT") and '"staff"' not in q["sql"]
         ]  # 역할 설정 읽기(staff)는 운영에서 서버 시작 뒤 한 번 — 테스트는 매번이라 뺀다
-        self.assertEqual(len(reads), 6, reads)  # F26 3 + 문서마다 양식 유형 1(P14 WF-SUB-02b)
+        # F26 3 + 성적서 유무 계산 1(D-234) + 문서마다 양식 유형 1(P14 WF-SUB-02b)
+        self.assertEqual(len(reads), 7, reads)
 
 
 # ---------------------------------------------------------------- 7.3 대상 요약(ISS-018)

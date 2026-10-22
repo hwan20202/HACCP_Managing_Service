@@ -211,7 +211,7 @@ class BriefTests(P7DocCase):
         ids = [good["document_id"], bad["document_id"], other["document_id"], gone["document_id"]]
         with CaptureQueriesContext(connection) as ctx:
             res = self.client.get(f"/api/v1/documents/brief?ids={','.join(map(str, ids))}")
-        self.assertLessEqual(len(ctx.captured_queries), 3)
+        self.assertLessEqual(len(ctx.captured_queries), 4)  # D-234: + 성적서 유무 계산 1
         body = res.json()
         self.assertEqual(body["missing"], [gone["document_id"]])
         items = {i["document_id"]: i for i in body["items"]}
@@ -228,6 +228,16 @@ class BriefTests(P7DocCase):
                 "verdict": "PASS",
                 "nonconforming": False,
                 "check_counts": None,  # P8 F26: 점검표 양식만
+                # D-232: 판정 섹션 값 전체(묶음 검사 항목 열)
+                # D-234: 성적서 유무는 저장 값이 없어 계산 값(D01 파일 없음 → 무)
+                "verdict_values": {
+                    "appearance": "양호",
+                    "packaging": "양호",
+                    "labeling": "양호",
+                    "verdict": "PASS",
+                    "has_coa": "무",
+                },
+                "verdict_derived": ["has_coa"],
             },
         )
         self.assertEqual(
