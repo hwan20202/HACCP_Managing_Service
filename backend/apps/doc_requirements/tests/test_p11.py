@@ -179,7 +179,7 @@ class CcpBatchAreaTests(P11ReqTestCase):
 
     def test_tc033_other_deviations(self):
         d = ccp_doc("CCP-1P", 12)
-        ok_row, bad_row = add_rows(d, "rounds", [r1p("09:00"), r1p("10:00", gauss=9000)])
+        ok_row, bad_row = add_rows(d, "rounds", [r1p("09:00"), r1p("10:00", gauss=7000)])
         on_bad = deviation(d, bad_row)
         whole = deviation(d, None, checkers=())
         on_ok = deviation(d, ok_row)

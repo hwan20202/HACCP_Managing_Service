@@ -11,6 +11,7 @@ from apps.approvals import services as apr
 from apps.document_workflow import flows, print_forms, printing
 from apps.document_workflow import services as wf
 from apps.documents import services as doc
+from apps.documents.models import Document, DocumentTemplate
 from apps.documents.tests.p4 import (
     DAY,
     at,
@@ -85,6 +86,46 @@ class SheetKindTests(PrintTestCase):
 
 
 class SingleSheetTests(PrintTestCase):
+    def _assert_ccp1p_print_guide(self, version, expected, old_text):
+        document_id = new_ccp(legacy=False)["document"]["document_id"]
+        template = DocumentTemplate.objects.get(type_code="CCP-1P", version=version)
+        Document.objects.filter(pk=document_id).update(template_id=template.pk)
+        start, end = rows_of(document_id, "rounds")
+        patch(
+            document_id,
+            {
+                "update": [
+                    {
+                        "section_id": start["section_id"],
+                        "values": {
+                            "measured_at": at("08:50"),
+                            "gauss": 10000,
+                            "rod_cleaned": "O",
+                        },
+                    },
+                    {
+                        "section_id": end["section_id"],
+                        "values": {
+                            "measured_at": at("17:00"),
+                            "gauss": 10000,
+                            "rod_cleaned": "O",
+                        },
+                    },
+                ]
+            },
+        )
+        set_info(document_id, {"inspector": 4})
+        complete(document_id)
+        guide = self.sheet(document_id)["guide"][0]["rows"][0][1]
+        self.assertIn(expected, guide)
+        self.assertNotIn(old_text, guide)
+
+    def test_ccp1p_v2_print_keeps_old_guide(self):
+        self._assert_ccp1p_print_guide(2, "자력 10,000가우스 자석봉 8개 사용", "Φ42.7")
+
+    def test_ccp1p_v3_print_has_new_guide(self):
+        self._assert_ccp1p_print_guide(3, "자력 8,000가우스, Φ42.7", "자석봉 8개")
+
     def test_tc003_approved_values_boxes_and_people(self):
         document_id = approved_ccp1p()
         deviation = doc.create_deviation(
@@ -172,6 +213,34 @@ class SingleSheetTests(PrintTestCase):
         complete(document_id)
         sheet = self.sheet(document_id)["document"]
         self.assertEqual((sheet["work_date"], sheet["measured_until"]), (DAY, "2026-10-12"))
+
+    def test_ccp2b_v3_prints_end_only_elapsed(self):
+        document_id = new_ccp("CCP-2B", "2B", legacy=False)["document"]["document_id"]
+        start, end = rows_of(document_id, "rounds")
+        patch(
+            document_id,
+            {
+                "update": [
+                    {
+                        "section_id": start["section_id"],
+                        "values": {"measured_at": at("23:00"), "temp_c": 70},
+                    },
+                    {
+                        "section_id": end["section_id"],
+                        "values": {"measured_at": at("01:00", "2026-10-12"), "temp_c": 70},
+                    },
+                ]
+            },
+        )
+        set_info(document_id, {"inspector": 4})
+        complete(document_id)
+        data = self.sheet(document_id)
+        rows = data["document"]["sections"]["rounds"]
+        self.assertNotIn("dry_minutes", rows[0]["values"])
+        self.assertEqual(rows[1]["values"]["dry_minutes"], 120)
+        self.assertEqual(rows[1]["values"]["time_verdict"], "적합")
+        self.assertEqual(data["template"]["version"], 3)
+        self.assertIn("측정일시의 차이", data["guide"][0]["rows"][2][1])
 
     def test_ccp3p_v2_fields(self):
         document_id = new_ccp("CCP-3P", "3P")["document"]["document_id"]

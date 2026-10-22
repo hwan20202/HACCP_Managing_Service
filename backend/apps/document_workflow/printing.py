@@ -185,6 +185,16 @@ def _people(ids):
     return {str(k): v for k, v in sorted(names.items())}
 
 
+def _single_guide(detail):
+    type_code = detail["template"]["type_code"]
+    version = detail["template"]["version"]
+    if type_code == "CCP-1P" and version >= 3:
+        return print_forms.CCP_1P_8000_GUIDE
+    if type_code == "CCP-2B" and version >= 3:
+        return print_forms.CCP_2B_ELAPSED_GUIDE
+    return print_forms.GUIDES.get(type_code, detail["guide"])
+
+
 def _single(detail, slot_info):
     type_code = detail["template"]["type_code"]
     schema_sections = detail["schema_sections"]
@@ -213,7 +223,7 @@ def _single(detail, slot_info):
             },
             "title": title,
             "subtitle": subtitle,
-            "guide": print_forms.GUIDES.get(type_code, detail["guide"]),
+            "guide": _single_guide(detail),
             "boxes": boxes,
             "key": {"document_id": detail["document_id"]},
             "printable_count": 1,

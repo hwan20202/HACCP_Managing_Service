@@ -1214,6 +1214,18 @@ def update_document(actor_id, document_id, patch):
                 }
                 for sid in deletes:
                     key = current[sid].section_def
+                    fixed = validation.fixed_phase_values(schema_sections.get(key, {}))
+                    if fixed and (current[sid].values_json or {}).get(fixed[0]) in (
+                        fixed[1],
+                        fixed[3],
+                    ):
+                        problems.append(
+                            validation.error(
+                                f"sections.delete[{sid}]",
+                                "fixed_phase",
+                                "기본 시작·종료 행은 삭제할 수 없습니다.",
+                            )
+                        )
                     if schema_sections.get(key, {}).get("system_rows"):
                         problems.append(
                             validation.error(
@@ -1244,6 +1256,19 @@ def update_document(actor_id, document_id, patch):
                     merged = validation.merge_patch(row.values_json, patch_values)
                     section = schema_sections.get(row.section_def)
                     if section:
+                        fixed = validation.fixed_phase_values(section)
+                        if (
+                            fixed
+                            and fixed[0] in patch_values
+                            and patch_values[fixed[0]] != (row.values_json or {}).get(fixed[0])
+                        ):
+                            problems.append(
+                                validation.error(
+                                    f"{path}.{fixed[0]}",
+                                    "fixed_phase",
+                                    "측정 구분은 바꿀 수 없습니다.",
+                                )
+                            )
                         problems += validation.system_key_errors(section, patch_values, path)
                         row_errors, _ = validation.check_values(section, merged, path)
                         problems += row_errors
@@ -1282,6 +1307,15 @@ def update_document(actor_id, document_id, patch):
                         )
                         continue
                     values = item.get("values", {})
+                    fixed = validation.fixed_phase_values(section)
+                    if fixed and (not isinstance(values, dict) or values.get(fixed[0]) != fixed[2]):
+                        problems.append(
+                            validation.error(
+                                f"{path}.values.{fixed[0]}",
+                                "fixed_phase",
+                                f"'{fixed[2]}' 행만 추가할 수 있습니다.",
+                            )
+                        )
                     problems += validation.system_key_errors(section, values, f"{path}.values")
                     row_errors, _ = validation.check_values(section, values, f"{path}.values")
                     problems += row_errors
@@ -1300,6 +1334,17 @@ def update_document(actor_id, document_id, patch):
                     if section.get("max_rows") and len(rows) > section["max_rows"]:
                         problems.append(validation.max_rows_error(key, section))
                     duplicates += validation.duplicate_rounds(rows)
+                    fixed = validation.fixed_phase_values(section)
+                    if fixed:
+                        phases = [v.get(fixed[0]) for _, v in rows if isinstance(v, dict)]
+                        if phases.count(fixed[1]) != 1 or phases.count(fixed[3]) != 1:
+                            problems.append(
+                                validation.error(
+                                    f"sections[{key}]",
+                                    "fixed_phase",
+                                    "시작·종료 행은 각각 1개여야 합니다.",
+                                )
+                            )
                 if problems or duplicates:
                     s.fail(f"오류 {len(problems)}건, 중복 {len(duplicates)}건")
                 _raise_if_invalid(problems, duplicates)
@@ -1321,6 +1366,45 @@ def update_document(actor_id, document_id, patch):
                             key,
                             validation.with_computed(schema_sections[key], values),
                         )
+                elapsed_only = []
+                for key, section in schema_sections.items():
+                    if not section.get("elapsed"):
+                        continue
+                    candidates = [
+                        (sid, values)
+                        for sid, (_, row_key, values) in final.items()
+                        if row_key == key
+                    ]
+                    calculated, _ = validation.elapsed_values(
+                        section, [values for _, values in candidates]
+                    )
+                    order = section["phase_order"]
+                    end_row = next(
+                        (
+                            (sid, values)
+                            for sid, values in candidates
+                            if values.get(order["field"]) == order["last"]
+                        ),
+                        None,
+                    )
+                    if end_row is None or end_row[0] not in current:
+                        continue
+                    end_id, end_values = end_row
+                    patch_values = {
+                        field: value
+                        for field, value in calculated.items()
+                        if end_values.get(field) != value
+                    }
+                    if not patch_values:
+                        continue
+                    index = next(
+                        (i for i, (sid, _) in enumerate(merged_updates) if sid == end_id), None
+                    )
+                    if index is None:
+                        elapsed_only.append((end_id, patch_values))
+                    else:
+                        sid, user_patch = merged_updates[index]
+                        merged_updates[index] = (sid, {**user_patch, **patch_values})
                 s.note(f"계산한 행 {recomputed + len(new_rows)}")
 
             with step("DOC-UPD-06", "DOC", "기본 정보 반영") as s:
@@ -1351,6 +1435,20 @@ def update_document(actor_id, document_id, patch):
                     )
                 if not merged_updates:
                     s.skip("변경 행 없음")
+            with step("DOC-UPD-08b", "DOC", "종료 행 계산값 반영(측정자 보존)") as s:
+                for section_id, patch_values in elapsed_only:
+                    DocSection.objects.filter(
+                        document_id=document_id, section_id=section_id
+                    ).update(
+                        values_json=Func(
+                            F("values_json"),
+                            Value(json.dumps(patch_values, ensure_ascii=False)),
+                            function="json_patch",
+                            output_field=models.JSONField(),
+                        )
+                    )
+                if not elapsed_only:
+                    s.skip("자동 계산값 변화 없음")
             with step("DOC-UPD-09", "DOC", "행 추가") as s:
                 if new_rows:
                     next_no = {}
@@ -2281,8 +2379,8 @@ def get_or_create_document(
         if problems:
             s.fail(f"오류 {len(problems)}건")
             raise errors.ValidationFailed(details=problems)
-    with step("DOC-GOC-03", "DOC", "1행 영역 행 만들기(P8: na_default·initial, 호출자 값 우선)"):
-        DocSection.objects.bulk_create(
+    with step("DOC-GOC-03", "DOC", "기본정보와 고정 시작·종료 행 만들기"):
+        initial_rows = [
             DocSection(
                 document_id=document_id,
                 section_def=key,
@@ -2299,7 +2397,22 @@ def get_or_create_document(
             )
             for key, section in schema_sections.items()
             if not section["repeat"]
-        )
+        ]
+        for key, section in schema_sections.items():
+            fixed = validation.fixed_phase_values(section)
+            if fixed:
+                for row_no, phase in enumerate((fixed[1], fixed[3]), 1):
+                    initial_rows.append(
+                        DocSection(
+                            document_id=document_id,
+                            section_def=key,
+                            row_no=row_no,
+                            values_json={fixed[0]: phase},
+                            recorded_at=None,
+                            recorded_by_id=None,
+                        )
+                    )
+        DocSection.objects.bulk_create(initial_rows)
     with step("DOC-GOC-04", "DOC", "업무 대상 참조"):
         _insert_refs(document_id, None, clean_refs, now)
     with step("DOC-GOC-05", "DOC", "결과"):
@@ -3437,6 +3550,17 @@ def _reasons(section, values):
                     "expect": _expect(item),
                 }
             )
+    elapsed = section.get("elapsed")
+    if elapsed and (values or {}).get(elapsed["verdict_field"]) == "부적합":
+        field = elapsed["value_field"]
+        reasons.append(
+            {
+                "field": field,
+                "label": labels.get(field, field),
+                "value": values.get(field),
+                "expect": {"min": elapsed["min"], "max": elapsed["max"]},
+            }
+        )
     return reasons
 
 
@@ -3513,7 +3637,9 @@ def measurement_summary(work_date, type_codes, note_fields=None):
                 order = section.get("phase_order")
                 at = values.get(order["time_field"]) if order else None
                 if order:
-                    by_section[row.section_def] = by_section.get(row.section_def, 0) + 1
+                    # 기본 시작·종료 슬롯은 실측일시가 들어오기 전에는 측정 건수가 아니다.
+                    if at:
+                        by_section[row.section_def] = by_section.get(row.section_def, 0) + 1
                     if at and (
                         latest is None or (at, row.row_no) > (latest["at"], latest["row_no"])
                     ):
