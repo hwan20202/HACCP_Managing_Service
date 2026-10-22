@@ -346,6 +346,7 @@
     openSubmit(rows, line, opts) { return guardOpen(() => this.showSubmit(rows, line, opts)); },
     async showSubmit(rows, line, { onDone, openDoc }) {
       const cfg = await batchConfig();
+      const noCoa = (list) => list.filter((r) => r.coa === '무');  // D-234 Q3 b
       const BLOCK = {
         role_required: '이 양식의 담당자·작성 권한자나 HACCP팀장만 상신할 수 있습니다',
         no_config: '결재 칸 구성이 역할 설정에 없음',
@@ -377,6 +378,8 @@
           ${blocked.length ? `<ul class="te-blocked" id="bxBlocked">${blocked.map((r) => `<li data-blocked="${r.document_id}">⚠ 상신 불가 — <b>${rowName(r)}</b> <span class="te-hint">${esc(BLOCK[r.submit_block] || r.submit_block || '')}</span>
             ${r.submit_block === 'role_required' ? T.roleLink() : ''}</li>`).join('')}</ul>` : ''}
           ${excludedHtml(excluded)}
+          ${noCoa(targets).length ? `<div class="te-notice" id="bxNoCoa">⚠ 시험성적서 없음 ${noCoa(targets).length}건 — ${noCoa(targets).map((r) => `<b>${rowName(r)}</b>`).join(', ')}.
+            상신하면 성적서 유무가 "무"로 확정됩니다. 성적서가 있다면 같은 LOT의 시험성적서 문서에 파일을 올린 뒤 상신하세요.</div>` : ''}
           ${overLimit(targets.length, cfg.max_items)}
           <p class="te-status-note" style="margin-top:1rem">상신하면 문서가 잠겨 결재가 끝날 때까지 수정할 수 없습니다.</p>`;
         const can = api.staffId && targets.length && targets.length <= cfg.max_items && !state.busy;
@@ -561,6 +564,9 @@
     // ================================================= WF-SC-02 상신 확인 (P14: 결재선 지정 → 확인, Q7 a·S1-Q5 a)
     // 결재선 = 문서 상세 approval_line(서버가 상신 때 같은 설정으로 만든다). 보내는 값은 {expected_version}뿐
     openSubmit(d, latest, reload) {
+      // D-234 Q3 b: 성적서 유무 실제 값(저장 값, 없으면 자동 계산) — "무"면 경고, 상신은 가능
+      const coaRow = (d.sections || []).find((s) => ((s.values || {}).has_coa || (s.hints || {}).has_coa));
+      const coa = coaRow ? ((coaRow.values || {}).has_coa || (coaRow.hints || {}).has_coa) : null;
       const m = formModal({ title: `${latest ? '재상신' : '결재 상신'} · 문서 #${d.document_id} (v${d.version})`, wide: true });
       m.wrap.querySelector('.te-modal').id = 'teSubmitModal';
       const state = { top: '', busy: false };
@@ -571,6 +577,8 @@
           <div class="te-sub">결재선 (양식 설정)</div>
           ${lineHtml(d.approval_line)}
           ${latest ? '<p class="te-hint">재상신 결재선은 지금 설정으로 새로 만듭니다(직전 회차 결재선이 아님).</p>' : ''}
+          ${coa === '무' ? `<div class="te-notice" id="apNoCoa">⚠ 시험성적서 없음 — 상신하면 성적서 유무가 "무"로 확정됩니다.
+            성적서가 있다면 같은 LOT의 시험성적서 문서에 파일을 올린 뒤 상신하세요.</div>` : ''}
           <p class="te-status-note" style="margin-top:1rem">상신하면 문서가 잠겨 결재가 끝날 때까지 수정할 수 없습니다.</p>
           ${api.staffId ? '' : '<div class="te-notice">현재 사용자를 선택하세요.</div>'}`;
         m.footer.innerHTML = `<button class="btn btn-secondary" id="apCancel">취소</button>

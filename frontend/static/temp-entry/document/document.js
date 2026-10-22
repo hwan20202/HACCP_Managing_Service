@@ -123,7 +123,9 @@
     return out;
   }
   const isNonconforming = (section, values) => !!section.nonconforming && evaluate(section.nonconforming, withComputed(section, values)) === true;
-  const isSystem = (fd) => fd.readonly || !!fd.computed;
+  // D-234 r1: 성적서 유무(file_exists hint)는 시스템 계산 — 입력·전송하지 않는다(서버도 거부)
+  const isFileHint = (fd) => !!(fd.hint && fd.hint.kind === 'file_exists');
+  const isSystem = (fd) => fd.readonly || !!fd.computed || isFileHint(fd);
   const hasComputed = (section) => section.fields.some((fd) => fd.computed);
   const optionLabel = (fd, v) => (fd.option_labels && fd.option_labels[v]) || v;
   const fmtMinutes = (m) => `${Math.floor(m / 60)}시간 ${m % 60}분`;
@@ -620,6 +622,7 @@
           inspector_id: x.inspector_id, attempt: x.progress ? x.progress.attempt : null, my_slots: x.my_slots || [], progress: x.progress,
           can_submit: x.can_submit, submit_block: x.submit_block,  // P14: 일괄 상신 미리 표시(S1-Q7)
           can_write: x.can_write,  // r13 ROLE-R07(작성 안 함 등 문서별 쓰기)
+          coa: (x.inspection || {}).has_coa || null,  // D-234 Q3 b: 상신 모달 "성적서 없음" 경고
         };
       });
     },
@@ -655,7 +658,9 @@
       const missing = lots.filter((l) => !l.document);
       // D-232: 검사 항목 열(외관·포장·표시 ○/✕, 성적서 유/무, 미입력 –)
       const mark = (v) => (v === '양호' ? '○' : v === '불량' ? '<span class="te-judge-ng">✕</span>' : '<span class="te-hint">–</span>');
-      const coa = (v) => (v ? esc(v) : '<span class="te-hint">–</span>');
+      // D-234 r1: 성적서 유무 = 시스템 값. 상신 전은 지금 파일 기준 "(자동)", 결재중·승인은 확정 값
+      const coa = (v, derived) => (!v ? '<span class="te-hint">–</span>'
+        : derived ? `<span class="te-hint" title="같은 LOT 시험성적서 파일 기준 — 상신 때 확정">${esc(v)} (자동)</span>` : esc(v));
       body.innerHTML = `
         <div class="te-bundle-toolbar" id="bdToolbar">
         <div class="te-bundle-summary" id="bdSummary">
@@ -687,7 +692,7 @@
               <td class="te-bundle-item">${esc(l.item_name)}${l.material_kind ? ` <span class="te-hint">${esc(l.material_kind)}</span>` : ''}<div class="te-hint">${esc(l.supplier_name)}</div></td>
               <td class="te-verdict-col">${x.verdict ? `<span class="${ng ? 'te-judge-ng' : ''}">${ng ? '부적합' : '적합'}</span>` : '<span class="te-hint">–</span>'}</td>
               ${['appearance', 'packaging', 'labeling'].map((k) => `<td class="te-mark-col" data-insp="${k}">${mark((x.inspection || {})[k])}</td>`).join('')}
-              <td class="te-mark-col" data-insp="has_coa">${coa((x.inspection || {}).has_coa)}</td>
+              <td class="te-mark-col" data-insp="has_coa">${coa((x.inspection || {}).has_coa, (x.inspection_derived || []).includes('has_coa'))}</td>
               <td>${statusCell(x.status, x.correcting)}</td>
               <td>${approval(x)}</td>
               <td>${T.personHtml(x.inspector_id)}</td>
@@ -1066,6 +1071,7 @@
             values: { ...s.values }, original: { ...s.values }, deleted: false, hints: s.hints || {},
           };
           // hint(FR-28): 빈 칸을 계산 값으로 채운다. 저장 전까지는 "변경"으로 표시된다.
+          // D-234 r1: 성적서 유무는 서버가 values에 시스템 값을 주므로 여기서 채울 일이 없다
           Object.entries(row.hints).forEach(([k, v]) => {
             if (row.values[k] === undefined || row.values[k] === null || row.values[k] === '') { row.values[k] = v; hinted.push(`${row.uid}.${k}`); }
           });
@@ -1120,6 +1126,7 @@
       const name = `data-row="${row.uid}" data-field="${field.key}"`;
       const v = value === undefined || value === null ? '' : value;
       if (field.readonly) return `<span class="te-ro" title="자동 입력(수정 불가)">${this.display(field, value)}</span>`;
+      if (isFileHint(field)) return `<span class="te-ro" title="같은 LOT 시험성적서 파일 유무로 자동(상신 때 확정)">${this.display(field, value)}</span>`;
       if (field.computed) {
         const section = this.form.sectionByKey[row.key];
         return `<span data-computed="${row.uid}.${field.key}">${this.display(field, withComputed(section, row.values)[field.key])}</span>`;
