@@ -1,0 +1,243 @@
+/* P12 인쇄용 페이지 (PRT-SC-01~03) — CCP A4 세로, D03 A4 가로(print.js가 @page를 바꿈), 종이 양식(표준 PDF 6·93~95쪽·캔디류 3P) 칸 배치 */
+@page {
+  size: A4 portrait;
+  margin: 10mm 10mm 12mm;
+  @bottom-center { content: counter(page) " / " counter(pages); font-size: 9pt; }
+}
+:root {
+  --ink: #111;
+  --line: #222;
+  --shade: #ececec;
+  --paper: #fff;
+  --desk: #e7e9ee;
+  --accent: #2557d6;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--desk);
+  color: var(--ink);
+  font-family: "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  font-size: 9pt;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+/* 화면 전용 버튼 줄 */
+.prt-toolbar {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px; background: #fff; border-bottom: 1px solid #cfd3da;
+}
+.prt-toolbar-title { font-weight: 700; font-size: 14px; }
+.prt-spacer { flex: 1; }
+.prt-btn {
+  font: inherit; font-size: 14px; padding: 6px 16px; border-radius: 6px;
+  border: 1px solid #b8bec9; background: #fff; cursor: pointer;
+}
+.prt-btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.prt-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+.prt-root { padding: 16px 0 40px; }
+.prt-sheet {
+  width: 190mm; margin: 0 auto; background: var(--paper);
+  padding: 0; box-shadow: 0 2px 12px rgba(0, 0, 0, .15);
+}
+.prt-msg {
+  max-width: 480px; margin: 80px auto; padding: 24px; text-align: center;
+  background: #fff; border-radius: 8px; font-size: 15px; line-height: 1.6;
+}
+.prt-msg small { display: block; color: #666; margin-top: 6px; font-size: 12px; }
+
+/* 종이 표 */
+table.prt { width: 100%; border-collapse: collapse; table-layout: fixed; }
+table.prt + table.prt { margin-top: -1px; }
+.prt th, .prt td {
+  border: 1px solid var(--line); padding: 1.3mm 1.4mm; vertical-align: middle;
+  text-align: center; line-height: 1.35; word-break: keep-all; overflow-wrap: anywhere;
+}
+.prt th { background: var(--shade); font-weight: 700; }
+.prt td.l, .prt th.l { text-align: left; }
+.prt .pre { white-space: pre-line; text-align: left; }
+.prt .sm { font-size: 8pt; }
+.prt td.pre.sm { font-size: 7.5pt; line-height: 1.22; padding-top: 1mm; padding-bottom: 1mm; }
+/* 3P(캔디류)는 종이 1장에 맞게 더 촘촘히 */
+[data-type="CCP-3P"] .prt th, [data-type="CCP-3P"] .prt td { padding-top: .8mm; padding-bottom: .8mm; }
+[data-type="CCP-3P"] .rows td { height: 6.5mm; }
+[data-type="CCP-3P"] .sum td { height: 5mm; }
+[data-type="CCP-3P"] .devs td { height: 7.5mm; }
+[data-type="CCP-3P"] .guide3p td { font-size: 8pt; }
+[data-type="CCP-3P"] .prt-head td.sign { height: 13mm; }
+[data-type="CCP-3P"] td.pre.sm { font-size: 7.2pt; line-height: 1.18; }
+.prt .muted { color: #555; }
+.prt .bold { font-weight: 700; }
+.prt .bad { font-weight: 700; text-decoration: underline; }
+.prt .cap { background: var(--shade); font-weight: 700; }
+.prt tr { break-inside: avoid; }
+.prt thead { display: table-header-group; }
+
+/* 머리: 제목 · 기록확인 · 결재 칸 */
+.prt-head td.title { padding: 2.5mm 2mm; }
+.prt-head .t1 { font-size: 20pt; font-weight: 800; letter-spacing: .5px; }
+.prt-head .t2 { font-size: 14pt; font-weight: 700; margin-top: 1mm; }
+.prt-head th.vert { width: 9mm; padding: 1mm; font-size: 9pt; }
+.prt-head th.box { width: 24mm; font-size: 9pt; padding: 1.2mm; }
+.prt-head td.sign { height: 15mm; font-size: 9pt; }
+.prt-head td.sign .who { font-weight: 700; }
+
+/* 칸 값 표시 */
+/* 동그라미 테두리는 모든 칸에 같은 두께(투명)로 둬서 값이 있는 행만 높아지지 않게(R4) */
+.ox { display: inline-block; min-width: 1.6em; border: 1.2px solid transparent; border-radius: 50%; }
+.ox.on { border-color: var(--ink); font-weight: 700; }
+.chk { white-space: nowrap; }
+.rows td { height: 7.5mm; }
+.prt td.merge { border-top: 0; border-bottom: 0; }
+.prt td.merge.last { border-bottom: 1px solid var(--line); }
+.prt td.merge.first { position: relative; }
+.prt .merge-body { position: absolute; top: 2.5mm; left: 1mm; right: 1mm; text-align: center; line-height: 1.35; }
+.prt td.signer { white-space: nowrap; }
+.prt td.signer .tight { font-size: 7.5pt; letter-spacing: -.2px; }
+.prt td.signer .tighter { font-size: 6.5pt; letter-spacing: -.3px; }
+.rows td:nth-child(2) { white-space: nowrap; }
+.sum td { height: 6mm; }
+.devs td { height: 10mm; }
+
+/* 페이지 전체를 표로 — 쪽마다 머리 반복 */
+table.prt-page { width: 100%; border-collapse: collapse; }
+table.prt-page > thead > tr > td, table.prt-page > tbody > tr > td { padding: 0; border: 0; }
+
+/* D03 원료/부자재 육안검사일지 — A4 가로(277mm), 9줄/쪽(p12-d03-policy.md DP-10·11) */
+.prt-sheet[data-kind="receiving"] { width: 277mm; }
+.prt-sheet + .prt-sheet { margin-top: 16px; }
+.d03-title td.title { padding: 3mm 2mm; }
+.d03-title .t1 { font-size: 20pt; font-weight: 800; letter-spacing: 1px; }
+.d03-lines th { padding: .8mm .6mm; font-size: 8.5pt; }
+.d03-lines th.sm { font-size: 7.5pt; line-height: 1.25; }
+.d03-lines tbody td { height: 11.5mm; padding: .6mm .8mm; }
+.d03-lines td.pk { padding: .4mm .3mm; white-space: nowrap; }
+.d03-lines .pick { font-size: 8.5pt; line-height: 1.3; color: #444; }
+.d03-lines .pick.on { color: var(--ink); font-weight: 600; }
+.d03-lines .pick.bad { font-weight: 800; text-decoration: none; }  /* 부적합 굵게만(U3 a) */
+.d03-lines td.none { color: #444; letter-spacing: 2px; }
+.d03-lines td.none.skip { letter-spacing: 0; }
+.d03-lines td.none.skip b { letter-spacing: 2px; }
+/* 긴 글자: 줄 수를 넘으면 끝을 "…"로(행 높이 고정 — 11.5mm 안에 4줄까지) */
+.d03-lines .clip, .d03-lines .name {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; line-height: 1.3; overflow-wrap: anywhere;
+}
+.d03-lines .clip.tight { font-size: 8pt; }
+.d03-lines .clip.tighter { font-size: 6.8pt; letter-spacing: -.3px; line-height: 1.15; -webkit-line-clamp: 3; }
+.d03-lines .clip.tiniest { font-size: 6pt; letter-spacing: -.3px; line-height: 1.1; -webkit-line-clamp: 4; }
+.d03-lines .clip.reason { font-size: 8pt; line-height: 1.2; -webkit-line-clamp: 3; }
+.d03-lines .clip.reason.long { font-size: 7pt; line-height: 1.12; }
+.d03-lines td.signer { padding-left: .4mm; padding-right: .4mm; white-space: normal; }
+.d03-lines .name { -webkit-line-clamp: 2; }
+/* 5자까지 한 줄(글씨만 줄임) */
+.d03-lines .name.one, .d10-head .name.one, .d10-meta .name.one, .d10-devs .name.one, .d12-rows .name.one {
+  display: block; white-space: nowrap; overflow: visible;
+}
+.d03-lines .name.n4 { font-size: 8pt; letter-spacing: -.2px; }
+.d03-lines .name.n5 { font-size: 7pt; letter-spacing: -.3px; }
+.d03-lines .name.tighter { font-size: 6.5pt; letter-spacing: -.3px; line-height: 1.15; }
+.d03-lines .name.tiniest { font-size: 6pt; letter-spacing: -.4px; line-height: 1.12; }
+.d03-guide th, .d03-guide td { padding: .7mm 1.2mm; font-size: 8.5pt; }
+.d03-devs td { height: 8mm; }
+
+/* D10 일반위생관리 및 공정점검표 — A4 세로(p12-d10-policy.md DP-12) */
+.d10-head td.title { padding: 3mm 2mm; }
+.d10-head .t1 { font-size: 19pt; font-weight: 800; letter-spacing: 1px; }
+.d10-head td.sign { height: 13mm; }
+.d10-meta th, .d10-meta td { padding: 1.6mm 1.4mm; font-size: 9.5pt; }
+.d10-rows th { padding: .9mm .6mm; font-size: 9pt; }
+.d10-rows th.legend { font-size: 9.5pt; }
+.d10-rows td { padding: .5mm .8mm; height: 7.6mm; font-size: 8.6pt; line-height: 1.28; }
+.d10-rows td.cad { font-size: 9pt; line-height: 1.25; font-weight: 600; }
+.d10-rows td.grp { font-size: 8.6pt; line-height: 1.2; }
+.d10-rows td.q { font-size: 8.4pt; }
+.d10-rows td.v { font-size: 10pt; font-weight: 600; padding: 0; }
+.d10-rows td.v.bad { font-weight: 900; text-decoration: none; }  /* X 굵게만(밑줄 없음 — 종이·DP-12) */
+.d10-rows td.yr { letter-spacing: .5px; }
+.d10-devs td { height: 9mm; }
+.d10-devs .day { font-weight: 600; white-space: nowrap; }
+/* D12 공정별 이물관리 점검표 — A4 세로(p12-d12-policy.md DP-13) */
+.d12-title td.title { padding: 4mm 2mm; }
+.d12-title .t1 { font-size: 19pt; font-weight: 800; letter-spacing: 1.5px; }
+.d12-rows th.wd { padding: .6mm .2mm; line-height: 1.1; }
+.d12-rows th .md { font-size: 7pt; font-weight: 500; margin-top: .3mm; }
+.d12-rows th.proc { height: 9mm; padding: .3mm .3mm; font-weight: 600; background: var(--paper); }
+.d12-rows td.grp { font-weight: 700; font-size: 8.8pt; line-height: 1.35; }
+.d12-rows td.q { height: 8.6mm; }
+.d12-rows td.box { font-weight: 700; height: 9mm; }
+.d12-rows td.signer { padding: .3mm .3mm; white-space: normal; }
+.d12-rows .clip, .d12-rows .name {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; line-height: 1.2; overflow-wrap: anywhere; font-size: 8pt;
+}
+.d12-rows .clip.tight { font-size: 7pt; }
+.d12-rows .clip.tighter { font-size: 6.2pt; letter-spacing: -.3px; line-height: 1.1; -webkit-line-clamp: 4; }
+.d12-rows .clip.tiniest { font-size: 5.6pt; letter-spacing: -.4px; line-height: 1.06; -webkit-line-clamp: 4; }
+.d12-rows .name.one { font-size: 7.6pt; }
+.d12-rows .name.n4 { font-size: 6.6pt; letter-spacing: -.3px; }
+.d12-rows .name.n5 { font-size: 5.6pt; letter-spacing: -.35px; }
+.d12-rows .name.tighter { font-size: 6.2pt; letter-spacing: -.3px; line-height: 1.08; -webkit-line-clamp: 3; }
+.d12-rows .name.tiniest { font-size: 5.6pt; letter-spacing: -.4px; line-height: 1.06; -webkit-line-clamp: 3; }
+.d12-devs td { height: 9mm; }
+
+/* D11 방충방서점검표 — A4 가로(p12-d11-policy.md DP-17) */
+.prt-sheet[data-kind="monthly"] { width: 277mm; }
+.d11-head td.title { padding: 3mm 2mm; }
+.d11-head .t1 { font-size: 20pt; font-weight: 800; letter-spacing: 1px; }
+.d11-head th, .d11-head td { padding: 1.6mm 1.4mm; font-size: 9.5pt; }
+.d11-rows th { padding: 1mm .6mm; font-size: 9.5pt; }
+.d11-rows th.md { font-size: 9pt; font-weight: 600; }
+.d11-rows td { height: 8mm; padding: .6mm 1.2mm; font-size: 9pt; }
+.d11-rows td.grp { font-size: 9pt; line-height: 1.4; }
+.d11-rows td.q { padding-left: 3mm; }
+.d11-rows td.v { font-size: 10.5pt; font-weight: 600; padding: 0; }
+.d11-rows td.v.bad { font-weight: 900; text-decoration: none; }  /* X 굵게만 */
+.d11-remark th { font-size: 9.5pt; }
+.d11-remark th.box { height: 6.5mm; padding: .6mm .4mm; }
+.d11-remark td.signer { height: 16mm; padding: .4mm .4mm; white-space: normal; }
+.d11-remark td.rms { font-size: 8.4pt; line-height: 1.35; vertical-align: top; padding: 1.2mm 2mm; }
+.d11-remark .rm + .rm { margin-top: .6mm; }
+.d11-remark.long td.rms { font-size: 7.6pt; line-height: 1.28; }
+.d11-remark.huge td.rms { font-size: 7pt; line-height: 1.22; }
+.d11-remark.long tr, .d11-remark.huge tr { break-inside: auto; }
+.d11-supply th, .d11-supply td { padding: 1.2mm 1mm; font-size: 9pt; }
+.d11-supply td { height: 8.5mm; }
+.d11-supply th.cap { letter-spacing: 1px; }
+.d11-remark .name { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; line-height: 1.2; overflow-wrap: anywhere; font-size: 9pt; }
+.d11-remark .name.one { display: block; white-space: nowrap; overflow: visible; }
+.d11-remark .name.n5 { font-size: 8.4pt; letter-spacing: -.2px; }
+.d11-remark .name.tighter { font-size: 7.4pt; letter-spacing: -.3px; line-height: 1.15; }
+.d11-remark .name.tiniest { font-size: 6.6pt; letter-spacing: -.4px; line-height: 1.12; }
+
+/* 이름 칸(결재·점검자·조치자·확인): D03 결재 칸과 같은 길이별 크기 */
+.d10-head .name, .d10-meta .name, .d10-devs .name {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; line-height: 1.25; overflow-wrap: anywhere;
+}
+.d10-head .name.n5, .d10-meta .name.n5, .d10-devs .name.n5 { font-size: 8pt; }
+.d10-devs .name.n5 { font-size: 7.4pt; letter-spacing: -.3px; }
+.d10-head .name.tighter, .d10-meta .name.tighter, .d10-devs .name.tighter { font-size: 7pt; letter-spacing: -.3px; line-height: 1.15; }
+.d10-head .name.tiniest, .d10-meta .name.tiniest, .d10-devs .name.tiniest { font-size: 6.4pt; letter-spacing: -.4px; line-height: 1.12; }
+
+/* 첨부 사진 원본(P12 DP-19): A4 세로 한 쪽에 하나, 쪽에 맞춰 축소 — 쪽 번호도 안 찍음(원본 그대로) */
+.prt-files-mode .prt-root { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.prt-file-page { width: 190mm; height: 275mm; display: flex; align-items: center; justify-content: center; background: var(--paper); box-shadow: 0 2px 12px rgba(0, 0, 0, .15); }
+.prt-file-page img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.prt-file-page.prt-file-missing::after { content: "파일을 불러오지 못했습니다"; color: #a00; font-size: 12pt; }
+.prt-file-page.prt-file-missing img { display: none; }
+
+@media print {
+  body { background: #fff; }
+  .prt-toolbar { display: none; }
+  .prt-root { padding: 0; }
+  .prt-sheet { width: auto; box-shadow: none; }
+  .prt-msg { display: none; }
+  .prt-sheet + .prt-sheet { margin-top: 0; break-before: page; }
+  .prt-files-mode .prt-root { display: block; }
+  .prt-file-page { width: auto; height: 275mm; box-shadow: none; break-after: page; }
+  .prt-file-page:last-child { break-after: auto; }
+}

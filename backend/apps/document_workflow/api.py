@@ -17,7 +17,7 @@ from apps.core.http import (
 from apps.core.trace import step
 from apps.staff.services import actor_from_header
 
-from . import services
+from . import printing, services
 
 SUBMIT_KEYS = ("expected_version",)  # P14: 결재선(slots)은 받지 않음 — 설정으로 자동
 DECISION_KEYS = ("result", "comment")
@@ -134,3 +134,15 @@ def cancel_submission(request, request_id):
     if request.body.strip():
         reject_unknown_keys(parse_json_body(request), ())
     return json_response(services.cancel_submission(actor, request_id))
+
+
+# ------------------------------------------------ P12 출력 (p12-s2-spec 2.2, WF-A06)
+
+
+@require_http_methods(["GET"])
+@_api
+def print_sheet(request):
+    """WF-A06 종이 한 장 데이터 — 읽기 전용, 사용자 헤더 필요 없음(보내도 쓰지 않음)."""
+    with step("WF-PRT-00", "API", "조건 확인"):
+        query = printing.parse_query(request.GET)
+    return json_response(printing.print_by_query(query))

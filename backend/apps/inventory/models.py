@@ -243,6 +243,8 @@ class StockMovementQuerySet(models.QuerySet):
 
 
 class StockMovement(models.Model):
+    # Reference count only. Missing EA is unknown, never inferred from mass.
+    ea_count = models.BigIntegerField(null=True, blank=True)
     lot = models.ForeignKey(Lot, models.PROTECT, related_name="movements")
     movement_type = models.ForeignKey(
         StockMovementType,

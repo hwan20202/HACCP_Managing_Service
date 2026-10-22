@@ -18,7 +18,7 @@ from apps.documents.tests.p8 import setup_p8
 
 TODAY = "2026-10-13"
 BATCHES = (12, 15, 16, 17)
-SPECIMENS = {k: "○" for k in ("fe_l", "fe_c", "fe_r", "sus_l", "sus_c", "sus_r")}
+SPECIMENS = {k: "○" for k in ("fe_only", "sts_only")}  # 3P v2(P12 DP-03)
 
 
 def setup_p11():

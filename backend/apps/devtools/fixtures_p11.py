@@ -32,7 +32,7 @@ from .fixtures import ACTOR, _bad
 PROCESSES = ("1P", "2B", "3P")
 KEYS = ("work_date", "batches", "rows", "deviations", "status")
 SECTION = {"1P": "rounds", "2B": "rounds", "3P": "checks"}
-_SPECIMENS = {k: "○" for k in ("fe_l", "fe_c", "fe_r", "sus_l", "sus_c", "sus_r")}
+_SPECIMENS = {k: "○" for k in ("fe_only", "sts_only")}  # 3P v2(P12 DP-03)
 # 측정시점(처음·중간·끝): 행이 2개 이상이면 첫 행 = 처음, 마지막 행 = 끝(작성완료 phase_order)
 PHASES = {
     "1P": ("작업시작 전", "작업 중", "작업종료 후"),

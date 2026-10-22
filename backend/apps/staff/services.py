@@ -84,3 +84,11 @@ def ensure_dev_staff(ids):
             id=staff_id,
             defaults={"staff_code": f"DEV-{staff_id:03d}", "name": f"개발직원{staff_id}"},
         )
+
+
+def names_of(ids):
+    """P12 출력: 직원 id → 이름(비활성 포함 — 지난 기록의 사람). 없는 id는 빠진다. SQL 1."""
+    wanted = {i for i in ids if isinstance(i, int) and not isinstance(i, bool)}
+    if not wanted:
+        return {}
+    return dict(Staff.objects.filter(pk__in=wanted).values_list("id", "name"))

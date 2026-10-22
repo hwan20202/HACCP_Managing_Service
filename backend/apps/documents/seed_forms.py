@@ -437,6 +437,155 @@ CCP_3P = {
     ],
 }
 
+# ---------------------------------------------------------------- P12 CCP-3P v2 (캔디류 양식)
+# 사용자 제공 "캔디류 ccp-3p.pdf"(DP-03): 시편 좌·중·우 → Fe만·STS만 통과 1칸씩, 행 비고 없음,
+# 한계기준 유형별 2줄(기타가공품·캔디류), 개선조치방법 고정 안내. 구분(시작·중간·종료)은 남김
+# (작성완료 검사 D-057·정렬 — DP-03 F3 a). 키 product_fe·product_sus는 v1과 같음(이름만 바뀜).
+# v1 문서는 마이그레이션 0004가 v2로 옮긴다(ccp3p_v2.py).
+
+CCP_3P_V2_CHECK_KEYS = ("fe_only", "sts_only", "product_only", "product_fe", "product_sus")
+
+CCP_3P_V2 = {
+    "requirement_only": True,
+    "deviation": {"check_visibility": "immediate"},
+    "guide": [
+        {
+            "title": "관리기준",
+            "rows": [
+                [
+                    "한계기준(기타가공품)",
+                    "Fe(철) 2.0mmΦ 이상 불검출, SUS(스테인리스) 2.5mmΦ 이상 불검출",
+                ],
+                [
+                    "한계기준(캔디류)",
+                    "Fe(철) 2.0mmΦ 이상 불검출, SUS(스테인리스) 2.0mmΦ 이상 불검출",
+                ],
+                ["점검주기", "작업시작 전, 작업 중 2시간마다, 제품 변경 시, 작업종료 후"],
+                [
+                    "① 표준시편 소독",
+                    "사용 전 소독액으로 표준시편(Fe 2.0mmø, SUS 2.0/2.5mm)을 소독한다.",
+                ],
+                ["② 표준시편만 통과", "표준시편(Fe 2.0mmø, SUS 2.0/2.5mm)만을 통과시킨다."],
+                [
+                    "③ 표준시편과 제품 통과",
+                    "표준시편(Fe 2.0mmø, SUS 2.0/2.5mm)과 제품을 놓고 통과시킨다.",
+                ],
+                ["④ 제품만 통과", "제품만 통과시킨다."],
+                ["⑤ 사용 후 표준시편 소독", "표준시편을 소독액으로 소독 후 검편보관통에 보관한다."],
+                ["※", "금속검출기는 연 1회 이상 정상작동 유무 확인"],
+                ["판정", "검출 ○ / 불검출 X"],
+            ],
+        },
+        {
+            "title": "개선조치방법",
+            "rows": [
+                [
+                    "금속성 이물 검출 시",
+                    "모니터링 담당자는 즉시 금속검출기의 작업을 중지하고 "
+                    "공정품을 보류하고 해당(이탈) 제품을 제거한다. "
+                    "공정품에 혼입된 금속이물을 찾아내고, 그 출처를 조사하여 원인을 제거한다. "
+                    "금속이물 검출 내역 및 개선조치 사항을 모니터링 일지에 기록한다.",
+                ],
+                [
+                    "감도 이상 발생 시",
+                    "모니터링 담당자는 즉시 금속검출기의 작업을 중지하고 공정품을 보류한다. "
+                    "감도를 재조정한 후 정상적으로 작동 시 재가동한다. "
+                    "감도이상 발생 전부터 정상운전 확인시점까지 생산된 제품을 다시 검사한다. "
+                    "재검사 후 그 내역 또는 개선조치 사항을 모니터링 일지에 기록한다.",
+                ],
+                [
+                    "기계적 고장 시",
+                    "모니터링 담당자는 즉시 금속검출기의 작업을 중지하고 공정품을 보류한다. "
+                    "수리 후 정상적으로 작동 시 재가동한다. "
+                    "수리 불가능할 때에는 납품업체에 수리를 의뢰한다.",
+                ],
+                [
+                    "☆",
+                    "금속검출기의 고장으로 정상 운전 확인 이후에 생산된 제품과 "
+                    "금속검출기 미 통과제품에 대해서는 전량 부적합품 보관장소에 보관하고 "
+                    "금속검출기 수리 완료 후 전량 재통과한다.",
+                ],
+                [
+                    "공통: 개선조치 시",
+                    "문제 발생 시 HACCP팀장에게 보고 후 조치하며, "
+                    "개선조치 후 모니터링 일지에 기록 후 HACCP팀장에게 승인을 받는다.",
+                ],
+            ],
+        },
+    ],
+    "sections": [
+        {
+            "key": "info",
+            "label": "기본정보",
+            "repeat": False,
+            "fields": [
+                _ro("item_name", "품명"),
+                _ro("batch_qty_kg", "중량(kg)", "number"),
+                _inspector(),
+            ],
+        },
+        {
+            "key": "checks",
+            "label": "금속검출기 감도 모니터링",
+            "repeat": True,
+            "max_rows": 48,
+            "min_rows": 2,
+            "phase_order": _phase_order("phase", "passed_at", "시작", "종료"),
+            "nonconforming": NONCONFORMING,
+            "fields": [
+                {
+                    "key": "phase",
+                    "label": "구분",
+                    "type": "select",
+                    "options": ["시작", "중간", "종료"],
+                    "required": True,
+                },
+                {"key": "passed_at", "label": "통과시간", "type": "datetime", "required": True},
+                *(
+                    {
+                        "key": key,
+                        "label": label,
+                        "type": "select",
+                        "options": CIRCLE_X,
+                        "required": True,
+                    }
+                    for key, label in zip(
+                        CCP_3P_V2_CHECK_KEYS,
+                        ("Fe만 통과", "STS만 통과", "제품만 통과", "Fe+제품 통과", "STS+제품 통과"),
+                        strict=True,
+                    )
+                ),
+                _verdict(
+                    {
+                        "all": [
+                            {"field": "fe_only", "eq": "○"},
+                            {"field": "sts_only", "eq": "○"},
+                            {"field": "product_only", "eq": "X"},
+                            {"field": "product_fe", "eq": "○"},
+                            {"field": "product_sus", "eq": "○"},
+                        ]
+                    }
+                ),
+            ],
+        },
+        {
+            "key": "summary",
+            "label": "금속검출기 제품 통과",
+            "repeat": True,
+            "max_rows": 10,
+            "min_rows": 1,
+            "nonconforming": {"any": [{"field": "detected_qty", "gt": 0}]},
+            "fields": [
+                {"key": "item_name", "label": "품명", "type": "text", "max_length": 50},
+                {"key": "passed_qty", "label": "통과량", "type": "number", "required": True},
+                {"key": "detected_qty", "label": "검출량", "type": "number", "required": True},
+                # v1 행 비고를 옮겨 오므로 500자(v1 200자 — DP-03 M2 a)
+                {"key": "note", "label": "특이사항", "type": "text", "max_length": 500},
+            ],
+        },
+    ],
+}
+
 # (type_code, version, name, schema, is_active)
 P4_TEMPLATES = [
     ("D01", 1, "시험성적서", D01, True),
@@ -444,8 +593,9 @@ P4_TEMPLATES = [
     ("D03", 1, "원료/부자재 육안검사일지", D03, False),  # P6a: LOT 문서(v2)로 바뀜
     ("CCP-1P", 1, "CCP-1P 모니터링일지(쇳가루 제거)", CCP_1P, True),
     ("CCP-2B", 1, "CCP-2B 모니터링일지(건조)", CCP_2B, True),
-    ("CCP-3P", 1, "CCP-3P 모니터링일지(금속검출)", CCP_3P, True),
+    ("CCP-3P", 1, "CCP-3P 모니터링일지(금속검출)", CCP_3P, False),  # P12 DP-03: v2로 바뀜
     ("D03", 2, "원료/부자재 육안검사일지", D03_V2, True),
+    ("CCP-3P", 2, "CCP-3P 모니터링일지(금속검출)", CCP_3P_V2, True),
 ]
 
 

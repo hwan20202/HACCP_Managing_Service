@@ -58,6 +58,22 @@
     batchApprove: { label: 'WF 일괄 승인 (WF-A03)', method: 'POST', flow: 'WF-BAP', uses: ['body', 'docId'], path: () => 'approvals/batch-decision', docs: (s) => idList(s.docId) },
     batchSubmit: { label: 'WF 일괄 상신 (WF-A04)', method: 'POST', flow: 'WF-BSB', uses: ['body', 'docId'], path: () => 'documents/batch-submit', docs: (s) => idList(s.docId) || bodyDocs(s) },
     batchConfig: { label: 'WF 일괄 설정 (WF-A05)', method: 'GET', flow: 'WF-CFG', uses: [], path: () => 'workflow/batch-config' },
+    // ---- P12 출력 — print/p12-s4-impl.md 2장(WF-A06, 읽기 전용·헤더 없음)
+    printSheet: { label: '출력 데이터 (WF-A06)', method: 'GET', uses: ['id'], path: (s) => `print/sheet?document_id=${s.id}`, doc: (s) => s.id,
+      flow: (record) => {
+        const data = record.data || {};
+        if (data.code) return 'WF-PRT-NOT-PRINTABLE';
+        if (data.kind === 'weekly') return 'WF-PRT-WK-DOC';  // D10 문서 → 그 주
+        if (data.kind === 'monthly') return 'WF-PRT-MON-DOC';  // D11 문서 → 그 달
+        return data.kind === 'receiving' ? 'WF-PRT-RCV-DOC' : 'WF-PRT';  // D03 문서 → 그 입고일 장
+      } },
+    printDay: { label: '출력 데이터 — 묶음 (WF-A06)', method: 'GET', uses: ['query'], path: (s) => `print/sheet?${s.query || 'kind=receiving&type=D03&date='}`,
+      flow: (record) => {
+        const data = record.data || {};
+        if (data.kind === 'weekly') return (data.days || []).some((d) => d.document_id) ? 'WF-PRT-WK' : 'WF-PRT-WK-EMPTY';
+        if (data.kind === 'monthly') return (data.weeks || []).some((w) => w.document_id) ? 'WF-PRT-MON' : 'WF-PRT-MON-EMPTY';
+        return (data.lines || []).length ? 'WF-PRT-RCV' : 'WF-PRT-RCV-EMPTY';
+      } },
     batchInspector: { label: '점검자 일괄 지정 (F25·A20)', method: 'POST', flow: 'DOC-BIN', uses: ['body', 'docId'], path: () => 'documents/batch-inspector', docs: (s) => idList(s.docId) || bodyDocs(s) },
     brief: { label: '문서 요약 여러 건 (F26·A21)', method: 'GET', flow: 'DOC-BRF', uses: ['query'], path: (s) => `documents/brief${s.query ? `?${s.query}` : ''}` },
     incoming: { label: 'REQ 입고일 묶음 (F05·A03)', method: 'GET', flow: 'REQ-BDL', uses: ['query'], path: (s) => `incoming-inspections${s.query ? `?${s.query}` : ''}` },
@@ -875,8 +891,14 @@
     return hit.template_id;
   }
   // P7: D03은 목록에서 입고일 묶음 줄(kind bundle)로 온다 → 그 입고일 묶음 조회(REQ-A03)로 문서 id를 푼다
+  // P12 ISP-06: D10·D12 주 묶음(bundle_unit week, work_date = 월요일)은 주 묶음 조회(REQ-A04)로 — 월~금 + 주말 칸
   async function docIdsOf(item, status) {
     if (item.kind !== 'bundle') return [item.document_id];
+    if (item.bundle_unit === 'week') {
+      const w = await quietGetAs(`periodic-bundles?type_code=${encodeURIComponent(item.type_code)}&week_start=${item.work_date}`, 3);
+      return w ? [...w.days, ...w.weekend].map((c) => c.document)
+        .filter((d) => d && (!status || d.status === status)).map((d) => d.document_id) : [];
+    }
     const b = await quietGetAs(`incoming-inspections?received_date=${item.work_date}`, 3);
     return b ? b.lots.filter((l) => l.document && (!status || l.document.status === status)).map((l) => l.document.document_id) : [];
   }
@@ -934,10 +956,10 @@
       } },
     { id: 'DOC-PS-21', unit: 'P4', label: '작성 요구 문서 삭제 거부', expect: '409 DOCUMENT_NOT_DELETABLE(reason requirement) · DOC-DEL-02 영향 0행 → 02a 실패 · DB 변화 없음',
       prepare: async () => { const d = await p4Doc('D01', 'draft'); return { func: 'delete', id: d.document_id }; } },
-    { id: 'DOC-PS-25', unit: 'P4', label: 'CCP 판정 계산', expect: '200 · DOC-UPD-05b(판정 재계산) 포함 도식 일치 · 새 행 values_json.verdict = 부적합(SUS 우 X), 판정은 서버가 저장',
+    { id: 'DOC-PS-25', unit: 'P4', label: 'CCP 판정 계산', expect: '200 · DOC-UPD-05b(판정 재계산) 포함 도식 일치 · 새 행 values_json.verdict = 부적합(STS만 통과 X — CCP-3P v2), 판정은 서버가 저장',
       prepare: async () => {
         const d = await p4Doc('CCP-3P', 'draft', (x) => x.deviations.length > 0);
-        const ok = { fe_l: '○', fe_c: '○', fe_r: '○', sus_l: '○', sus_c: '○', sus_r: 'X', product_only: 'X', product_fe: '○', product_sus: '○' };
+        const ok = { fe_only: '○', sts_only: 'X', product_only: 'X', product_fe: '○', product_sus: '○' };
         return { func: 'update', id: d.document_id, body: J({ expected_version: d.version, sections: { add: [{ section_def: 'checks', values: { phase: '중간', passed_at: `${d.work_date}T13:00`, ...ok } }] } }) };
       } },
     { id: 'DOC-PS-26', unit: 'P4', label: '승인된 문서의 개선조치 쓰기·수정', expect: '사전 조건: 승인된 D03(LOT 1건) · 쓰기 201 → 수정 200 · DOC-DVC·DOC-DVU 도식 일치, 문서 잠금 검사 없음 · deviation_action(관련 행 없음, section_id NULL)·checker만 변경, document 변화 없음',
@@ -1545,6 +1567,55 @@
       } }),
   );
 
+  // ---------------------------------------------------------------- P12 출력 (print/p12-s4-impl.md · p12-s1-screens 8장)
+  const PRINT_HINT = 'seed_dev_print로 출력 확인용 CCP·D03·D10·D12·D11 문서를 넣으세요';
+  async function printDoc(code, status, pred = () => true) {
+    try { return await p4Doc(code, status, pred); } catch (e) { throw new Error(`${code} ${status} 문서가 없습니다. ${PRINT_HINT}.`); }
+  }
+  const p12 = (preset) => ({ unit: 'P12', ...preset });
+  PRESETS.push(
+    p12({ id: 'PRT-PS-01', label: 'CCP 단건 출력(승인)', expect: '200 · WF-PRT 도식 일치(00~04, 안쪽 DOC-PRT-01·APR-PRT-01·02) · boxes 담당자·HACCP팀장 둘 다 이름·날짜, deviations 확인 칸(checked_by) · ④ 변화 없음(쓰기 없음) · [새 탭] /print/?document_id= 로 종이 확인',
+      prepare: async () => {
+        const d = await printDoc('CCP-1P', 'approved', (x) => x.deviations.some((v) => v.checked_by));
+        return { func: 'printSheet', id: String(d.document_id) };
+      } }),
+    p12({ id: 'PRT-PS-02', label: '정정 중 출력 = 승인본', expect: '200 · WF-PRT 도식 일치 · WF-PRT-03 "정정 중 → 승인본" · sections 값이 지금 문서 값이 아니라 승인 회차 값(시드: 12:40, 지금 12:45), 정정 표시 없음, 정정 중 추가 개선조치는 deviations에 있음 · ④ 변화 없음',
+      prepare: async () => {
+        const d = await printDoc('CCP-3P', 'correcting');
+        return { func: 'printSheet', id: String(d.document_id) };
+      } }),
+    p12({ id: 'PRT-PS-03', label: 'D03 입고일 묶음(미작성 줄)', expect: '200 · WF-PRT-RCV 도식 일치(00·05·DOC-RQD·07·DOC-PRT-01·APR-PRT-01·02·06) · kind receiving, lines LOT 번호 순 · 작성중·반려 줄 printable false·values null·approval 비움, 작성완료 줄 값 있고 결재 칸 비움 · boxes 담당자·팀장, box_group 기록확인 · guide 6항목 · ④ 변화 없음 · [새 탭] /print/?kind=receiving&type=D03&date= 로 종이 확인',
+      prepare: async () => {
+        const d = await printDoc('D03', 'draft');
+        return { func: 'printDay', query: `kind=receiving&type=D03&date=${d.work_date}` };
+      } }),
+    p12({ id: 'PRT-PS-04', label: 'D03 문서로 열기(10줄 → 2쪽)', expect: '200 · WF-PRT-RCV-DOC 도식 일치(00~02·DOC-PRT-01 뒤 묶음 단계) · 응답은 그 문서의 입고일 장(key.date = 문서 작업일), 시드 날짜면 lines 10 · [새 탭] /print/?document_id= 로 9줄 + 1줄, 머리 반복, 관리기준·이탈 표는 마지막 쪽',
+      prepare: async () => {
+        const d = await printDoc('D03', 'approved');
+        return { func: 'printSheet', id: String(d.document_id) };
+      } }),
+    p12({ id: 'PRT-PS-05', label: 'D10 주(주말 칸·작성 안 함·정정 중)', expect: '200 · WF-PRT-WK 도식 일치 · kind weekly, key.date = 월요일 · days 월~금 + 문서 있는 토·일, 시드 주면 토 칸 있음 · 작성 안 함·결재중 아닌 출력 불가 칸 values null · 정정 중 칸 = 승인본 값 · boxes 작성자·HACCP팀장 = 그 주 가장 최근 승인자 · inspector_id = 가장 늦은 요일 문서 · latest_dates · ④ 변화 없음 · [새 탭] /print/?kind=weekly&type=D10&date= 로 종이 확인',
+      prepare: async () => {
+        const d = await printDoc('D10', 'skipped');
+        return { func: 'printDay', query: `kind=weekly&type=D10&date=${d.work_date}` };
+      } }),
+    p12({ id: 'PRT-PS-06', label: 'D12 주(요일 결재·공정명)', expect: '200 · WF-PRT-WK 도식 일치 · kind weekly, type D12 · days[].approval = 그날 회차 칸(요일마다 다른 이름), days[].process_name = 그날 공정명(출력 가능 칸만) · inspector_id null(점검자 출력 안 함) · ④ 변화 없음 · [새 탭] /print/?kind=weekly&type=D12&date= 로 종이 확인',
+      prepare: async () => {
+        const d = await printDoc('D12', 'approved');
+        return { func: 'printDay', query: `kind=weekly&type=D12&date=${d.work_date}` };
+      } }),
+    p12({ id: 'PRT-PS-07', label: 'D11 월(4~5주·특이사항)', expect: '200 · WF-PRT-MON 도식 일치 · kind monthly, key.month · weeks = 그 달 월요일 수(4개면 5주 칸 없음) · 주 칸 checked_on · 작성중·작성 안 함 주 values null · remarks = 출력 가능 주만 · boxes 그 달 가장 최근 승인자 · ④ 변화 없음 · [새 탭] /print/?kind=monthly&type=D11&month= 로 종이 확인',
+      prepare: async () => {
+        const d = await printDoc('D11', 'approved');
+        return { func: 'printDay', query: `kind=monthly&type=D11&month=${d.work_date.slice(0, 7)}` };
+      } }),
+    p12({ id: 'PRT-PS-08', label: '출력 불가(작성중)', expect: '409 NOT_PRINTABLE_STATUS · WF-PRT-NOT-PRINTABLE(00~02, DOC-PRT-01) — APR 단계 없음 · ④ 변화 없음',
+      prepare: async () => {
+        const d = await printDoc('CCP-1P', 'draft');
+        return { func: 'printSheet', id: String(d.document_id) };
+      } }),
+  );
+
   // ---------------------------------------------------------------- 프리셋 DSH-PS-01~08 (P11 S5 — p11-s1-screens 6장)
   // 사전 조건은 불러올 때 개발 API(fixtures/ccp — 새 배치 → REQ-F02 → 행·개선조치·확인)로 만든다(ISS-019). 기준일 = 실행하는 날(Asia/Seoul)
   const p11 = (preset) => ({ unit: 'P11', ...preset });
@@ -1830,7 +1901,7 @@
     $('#dcStaff').addEventListener('change', (e) => api.setStaff(e.target.value));
     $('#dcFunc').innerHTML = Object.entries(FUNCS).map(([k, f]) => `<option value="${k}">${esc(f.label)}</option>`).join('');
     const group = (unit, label) => `<optgroup label="${label}">${PRESETS.filter((p) => (p.unit || p.id.split('-')[0]) === unit).map((p) => `<option value="${p.id}">${p.id} ${esc(p.label)}</option>`).join('')}</optgroup>`;
-    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)') + group('FILE', '파일 업로드 (스프린트 3)') + group('P8', '점검표·작성 안 함 (P8)') + group('P9', '주기형 작성 요구 (P9)') + group('P10', '문서함·결재함 (P10)') + group('P11', 'CCP 대시보드 (P11)') + group('ROLE', '역할 기반 결재 (P14)');
+    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)') + group('FILE', '파일 업로드 (스프린트 3)') + group('P8', '점검표·작성 안 함 (P8)') + group('P9', '주기형 작성 요구 (P9)') + group('P10', '문서함·결재함 (P10)') + group('P11', 'CCP 대시보드 (P11)') + group('ROLE', '역할 기반 결재 (P14)') + group('P12', '출력 (P12)');
     $('#dcFunc').addEventListener('change', () => { state.preset = null; toggleInputs(); });
     ['#dcId', '#dcQuery', '#dcBody', '#dcDocId'].forEach((sel) => $(sel).addEventListener('input', () => { if (state.preset && state.preset.script) state.preset = null; }));
     $('#dcLoadPreset').addEventListener('click', loadPreset);

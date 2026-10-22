@@ -5,6 +5,7 @@ CSRF: 계정·세션 쿠키가 없고, 쓰기 요청은 JSON 본문과 사용자
 """
 
 from django.http import FileResponse, HttpResponse
+from django.views.decorators.clickjacking import xframe_options_sameorigin
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
@@ -409,6 +410,8 @@ def file_collection(request):
     return json_response(files.search_files({k: request.GET.get(k) for k in keys}))
 
 
+# P12 DP-19: 문서 화면 안 PDF 미리보기·인쇄 — 같은 출처 iframe만 허용(나머지 응답은 DENY 그대로)
+@xframe_options_sameorigin
 @require_http_methods(["GET"])
 @_api
 def file_item(request, file_id):

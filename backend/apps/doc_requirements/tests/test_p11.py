@@ -118,7 +118,7 @@ class CcpDashboardTests(P11ReqTestCase):
         two = ccp_doc("CCP-2B", 12)
         add_rows(two, "rounds", [r2b("13:50", temp=60.0), {"phase": "작업 중", "temp_c": 60.0}])
         add_rows(three, "summary", [summary(1)])
-        add_rows(three, "checks", [r3p("10:00", fe_l="X")])
+        add_rows(three, "checks", [r3p("10:00", fe_only="X")])
         out = ccp.ccp_dashboard(None, TODAY)
         order = [(x["type_code"], x["at"]) for x in out["deviations"]]
         self.assertEqual(
@@ -212,20 +212,19 @@ class CcpBatchAreaTests(P11ReqTestCase):
                 {**r1p("11:00"), "note": "  "},
             ],
         )
-        add_rows(d3, "checks", [{**r3p("09:30"), "note": "제품 변경"}])
+        add_rows(d3, "checks", [r3p("09:30")])  # 3P v2: 감도 행 비고 없음(P12 DP-03 M2)
         add_rows(d3, "summary", [{**summary(0), "note": "재점검"}])
         notes = ccp.ccp_dashboard(3, TODAY)["notes"]
         self.assertEqual(
             [(n["type_code"], n["section_def"], n["at"], n["text"]) for n in notes],
             [
-                ("CCP-3P", "checks", at("09:30"), "제품 변경"),
                 ("CCP-1P", "rounds", at("10:00"), "자석봉 교체"),
                 ("CCP-3P", "summary", None, "재점검"),
             ],
         )
-        self.assertEqual((notes[0]["field_label"], notes[2]["field_label"]), ("비고", "특이사항"))
-        self.assertEqual(notes[2]["section_label"], "제품 통과 요약")
-        self.assertEqual(notes[1]["label"], "PB-12")
+        self.assertEqual((notes[0]["field_label"], notes[1]["field_label"]), ("비고", "특이사항"))
+        self.assertEqual(notes[1]["section_label"], "금속검출기 제품 통과")  # 3P v2 섹션 이름
+        self.assertEqual(notes[0]["label"], "PB-12")
 
 
 class CcpProcessOrderTests(P11ReqTestCase):
