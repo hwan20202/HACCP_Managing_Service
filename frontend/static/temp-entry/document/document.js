@@ -614,7 +614,11 @@
       };
       const assign = !!(data.permissions && data.permissions.assign_inspector);  // r13 ROLE-R08
       const missing = lots.filter((l) => !l.document);
+      // D-232: 검사 항목 열(외관·포장·표시 ○/✕, 성적서 유/무, 미입력 –)
+      const mark = (v) => (v === '양호' ? '○' : v === '불량' ? '<span class="te-judge-ng">✕</span>' : '<span class="te-hint">–</span>');
+      const coa = (v) => (v ? esc(v) : '<span class="te-hint">–</span>');
       body.innerHTML = `
+        <div class="te-bundle-toolbar" id="bdToolbar">
         <div class="te-bundle-summary" id="bdSummary">
           <span>D03 ${s.documents}건:</span> ${statusSummary(s.status_counts, s.correcting_count) || '<span class="te-hint">문서 없음</span>'}
           <span style="flex:1"></span><span>내 결재 대기 <b>${s.my_pending}</b></span>
@@ -626,26 +630,36 @@
           <button class="btn btn-secondary btn-sm" disabled title="입고일 묶음 출력(DOC-SC-12)은 스프린트 3">출력 미리보기 <span class="te-hint">(스프린트 3)</span></button>
         </div>
         ${assign ? '' : `<div class="te-perm-note" id="bdInspectorWhy">${esc(T.INSPECTOR_WHY)} ${T.roleLink()}</div>`}
-        <div class="te-table-wrap"><table class="data-table" id="bdTable">
+        </div>
+        <div class="te-bundle-list" id="bdList">
+        <div class="te-bundle-list-head">LOT 목록 <span class="te-hint">${rows.length}건</span></div>
+        <div class="te-table-wrap"><table class="data-table te-bundle-compact" id="bdTable">
           <thead><tr><th class="te-check-col"><input type="checkbox" id="bdAll" ${rows.length && picked.length === rows.length ? 'checked' : ''} ${rows.length ? '' : 'disabled'} title="보이는 줄 전체"></th>
-            <th>LOT</th><th>품목·매입처</th><th>수량</th><th>문서</th><th>상태</th><th>점검자</th><th>판정(현재)</th><th>승인본 판정</th><th>결재</th></tr></thead>
+            <th>LOT</th><th>품목·매입처</th><th>판정</th><th class="te-mark-col">외관</th><th class="te-mark-col">포장</th><th class="te-mark-col">표시</th><th class="te-mark-col">성적서</th><th>상태</th><th>결재</th><th>점검자</th><th>수량</th><th>승인본</th><th></th></tr></thead>
           <tbody>${lots.filter((l) => l.document).map((l) => {
             const x = l.document;
-            return `<tr data-lot-row="${l.lot_id}" class="${selected.has(x.document_id) ? 'te-row-picked' : ''}">
+            // D-232 r1: 열 순서 = LOT → 품목 → 판정·검사 항목 → 상태·결재 → 점검자 → 수량·승인본(Q1 b).
+            // 문서 열기는 행 끝 [상세](r2 — 품목 링크 없앰, 수정은 문서 상세에서만). 부적합 줄은 옅은 붉은 바탕(Q3 b)
+            const ng = x.verdict === 'FAIL';
+            const cls = [selected.has(x.document_id) ? 'te-row-picked' : '', ng ? 'te-row-ng' : ''].filter(Boolean).join(' ');
+            return `<tr data-lot-row="${l.lot_id}" class="${cls}">
               <td class="te-check-col"><input type="checkbox" data-pick="${x.document_id}" ${selected.has(x.document_id) ? 'checked' : ''}></td>
               <td class="mono">${esc(l.lot_number)}</td>
-              <td>${esc(l.item_name)} · ${esc(l.supplier_name)}${l.material_kind ? ` <span class="te-hint">${esc(l.material_kind)}</span>` : ''}</td>
-              <td>${esc(l.quantity || '-')}</td>
-              <td><a href="#" class="te-lot-link" data-open-doc="${x.document_id}">#${x.document_id}</a></td>
+              <td class="te-bundle-item">${esc(l.item_name)}${l.material_kind ? ` <span class="te-hint">${esc(l.material_kind)}</span>` : ''}<div class="te-hint">${esc(l.supplier_name)}</div></td>
+              <td class="te-verdict-col">${x.verdict ? `<span class="${ng ? 'te-judge-ng' : ''}">${ng ? '부적합' : '적합'}</span>` : '<span class="te-hint">–</span>'}</td>
+              ${['appearance', 'packaging', 'labeling'].map((k) => `<td class="te-mark-col" data-insp="${k}">${mark((x.inspection || {})[k])}</td>`).join('')}
+              <td class="te-mark-col" data-insp="has_coa">${coa((x.inspection || {}).has_coa)}</td>
               <td>${statusCell(x.status, x.correcting)}</td>
-              <td>${T.personHtml(x.inspector_id)}</td>
-              <td>${x.verdict ? `<span class="${x.verdict === 'FAIL' ? 'te-judge-ng' : ''}">${x.verdict === 'FAIL' ? '부적합' : '적합'}</span>` : '<span class="te-hint">–</span>'}</td>
-              <td>${x.approved_verdict ? `${x.approved_verdict === 'FAIL' ? '<span class="te-judge-ng">부적합</span>' : '적합'} <span class="te-hint">${x.approved ? `${x.approved.attempt}회차` : ''}</span>` : '<span class="te-hint">–</span>'}</td>
               <td>${approval(x)}</td>
+              <td>${T.personHtml(x.inspector_id)}</td>
+              <td>${esc(l.quantity || '-')}</td>
+              <td>${x.approved_verdict ? `${x.approved_verdict === 'FAIL' ? '<span class="te-judge-ng">부적합</span>' : '적합'} <span class="te-hint">${x.approved ? `${x.approved.attempt}회차` : ''}</span>` : '<span class="te-hint">–</span>'}</td>
+              <td class="te-mark-col"><button class="btn btn-secondary btn-sm" data-open-doc="${x.document_id}" title="육안검사일지 #${x.document_id} 상세">상세</button></td>
             </tr>`;
-          }).join('') || '<tr><td colspan="10" class="te-hint">육안검사 문서가 없습니다.</td></tr>'}</tbody>
+          }).join('') || '<tr><td colspan="14" class="te-hint">육안검사 문서가 없습니다.</td></tr>'}</tbody>
         </table></div>
-        ${missing.length ? `<div class="te-bundle-missing" id="bdMissing">문서 없음: ${missing.map((l) => `<b class="mono">${esc(l.lot_number)}</b>`).join(', ')} <span class="te-hint">(작성 요구 미호출 — 작성 요구 화면에서 [다시 호출])</span></div>` : ''}`;
+        ${missing.length ? `<div class="te-bundle-missing" id="bdMissing">문서 없음: ${missing.map((l) => `<b class="mono">${esc(l.lot_number)}</b>`).join(', ')} <span class="te-hint">(작성 요구 미호출 — 작성 요구 화면에서 [다시 호출])</span></div>` : ''}
+        </div>`;
       const $ = (sel) => body.querySelector(sel);
       body.querySelectorAll('[data-pick]').forEach((c) => c.addEventListener('change', () => {
         const id = Number(c.dataset.pick);
