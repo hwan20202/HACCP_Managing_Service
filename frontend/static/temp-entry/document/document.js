@@ -553,6 +553,7 @@
     // 문서 상세 [뒤로/목록]: 묶음 상세에서 열었으면 그 묶음으로(P6a S6a-4 규칙 — 연 곳으로)
     goBack() {
       const back = this.detailBack;
+      if (back && back.doc) { this.detailBack = back.prev || null; this.showDetail(back.doc); return; }  // D-235: 성적서 바로가기에서
       if (back && back.page) T.open(back.page, back.intent);
       else if (back && back.bundleDay) this.showBundle(back.bundleDay, back.origin);
       else if (back && back.week) this.showWeek(back.week.type, back.week.start, back.week.origin);
@@ -565,6 +566,32 @@
     openFromBundle(documentId) {
       this.detailBack = { bundleDay: this.bundle.day, origin: this.bundle.origin };
       this.showDetail(documentId);
+    },
+
+    // D-235 성적서 바로가기: 같은 LOT의 시험성적서(D01) 상세로(파일 영역까지), [뒤로]는 연 곳으로
+    async coaDocumentId(lotId) {
+      const r = await api.get(`lots/${lotId}/documents`);
+      if (!r.ok) return null;
+      const x = (r.data.documents || []).find((y) => y.type_code === 'D01');
+      return x ? x.document_id : null;
+    },
+    async openCoa(documentId, back) {
+      this.detailBack = back;
+      await this.showDetail(documentId);
+      this.root.querySelector('#teFiles')?.scrollIntoView({ block: 'start' });
+    },
+    // 육안검사일지 상세: 성적서 유무 옆 버튼(유 → 성적서 보기, 무 → 성적서 등록하러 가기, D01 없음 → 회색 글자)
+    async mountCoaLink(d) {
+      const slot = this.root.querySelector('[data-coa-go]');
+      if (!slot) return;
+      const ref = (d.refs || []).find((r) => r.section_id === null && r.lot_id);
+      const target = ref ? await this.coaDocumentId(ref.lot_id) : null;
+      if (!this.root.contains(slot)) return;
+      if (!target) { slot.innerHTML = ' <span class="te-hint" id="teCoaNone">시험성적서 문서 없음</span>'; return; }
+      const row = (d.sections || []).find((s) => s.values && s.values.has_coa);
+      const coa = row ? row.values.has_coa : null;
+      slot.innerHTML = ` <button class="btn btn-secondary btn-sm te-coa-go-btn" id="teCoaGo">${coa === '유' ? '성적서 보기' : '성적서 등록하러 가기'}</button>`;
+      slot.querySelector('#teCoaGo').addEventListener('click', () => this.openCoa(target, { doc: d.document_id, prev: this.detailBack }));
     },
 
     // ================================================= DOC-SC-10 육안검사 묶음 상세 (P7)
@@ -688,11 +715,11 @@
             const cls = [selected.has(x.document_id) ? 'te-row-picked' : '', ng ? 'te-row-ng' : ''].filter(Boolean).join(' ');
             return `<tr data-lot-row="${l.lot_id}" class="${cls}">
               <td class="te-check-col"><input type="checkbox" data-pick="${x.document_id}" ${selected.has(x.document_id) ? 'checked' : ''}></td>
-              <td class="mono">${esc(l.lot_number)}</td>
+              <td class="mono"><a href="#" class="te-lot-link" data-bundle-lot="${l.lot_id}" title="이 LOT의 연결 문서(시험성적서·원산지·육안검사)">${esc(l.lot_number)}</a></td>
               <td class="te-bundle-item">${esc(l.item_name)}${l.material_kind ? ` <span class="te-hint">${esc(l.material_kind)}</span>` : ''}<div class="te-hint">${esc(l.supplier_name)}</div></td>
               <td class="te-verdict-col">${x.verdict ? `<span class="${ng ? 'te-judge-ng' : ''}">${ng ? '부적합' : '적합'}</span>` : '<span class="te-hint">–</span>'}</td>
               ${['appearance', 'packaging', 'labeling'].map((k) => `<td class="te-mark-col" data-insp="${k}">${mark((x.inspection || {})[k])}</td>`).join('')}
-              <td class="te-mark-col" data-insp="has_coa">${coa((x.inspection || {}).has_coa, (x.inspection_derived || []).includes('has_coa'))}</td>
+              <td class="te-mark-col" data-insp="has_coa">${coa((x.inspection || {}).has_coa, (x.inspection_derived || []).includes('has_coa'))}${(x.inspection || {}).has_coa === '무' ? `<div><button class="btn btn-secondary btn-sm te-coa-go-btn" data-coa-lot="${l.lot_id}" title="같은 LOT의 시험성적서 문서로 이동">등록하러 가기</button></div>` : ''}</td>
               <td>${statusCell(x.status, x.correcting)}</td>
               <td>${approval(x)}</td>
               <td>${T.personHtml(x.inspector_id)}</td>
@@ -717,6 +744,20 @@
       body.querySelectorAll('[data-open-doc]').forEach((a) => a.addEventListener('click', (e) => {
         e.preventDefault();
         this.openFromBundle(Number(a.dataset.openDoc));
+      }));
+      // D-236: LOT 번호 → LOT별 연결 문서(REQ-SC-05), 그 화면의 [뒤로]는 이 묶음
+      body.querySelectorAll('[data-bundle-lot]').forEach((a) => a.addEventListener('click', (e) => {
+        e.preventDefault();
+        T.open('temp-lot-docs', {
+          lotId: Number(a.dataset.bundleLot),
+          back: { page: 'temp-doc', bundleDay: this.bundle.day, origin: this.bundle.origin },
+        });
+      }));
+      // D-235: 성적서 무 → 같은 LOT 시험성적서(D01)로, [뒤로]는 이 묶음
+      body.querySelectorAll('[data-coa-lot]').forEach((b) => b.addEventListener('click', async () => {
+        const target = await this.coaDocumentId(Number(b.dataset.coaLot));
+        if (!target) { T.toast('이 LOT의 시험성적서 문서가 없습니다.', 'error'); return; }
+        this.openCoa(target, { bundleDay: this.bundle.day, origin: this.bundle.origin });
       }));
       const B = window.TempEntryApproval.batch;
       // P7 S5-16(사용자 결정): 일괄 처리 뒤 결과 [닫기]로 다시 읽을 때 선택을 비운다
@@ -1748,6 +1789,7 @@
       } else this.renderDeviations(d, schema);
       this.applyOpenFocus(d, schema, skipped);
       if (schema.files) this.renderFiles(d, schema);
+      this.mountCoaLink(d);  // D-235
       if (WEEK_TYPES.includes(d.template.type_code)) this.renderWeekStrip(d);
       // P3 결재 영역 (WF-SC-01) — temp-entry/approval/approval.js
       const area = $('#teApprovalArea');
@@ -1765,7 +1807,7 @@
           const ng = !!rows[0] && isNonconforming(s, v);
           const add = ng && detail && this.mayWrite ? ` <button class="btn btn-secondary btn-sm te-dev-add" data-dev-for="" data-dev-text="${esc(`${s.label} 부적합`)}">개선조치 추가</button>` : '';
           return `<div class="te-section${ng ? ' te-section-ng' : ''}"><div class="te-section-title">${esc(s.label)}${ng ? ' <span class="te-judge-ng">⚠ 부적합</span>' : ''}${add}</div>
-            <dl class="te-kv">${s.fields.map((fd) => `<div${verdictFocus(d.template && d.template.type_code, fd) ? ' class="te-verdict-kv"' : ''}><dt>${esc(fd.label)}</dt><dd>${this.display(fd, withComputed(s, v)[fd.key], hints[fd.key])}</dd></div>`).join('')}</dl></div>`;
+            <dl class="te-kv">${s.fields.map((fd) => `<div${verdictFocus(d.template && d.template.type_code, fd) ? ' class="te-verdict-kv"' : ''}><dt>${esc(fd.label)}</dt><dd>${this.display(fd, withComputed(s, v)[fd.key], hints[fd.key])}${detail && isFileHint(fd) ? '<span data-coa-go></span>' : ''}</dd></div>`).join('')}</dl></div>`;
         }
         const legacy = this.legacyJudge(s);
         const canDev = detail && this.mayWrite && !!s.nonconforming;

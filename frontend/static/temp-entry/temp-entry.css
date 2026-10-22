@@ -185,6 +185,9 @@
 #bdTable.te-bundle-compact tbody td { padding: 0.35rem 0.5rem; }
 #bdTable .te-mark-col { text-align: center; width: 1%; white-space: nowrap; }
 #bdTable .te-bundle-item { line-height: 1.25; }
+/* D-235 성적서 바로가기 버튼(묶음 성적서 칸·상세 성적서 유무 옆) */
+.te-coa-go-btn { margin-left: 0.4rem; padding: 0.1rem 0.45rem; font-size: 0.72rem; }
+#bdTable .te-coa-go-btn { margin: 0.2rem 0 0; }
 /* D-232 r1 Q3 b: 판정 굵게, 부적합 줄 옅은 붉은 바탕(선택 줄 파랑이 위) */
 #bdTable .te-verdict-col { font-weight: 700; white-space: nowrap; }
 #bdTable tbody tr.te-row-ng td { background: #fdecec; }
