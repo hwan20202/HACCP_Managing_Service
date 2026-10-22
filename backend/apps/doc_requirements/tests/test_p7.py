@@ -44,7 +44,8 @@ class IncomingBundleTests(TestCase):
         with CaptureQueriesContext(connection) as ctx:
             res = self.get()
         self.assertEqual(res.status_code, 200, res.content)
-        self.assertLessEqual(len(ctx.captured_queries) - 1, 8)  # 사용자 확인(API) 제외
+        # 사용자 확인(API) 제외. D-234: + 성적서 유무 계산 1(F26)
+        self.assertLessEqual(len(ctx.captured_queries) - 1, 9)
         body = res.json()
         lots = body["lots"]
         self.assertEqual(
@@ -143,7 +144,7 @@ class IncomingBundleTests(TestCase):
         self.assertEqual(req.incoming_bundle(1, DAY)["summary"]["correcting_count"], 1)
 
     def test_inspection_values_in_bundle(self):
-        """D-232: 묶음 문서 줄에 검사 항목 값(작성 전은 빈 객체)."""
+        """D-232: 묶음 문서 줄에 검사 항목 값(작성 전은 성적서 유무 계산 값만 — D-234)."""
         empty = d03("empty", day=DAY)  # 검사·점검자 없음(작성중)
         filled = d03("empty", day=DAY)
         fill(filled["document_id"], "FAIL", actor=3)
@@ -152,7 +153,9 @@ class IncomingBundleTests(TestCase):
             for x in req.incoming_bundle(1, DAY)["lots"]
             if x["document"]
         }
-        self.assertEqual(docs[empty["document_id"]]["inspection"], {})
+        # D-234: 성적서 유무만 계산 값(저장 값 없음, D01 파일 없음 → 무)
+        self.assertEqual(docs[empty["document_id"]]["inspection"], {"has_coa": "무"})
+        self.assertEqual(docs[empty["document_id"]]["inspection_derived"], ["has_coa"])
         got = docs[filled["document_id"]]["inspection"]
         self.assertEqual({k: got.get(k) for k in CHECK["FAIL"]}, CHECK["FAIL"])
 

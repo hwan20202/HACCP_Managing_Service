@@ -349,8 +349,18 @@ def parse_local_datetime(value):
         return None
 
 
+def is_system_field(field):
+    """사용자가 입력할 수 없는 필드: readonly·computed, D-234 r1 file_exists hint(성적서 유무)."""
+    hint = field.get("hint")
+    return bool(
+        field.get("readonly")
+        or "computed" in field
+        or (isinstance(hint, dict) and hint.get("kind") == "file_exists")
+    )
+
+
 def system_key_errors(schema_section, values, path):
-    """사용자 요청에 readonly·computed 값이 들어 있으면 오류(DOC-VR-16)."""
+    """사용자 요청에 시스템 필드(is_system_field) 값이 들어 있으면 오류(DOC-VR-16)."""
     if not isinstance(values, dict):
         return []
     fields = {field["key"]: field for field in schema_section["fields"]}
@@ -361,7 +371,7 @@ def system_key_errors(schema_section, values, path):
             f"{fields[key].get('label', key)}은(는) 입력할 수 없습니다.",
         )
         for key in values
-        if key in fields and (fields[key].get("readonly") or "computed" in fields[key])
+        if key in fields and is_system_field(fields[key])
     ]
 
 

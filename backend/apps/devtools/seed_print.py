@@ -169,17 +169,18 @@ def seed_print(today=None):
 GOOD = {"appearance": "양호", "packaging": "양호", "labeling": "양호", "verdict": "PASS"}
 BAD = {"appearance": "양호", "packaging": "불량", "labeling": "양호", "verdict": "FAIL"}
 # (품목, 매입처, 수량, 상태, 검사 값) — 입고 순서 = LOT 번호 순 = 종이 줄 순서
+# D-234 r1: 성적서 유무는 시스템 계산(같은 LOT D01 파일 유무) — 시드에서 넣지 않는다
 RECEIVING = [
-    ("유자", "고흥농협", 500, "approved", {**GOOD, "has_coa": "유"}),
-    ("파우치", "한빛포장", 40, "approved", {**GOOD, "has_coa": "무"}),
-    ("유자", "남해유자영농", 320, "approved", {**BAD, "has_coa": "유"}),
-    ("유자", "고흥농협", 450, "submitted_partial", {**GOOD, "has_coa": "유"}),
-    ("파우치", "한빛포장", 25, "completed", {**GOOD, "has_coa": "유"}),
+    ("유자", "고흥농협", 500, "approved", {**GOOD}),
+    ("파우치", "한빛포장", 40, "approved", {**GOOD}),
+    ("유자", "남해유자영농", 320, "approved", {**BAD}),
+    ("유자", "고흥농협", 450, "submitted_partial", {**GOOD}),
+    ("파우치", "한빛포장", 25, "completed", {**GOOD}),
     ("유자", "거금도유자", 280, "draft", {**GOOD}),
-    ("유자", "고흥농협", 300, "rejected", {**GOOD, "has_coa": "무"}),
-    ("유자", "남해유자영농", 260, "correcting", {**GOOD, "has_coa": "유"}),
-    ("유자", "농업회사법인 고흥유자영농조합 주식회사", 1200, "approved", {**GOOD, "has_coa": "유"}),
-    ("파우치", "한빛포장", 60, "approved", {**GOOD, "has_coa": "유"}),
+    ("유자", "고흥농협", 300, "rejected", {**GOOD}),
+    ("유자", "남해유자영농", 260, "correcting", {**GOOD}),
+    ("유자", "농업회사법인 고흥유자영농조합 주식회사", 1200, "approved", {**GOOD}),
+    ("파우치", "한빛포장", 60, "approved", {**GOOD}),
 ]
 
 

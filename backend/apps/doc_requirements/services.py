@@ -115,7 +115,8 @@ def _check_inspection(inspection):
     ]
     if problems:
         raise errors.ValidationFailed(details=problems)
-    return dict(inspection)
+    # D-234 r1: 성적서 유무는 시스템 계산(같은 LOT D01 파일) — 입고 값은 받되 쓰지 않는다
+    return {k: v for k, v in inspection.items() if k != "has_coa"}
 
 
 def _complete_pass(actor_id, document):
@@ -450,6 +451,8 @@ def _bundle_document(brief, approved, progress, submit=(False, None), can_write=
         "verdict": brief["verdict"],
         "nonconforming": brief["nonconforming"],
         "inspection": brief["verdict_values"] or {},  # D-232: 검사 항목(외관·포장·표시·성적서)
+        # D-234: 계산으로 채운 키(성적서 유무 — 저장 값 없음, 같은 LOT D01 파일 기준)
+        "inspection_derived": brief["verdict_derived"],
         "approved": None
         if approved is None
         else {k: approved[k] for k in ("request_id", "attempt", "closed_at")},

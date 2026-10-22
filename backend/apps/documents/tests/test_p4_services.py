@@ -10,6 +10,7 @@ from pathlib import Path
 from django.db import connection, transaction
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 
 from apps.core import trace
 from apps.documents import errors, files, flows, services
@@ -679,6 +680,79 @@ class ReadTests(P4TestCase):
         self.assertEqual(hints, ["유", "무"])
         after = list(DocSection.objects.order_by("pk").values_list("values_json", flat=True))
         self.assertEqual(before, after)
+
+    # ---- D-234 성적서 유무 공통 계산(N11)·상신 확정(R1)·출력(R2)·요약(R3)
+
+    @staticmethod
+    def _coa_saved(document_id):
+        row = DocSection.objects.get(document_id=document_id, section_def="inspection")
+        return (row.values_json or {}).get("has_coa")
+
+    @staticmethod
+    def _lock(document_id):
+        # 작성완료 기록 필수(ck_document_completed_required) — 상신 잠금만 보려고 상태를 직접 맞춤
+        Document.objects.filter(pk=document_id).update(
+            status="completed", completed_at=timezone.now(), completed_by_id=3
+        )
+        with transaction.atomic():
+            services.lock_for_review(document_id)
+
+    def test_d234_coa_status(self):
+        attach_file(new_d01(88)["document"]["document_id"])
+        new_d01(89)
+        with self.assertNumQueries(1):
+            self.assertEqual(services.coa_status([88, 89, 88]), {88: "유", 89: "무"})
+        with self.assertNumQueries(0):
+            self.assertEqual(services.coa_status([]), {})
+
+    def test_d234_lock_freezes_derived_coa(self):
+        """R1: 상신 잠금 때 빈 성적서 유무 → 계산 값 저장. 그 뒤 파일이 생겨도 저장 값 그대로."""
+        d88 = new_d03(88)["document"]["document_id"]
+        self.assertIsNone(self._coa_saved(d88))
+        self._lock(d88)
+        self.assertEqual(self._coa_saved(d88), "무")
+        attach_file(new_d01(88)["document"]["document_id"])
+        self.assertEqual(self._coa_saved(d88), "무")
+        printed = services.documents_for_print([d88])[d88]
+        row = next(s for s in printed["sections"] if s["section_def"] == "inspection")
+        self.assertEqual(row["values"]["has_coa"], "무")  # 출력도 확정 값(지금 파일은 유)
+
+    def test_d234_r1_system_value_only(self):
+        """r1: 성적서 유무는 시스템 계산만 — 사람 입력 거부, 저장 값이 있어도 상신 전엔 계산 값,
+        상신 잠금 때 계산 값으로 덮어써 확정."""
+        d88 = new_d03(88)["document"]["document_id"]
+        row = DocSection.objects.get(document_id=d88, section_def="inspection")
+        with self.assertRaises(errors.ValidationFailed) as ctx:
+            services.update_document(
+                3,
+                d88,
+                {
+                    "expected_version": Document.objects.get(pk=d88).version,
+                    "sections": {"update": [{"section_id": row.pk, "values": {"has_coa": "유"}}]},
+                },
+            )
+        self.assertIn("readonly", [d["code"] for d in ctx.exception.details])
+        saved = {**row.values_json, "has_coa": "유"}
+        DocSection.objects.filter(pk=row.pk).update(values_json=saved)
+        shown = next(
+            s for s in services.get_document(d88)["sections"] if s["section_def"] == "inspection"
+        )
+        self.assertEqual(shown["values"]["has_coa"], "무")  # D01 파일 없음
+        self._lock(d88)
+        self.assertEqual(self._coa_saved(d88), "무")
+
+    def test_d234_brief_and_print_use_effective_value(self):
+        """R2·R3: 저장 값이 없으면 출력·요약은 계산 값(출처 표시), 저장 값은 바꾸지 않음."""
+        attach_file(new_d01(88)["document"]["document_id"])
+        d88 = new_d03(88)["document"]["document_id"]
+        brief = services.brief_documents([d88])["items"][0]
+        self.assertEqual(
+            (brief["verdict_values"]["has_coa"], brief["verdict_derived"]), ("유", ["has_coa"])
+        )
+        printed = services.documents_for_print([d88])[d88]
+        row = next(s for s in printed["sections"] if s["section_def"] == "inspection")
+        self.assertEqual(row["values"]["has_coa"], "유")
+        self.assertIsNone(self._coa_saved(d88))
 
     def test_tc151_templates_flag(self):
         ensure_templates()

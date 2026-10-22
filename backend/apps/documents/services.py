@@ -239,9 +239,12 @@ def _assemble(document, rows, refs=None, files=None, deviations=None, hints=None
     data["requirement"] = _requirement(document.record_key, refs)
     data["refs"] = refs
     data["sections"] = [_section_row(r) for r in rows]
+    frozen = document.status in FROZEN_STATUSES
     for row in data["sections"]:
         if hints and row["section_id"] in hints:
             row["hints"] = hints[row["section_id"]]
+            # D-234 r1: values = 실제 값(성적서 유무는 시스템 계산, 잠긴 문서는 확정 값)
+            row["values"], _ = _effective(row["values"], row["hints"], frozen)
     data["files"] = files or []
     data["deviations"] = deviations or []
     data["correction"], data["corrections"] = corrections or (None, [])
@@ -340,50 +343,127 @@ def _deviations_of(document_id):
     return [_deviation_row(d, checkers.get(d.deviation_id, [])) for d in items]
 
 
-def _hints(document, rows, refs):
-    """필드 hint 규칙 계산(FR-28).
+# ---------------------------------------------------------------- D-234 성적서 유무(파생 값)
 
-    file_exists: 같은 LOT의 지정 양식(D01) 문서에 파일이 있으면 "유". 저장 값은 바꾸지 않는다.
-    LOT은 반복 섹션이면 그 행의 행 단위 참조,
-    반복 아닌 섹션이면 문서 단위 참조(P6a-S2 2.3 — D03 v2).
+
+COA_TYPE = "D01"  # 성적서 유무 = 같은 LOT의 시험성적서(D01)에 파일이 있는가
+
+
+def _hint_rules(schema):
+    """file_exists hint 필드 [(섹션 키, 필드 키, 양식 코드, 반복 여부)](FR-28)."""
+    return [
+        (section["key"], field["key"], field["hint"].get("type_code"), section.get("repeat", False))
+        for section in schema["sections"]
+        for field in section["fields"]
+        if isinstance(field.get("hint"), dict) and field["hint"].get("kind") == "file_exists"
+    ]
+
+
+def _lots_with_files(lot_ids, type_code):
+    """LOT 중 지정 양식(type_code) 문서에 파일이 있는 LOT 집합. SQL 1(빈 목록이면 0)."""
+    lots = sorted({lot for lot in lot_ids if lot is not None})
+    if not lots:
+        return set()
+    has_file = DocumentFile.objects.filter(document_id=OuterRef("document_id"))
+    matched = Document.objects.filter(
+        pk=OuterRef("document_id"), deleted_at__isnull=True, template__type_code=type_code
+    )
+    return set(
+        DocumentRef.objects.filter(lot_id__in=lots, section_id__isnull=True)
+        .filter(Exists(matched), Exists(has_file))
+        .values_list("lot_id", flat=True)
+    )
+
+
+def coa_status(lot_ids):
+    """N11(D-234): LOT별 시험성적서(D01) 파일 유무 {lot_id: "유"|"무"}. SQL 1(빈 목록이면 0).
+
+    성적서 유무의 계산 규칙은 이 한 곳 — 상세·묶음(F26)·출력(N9)·상신 확정(DOC-LCK)이 모두 같은
+    계산(_lots_with_files)을 쓴다. D-234 r1: **시스템 계산 값만**(사람 입력 없음 — _effective).
     """
-    rules = []
-    for section in document.template.schema_json["sections"]:
-        for field in section["fields"]:
-            hint = field.get("hint")
-            if isinstance(hint, dict) and hint.get("kind") == "file_exists":
-                rules.append((section["key"], field["key"], hint, section.get("repeat", False)))
-    if not rules:
-        return {}
-    row_lots = {r["section_id"]: r["lot_id"] for r in refs if r["section_id"] and r["lot_id"]}
-    doc_lot = next((r["lot_id"] for r in refs if r["section_id"] is None and r["lot_id"]), None)
+    lots = sorted({i for i in lot_ids if isinstance(i, int) and not isinstance(i, bool)})
+    with_files = _lots_with_files(lots, COA_TYPE)
+    return {lot: "유" if lot in with_files else "무" for lot in lots}
+
+
+def _hints_many(items):
+    """FR-28 hint 계산을 문서 여러 건에 한 번에. items = [(document, rows, refs)].
+
+    rows: section_def·section_id를 가진 행, refs: _ref_row 목록. LOT은 반복 섹션이면 그 행의
+    행 단위 참조, 반복 아닌 섹션이면 문서 단위 참조(P6a-S2 2.3 — D03 v2).
+    SQL = 양식 코드 종류 수(보통 1, 규칙·LOT이 없으면 0).
+    반환 {document_id: {section_id: {필드: "유"|"무"}}}.
+    """
+    plans, wanted = [], {}
+    for document, rows, refs in items:
+        rules = _hint_rules(document.template.schema_json)
+        if not rules:
+            continue
+        row_lots = {r["section_id"]: r["lot_id"] for r in refs if r["section_id"] and r["lot_id"]}
+        doc_lot = next((r["lot_id"] for r in refs if r["section_id"] is None and r["lot_id"]), None)
+        for section_key, field_key, type_code, repeat in rules:
+            for row in rows:
+                if row.section_def != section_key:
+                    continue
+                lot = row_lots.get(row.section_id) if repeat else doc_lot
+                if lot is not None:
+                    plans.append((document.document_id, row.section_id, field_key, type_code, lot))
+                    wanted.setdefault(type_code, set()).add(lot)
+    with_files = {code: _lots_with_files(lots, code) for code, lots in wanted.items()}
     result = {}
-    for section_key, field_key, hint, repeat in rules:
-        lot_by_section = (
-            row_lots
-            if repeat
-            else {r.section_id: doc_lot for r in rows if r.section_def == section_key and doc_lot}
-        )
-        lots = [lot_by_section.get(r.section_id) for r in rows if r.section_def == section_key]
-        lots = [lot for lot in lots if lot is not None]
-        with_files = set()
-        if lots:
-            has_file = DocumentFile.objects.filter(document_id=OuterRef("document_id"))
-            matched = Document.objects.filter(
-                pk=OuterRef("document_id"),
-                deleted_at__isnull=True,
-                template__type_code=hint.get("type_code"),
-            )
-            with_files = set(
-                DocumentRef.objects.filter(lot_id__in=lots, section_id__isnull=True)
-                .filter(Exists(matched), Exists(has_file))
-                .values_list("lot_id", flat=True)
-            )
-        for row in rows:
-            if row.section_def == section_key and row.section_id in lot_by_section:
-                value = "유" if lot_by_section[row.section_id] in with_files else "무"
-                result.setdefault(row.section_id, {})[field_key] = value
+    for document_id, section_id, field_key, type_code, lot in plans:
+        value = "유" if lot in with_files[type_code] else "무"
+        result.setdefault(document_id, {}).setdefault(section_id, {})[field_key] = value
     return result
+
+
+def _hints(document, rows, refs):
+    """필드 hint 규칙 계산(FR-28) — 한 문서.
+
+    저장 값은 여기서 바꾸지 않는다(확정은 상신 잠금 D-234).
+    """
+    return _hints_many([(document, rows, refs)]).get(document.document_id, {})
+
+
+# D-234 r1: 상신 때 확정한 저장 값을 보여 주는 상태(잠긴 문서). 그 밖에는 지금 계산 값
+FROZEN_STATUSES = ("submitted", "approved")
+
+
+def _effective(values, hints, frozen=False):
+    """D-234 r1 실제 값: hint 필드(성적서 유무)는 **시스템 계산 값만** — 사람 입력 없음.
+
+    frozen(결재중·승인)이면 상신 때 확정한 저장 값, 저장 값이 없으면(이 규칙 전에 잠긴 문서)
+    계산 값. 반환 (값, 지금 계산으로 채운 키 목록).
+    """
+    merged, derived = dict(values or {}), []
+    for key, value in (hints or {}).items():
+        if frozen and merged.get(key) not in (None, ""):
+            continue
+        merged[key] = value
+        derived.append(key)
+    return merged, derived
+
+
+def _freeze_hints(document_id):
+    """D-234 R1: 상신 잠금 때 hint 필드(성적서 유무)를 지금 계산 값으로 저장한다(r1: 항상 덮어씀).
+
+    이후 스냅샷·승인본·출력은 이 값으로 고정된다(파일이 나중에 바뀌어도 그대로). 반려·상신 취소·
+    정정 뒤 다시 상신하면 그때 계산 값으로 다시 확정. hint 규칙이 없는 양식은 SQL 1(문서·양식).
+    반환 바뀐 칸 수.
+    """
+    document = Document.objects.select_related("template").get(pk=document_id)
+    if not _hint_rules(document.template.schema_json):
+        return 0
+    rows = list(DocSection.objects.filter(document_id=document_id))
+    hints = _hints(document, rows, _refs_by_document([document_id])[document_id])
+    filled = 0
+    for row in rows:
+        merged, _ = _effective(row.values_json, hints.get(row.section_id))
+        changed = [k for k in merged if merged[k] != (row.values_json or {}).get(k)]
+        if changed:
+            DocSection.objects.filter(section_id=row.section_id).update(values_json=merged)
+            filled += len(changed)
+    return filled
 
 
 def _full(document):
@@ -1457,6 +1537,8 @@ def lock_for_review(document_id, expected_version=None):
             file_id__in=DocumentFile.objects.filter(document_id=document_id).values("file_id"),
         ).update(retained_at=now)
         s.note(f"보존 표시 {kept}개")
+    with step("DOC-LCK-01c", "DOC", "파생 값 확정(성적서 유무 — D-234)") as s:
+        s.note(f"확정 {_freeze_hints(document_id)}칸")
     with step("DOC-LCK-02", "DOC", "결과"):
         return _lifecycle_result(document_id)
 
@@ -2539,7 +2621,8 @@ def document_roles(document, actor_id=None):
 
 
 def brief_documents(document_ids):
-    """F26: 문서 요약 여러 건(≤50). SQL 3(문서·양식, 1행 섹션, 문서 단위 참조).
+    """F26: 문서 요약 여러 건(≤50). SQL 3(문서·양식, 1행 섹션, 문서 단위 참조)
+    + D-234 성적서 유무 계산 1(hint 필드가 있는 양식이 있을 때만).
 
     빈 목록이면 SQL 없음.
     반환 {items: [...입력 순서], missing: [없거나 삭제된 id]}.
@@ -2567,21 +2650,24 @@ def brief_documents(document_ids):
         }
     found = [i for i in ids if i in documents]
     with step("DOC-BRF-03", "DOC", "1행 섹션·문서 단위 참조") as s:
-        values, refs = {}, {i: [] for i in found}
+        values, refs, rows = {}, {i: [] for i in found}, {i: [] for i in found}
         if found:
             keys = {
                 section["key"]
                 for d in documents.values()
                 for section in _one_row_sections(d.template.schema_json)
             }
-            for document_id, key, row in DocSection.objects.filter(
+            for document_id, key, row, section_id in DocSection.objects.filter(
                 document_id__in=found, section_def__in=sorted(keys)
-            ).values_list("document_id", "section_def", "values_json"):
+            ).values_list("document_id", "section_def", "values_json", "section_id"):
                 values.setdefault(document_id, {})[key] = row or {}
+                rows[document_id].append(_BriefRow(key, section_id))
             for ref in DocumentRef.objects.filter(
                 document_id__in=found, section_id__isnull=True
             ).order_by("ref_id"):
                 refs[ref.document_id].append(_ref_row(ref))
+            # D-234 R3: 성적서 유무 실제 값(저장 값 없으면 계산) — 문서 단위 LOT만(1행 섹션)
+            hints = _hints_many([(documents[i], rows[i], refs[i]) for i in found])
         else:
             s.skip("문서 없음")
     with step("DOC-BRF-04", "DOC", "조립"):
@@ -2593,6 +2679,17 @@ def brief_documents(document_ids):
             verdict, nonconforming = _verdict_of(d.template.schema_json, own)
             counts = validation.check_counts(d.template.schema_json, own)  # P8 F26 변경
             judged = _verdict_section(d.template.schema_json)
+            shown, derived = None, []
+            if judged is not None:
+                row_id = next(
+                    (r.section_id for r in rows[document_id] if r.section_def == judged["key"]),
+                    None,
+                )
+                shown, derived = _effective(
+                    own.get(judged["key"]),
+                    hints.get(document_id, {}).get(row_id),
+                    d.status in FROZEN_STATUSES,
+                )
             items.append(
                 {
                     "document_id": document_id,
@@ -2608,12 +2705,21 @@ def brief_documents(document_ids):
                     "nonconforming": nonconforming,
                     "check_counts": counts,
                     # D-232: 판정 섹션 값 전체(D03 묶음 검사 항목 열). 판정 섹션 없으면 None
-                    "verdict_values": None
-                    if judged is None
-                    else dict(own.get(judged["key"]) or {}),
+                    # D-234: hint 필드(성적서 유무)는 시스템 값 — 지금 계산이면 키가 verdict_derived
+                    "verdict_values": shown,
+                    "verdict_derived": derived,
                 }
             )
         return {"items": items, "missing": [i for i in ids if i not in documents]}
+
+
+class _BriefRow:
+    """F26 hint 계산용 행(section_def·section_id만)."""
+
+    __slots__ = ("section_def", "section_id")
+
+    def __init__(self, section_def, section_id):
+        self.section_def, self.section_id = section_def, section_id
 
 
 def find_documents_by_lots(lot_ids, type_codes):
@@ -3195,9 +3301,11 @@ PRINT_BATCH = 100  # 한 번에 읽는 문서 수 상한 — WF가 나눠 부른
 
 
 def documents_for_print(document_ids):
-    """N9: 문서들의 상세(get_document 모양) + open_correction·skip_reason. SQL 6개(문서 수 무관).
+    """N9: 문서들의 상세(get_document 모양) + open_correction·skip_reason. SQL 6개(문서 수 무관)
+    + D-234 성적서 유무 계산 1(hint 필드가 있는 양식이 있을 때만).
 
-    파일·힌트는 읽지 않는다(출력에 없음 — D01·D02 출력 없음). 삭제된·없는 문서는 빠진다.
+    파일은 읽지 않는다(D01·D02 출력 없음). D-234 R2: 섹션 values는 **실제 값** — hint 필드
+    (성적서 유무)는 시스템 값(_assemble), hints에도 둔다. 삭제된·없는 문서는 빠진다.
     반환 {document_id: 상세}. 100건 넘으면 ValueError(호출자가 나눔).
     """
     ids = sorted({i for i in document_ids if isinstance(i, int) and not isinstance(i, bool)})
@@ -3234,6 +3342,9 @@ def documents_for_print(document_ids):
             "-started_at", "-correction_id"
         ):
             history.setdefault(c.document_id, []).append(c)
+        hints = _hints_many(
+            [(d, rows.get(d.document_id, []), refs[d.document_id]) for d in documents]
+        )
     result = {}
     for document in documents:
         mine = history.get(document.document_id, [])
@@ -3248,7 +3359,7 @@ def documents_for_print(document_ids):
             refs[document.document_id],
             None,
             deviations.get(document.document_id, []),
-            None,
+            hints.get(document.document_id),
             corrections,
         )
         data["open_correction"] = current is not None

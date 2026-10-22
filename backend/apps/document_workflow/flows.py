@@ -8,7 +8,8 @@ _LINE = ["WF-SUB-02b", "WF-SUB-03", "WF-SUB-03b"]
 _OPN = [*[f"APR-OPN-0{n}" for n in range(0, 5)], "APR-OPN-04b", "APR-OPN-05"]
 _SUB = (
     ["WF-SUB-01", "WF-SUB-02", *_LINE]
-    + ["WF-SUB-04", "WF-SUB-05", "DOC-LCK-00", "DOC-LCK-01", "DOC-LCK-01b", "DOC-LCK-02"]
+    + ["WF-SUB-04", "WF-SUB-05", "DOC-LCK-00", "DOC-LCK-01", "DOC-LCK-01b", "DOC-LCK-01c"]
+    + ["DOC-LCK-02"]
     + ["WF-SUB-06", "DOC-GET-01", "DOC-GET-02", "DOC-GET-03"]
     + ["WF-SUB-07", *_OPN, "WF-SUB-08"]
 )
