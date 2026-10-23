@@ -74,14 +74,43 @@ def check_template_schema(schema):
         if "nonconforming" in section:
             problems += _check_condition(section["nonconforming"], keys, f"{where}.nonconforming")
         order = section.get("phase_order")
-        if order is not None and (
+        order_invalid = order is not None and (
             not isinstance(order, dict)
             or order.get("field") not in keys
             or order.get("time_field") not in keys
             or not order.get("first")
             or not order.get("last")
-        ):
+        )
+        if order_invalid:
             problems.append(f"{where}.phase_order는 field·time_field·first·last가 필요합니다.")
+        if "fixed_phase_rows" in section:
+            if not isinstance(section["fixed_phase_rows"], bool) or (
+                section["fixed_phase_rows"]
+                and (not section.get("repeat") or not order or order_invalid)
+            ):
+                problems.append(f"{where}.fixed_phase_rows는 반복 영역의 phase_order가 필요합니다.")
+            elif section["fixed_phase_rows"]:
+                phase = next((f for f in fields if f.get("key") == order["field"]), {})
+                middle = [
+                    x for x in phase.get("options", []) if x not in (order["first"], order["last"])
+                ]
+                if len(middle) != 1:
+                    problems.append(
+                        f"{where}.fixed_phase_rows에는 중간 측정시점이 하나 필요합니다."
+                    )
+        elapsed = section.get("elapsed")
+        if elapsed is not None and (
+            not isinstance(elapsed, dict)
+            or not section.get("fixed_phase_rows")
+            or order_invalid
+            or not isinstance(elapsed.get("min"), int)
+            or not isinstance(elapsed.get("max"), int)
+            or elapsed["min"] < 0
+            or elapsed["min"] > elapsed["max"]
+            or elapsed.get("value_field") not in keys
+            or elapsed.get("verdict_field") not in keys
+        ):
+            problems.append(f"{where}.elapsed는 시작·종료 시각과 계산 필드가 필요합니다.")
     if "requirement_only" in schema and not isinstance(schema["requirement_only"], bool):
         problems.append("requirement_only는 true/false여야 합니다.")
     if "skippable" in schema and not isinstance(schema["skippable"], bool):
@@ -437,6 +466,38 @@ def is_nonconforming(schema_section, values):
     return bool(rule) and evaluate(rule, values) is True
 
 
+def fixed_phase_values(section):
+    """고정 시작·종료와 사용자가 추가할 중간 구분. 다른 양식이면 None."""
+    if not section.get("fixed_phase_rows"):
+        return None
+    order = section["phase_order"]
+    field = order["field"]
+    options = next(f["options"] for f in section["fields"] if f["key"] == field)
+    middle = next(value for value in options if value not in (order["first"], order["last"]))
+    return field, order["first"], middle, order["last"]
+
+
+def elapsed_values(section, rows):
+    """시작·종료 측정일시의 분 차이와 시간 판정. 미입력은 빈 값, 역순은 오류."""
+    rule = section["elapsed"]
+    order = section["phase_order"]
+    result = {rule["value_field"]: None, rule["verdict_field"]: None}
+    first = [v for v in rows if v.get(order["field"]) == order["first"]]
+    last = [v for v in rows if v.get(order["field"]) == order["last"]]
+    if len(first) != 1 or len(last) != 1:
+        return result, None
+    start = parse_local_datetime(first[0].get(order["time_field"]))
+    end = parse_local_datetime(last[0].get(order["time_field"]))
+    if start is None or end is None:
+        return result, None
+    minutes = int((end - start).total_seconds() / 60)
+    if minutes <= 0:
+        return result, "time_order"
+    result[rule["value_field"]] = minutes
+    result[rule["verdict_field"]] = "적합" if rule["min"] <= minutes <= rule["max"] else "부적합"
+    return result, None
+
+
 def completion_problems(schema, rows, *, deviation_count, file_count):
     """작성완료 검사 DOC-VR-19. rows: [(section_def, row_no, values)]."""
     problems = []
@@ -470,6 +531,20 @@ def completion_problems(schema, rows, *, deviation_count, file_count):
         order = section.get("phase_order")
         if order and section["repeat"]:
             problems += _phase_order_problems(key, label, order, [v for _, v in items])
+        if section.get("elapsed"):
+            calculated, issue = elapsed_values(section, [v for _, v in items])
+            if issue:
+                problems.append(
+                    error(f"sections[{key}]", issue, "종료 전 시각은 시작 전보다 늦어야 합니다.")
+                )
+            elif calculated[section["elapsed"]["value_field"]] is not None:
+                end = next((v for _, v in items if v.get(order["field"]) == order["last"]), None)
+                if end is not None and any(end.get(k) != v for k, v in calculated.items()):
+                    problems.append(
+                        error(
+                            f"sections[{key}]", "elapsed_mismatch", "총 건조시간을 다시 계산하세요."
+                        )
+                    )
     if nonconforming and deviation_count < 1:
         problems.append(
             error(

@@ -48,7 +48,13 @@ def _good(process, day, n, total):
     if process == "1P":
         return {"phase": phase, "measured_at": at, "gauss": 10500, "rod_cleaned": "O"}
     if process == "2B":
-        return {"phase": phase, "measured_at": at, "temp_c": 70.0, "dry_minutes": 120}
+        if total > 1:
+            minute = round((n - 1) * 120 / (total - 1))
+            at = (
+                datetime.datetime.combine(day, datetime.time(9))
+                + datetime.timedelta(minutes=minute)
+            ).strftime("%Y-%m-%dT%H:%M")
+        return {"phase": phase, "measured_at": at, "temp_c": 70.0}
     return {
         "phase": phase,
         "passed_at": at,
@@ -122,14 +128,45 @@ def _version(document_id):
 def _add_rows(document_id, section_def, values_list):
     detail = doc.get_document(document_id)
     info = next(s for s in detail["sections"] if s["section_def"] == "info")
+    existing = [s for s in detail["sections"] if s["section_def"] == section_def]
+    anchors = {s["values"].get("phase"): s for s in existing}
+    before = {s["section_id"] for s in existing}
     sections = {"update": [{"section_id": info["section_id"], "values": {"inspector": 4}}]}
-    if values_list:
-        sections["add"] = [{"section_def": section_def, "values": v} for v in values_list]
-    doc.update_document(
+    sections["add"] = []
+    targets = []
+    for values in values_list:
+        if detail["template"]["type_code"] == "CCP-2B" and detail["template"]["version"] >= 3:
+            values = {k: v for k, v in values.items() if k not in ("dry_minutes", "time_verdict")}
+        anchor = anchors.get(values.get("phase"))
+        if anchor and values["phase"] in (
+            "작업시작 전",
+            "작업종료 후",
+            "건조시작 전",
+            "건조종료 전",
+            "시작",
+            "종료",
+        ):
+            sections["update"].append(
+                {
+                    "section_id": anchor["section_id"],
+                    "values": {k: v for k, v in values.items() if k != "phase"},
+                }
+            )
+            targets.append(anchor["section_id"])
+        else:
+            sections["add"].append({"section_def": section_def, "values": values})
+            targets.append(None)
+    if not sections["add"]:
+        del sections["add"]
+    result = doc.update_document(
         ACTOR, document_id, {"expected_version": detail["version"], "sections": sections}
     )
-    rows = [s for s in doc.get_document(document_id)["sections"] if s["section_def"] == section_def]
-    return sorted(rows, key=lambda s: s["row_no"])
+    rows = [s for s in result["sections"] if s["section_def"] == section_def]
+    added = iter(
+        sorted((s for s in rows if s["section_id"] not in before), key=lambda s: s["row_no"])
+    )
+    by_id = {s["section_id"]: s for s in rows}
+    return [by_id[target] if target is not None else next(added) for target in targets]
 
 
 @csrf_exempt

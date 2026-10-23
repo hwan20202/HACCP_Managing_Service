@@ -107,14 +107,14 @@ class TemplateTests(TestCase):
     def setUpTestData(cls):
         setup_p4()
 
-    def test_v2_active_v1_inactive(self):
+    def test_v3_active_older_versions_inactive(self):
         active = DocumentTemplate.objects.filter(type_code="CCP-3P", is_active=True)
-        self.assertEqual(list(active.values_list("version", flat=True)), [2])
+        self.assertEqual(list(active.values_list("version", flat=True)), [3])
         self.assertTrue(DocumentTemplate.objects.filter(type_code="CCP-3P", version=1).exists())
 
-    def test_new_document_is_v2(self):
-        detail = new_ccp("CCP-3P", "3P")["document"]
-        self.assertEqual(services.get_document(detail["document_id"])["template"]["version"], 2)
+    def test_new_document_is_v3(self):
+        detail = new_ccp("CCP-3P", "3P", legacy=False)["document"]
+        self.assertEqual(services.get_document(detail["document_id"])["template"]["version"], 3)
 
     def test_v2_input_and_completion_rules(self):
         document_id = new_ccp("CCP-3P", "3P")["document"]["document_id"]
@@ -193,4 +193,4 @@ class MigrationTests(TestCase):
     def test_no_v1_template_does_nothing(self):
         DocumentTemplate.objects.filter(type_code="CCP-3P", version=1).delete()
         self.run_forward()
-        self.assertEqual(DocumentTemplate.objects.filter(type_code="CCP-3P").count(), 1)
+        self.assertEqual(DocumentTemplate.objects.filter(type_code="CCP-3P").count(), 2)

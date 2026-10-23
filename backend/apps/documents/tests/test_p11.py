@@ -63,7 +63,7 @@ class MeasurementSummaryTests(P11TestCase):
         self.assertEqual((latest["at"], latest["section_def"]), (at("13:00"), "rounds"))
         self.assertEqual(latest["phase"], "작업 중")  # 같은 시각 → row_no 큰 것(3번째 행)
         self.assertEqual(latest["verdict"], "적합")
-        self.assertEqual(self.summary_of(document_id)["rows_by_section"], {"rounds": 4})
+        self.assertEqual(self.summary_of(document_id)["rows_by_section"], {"rounds": 3})
 
     def test_tc006_no_rows(self):
         document_id = ccp_doc("CCP-3P", 12)

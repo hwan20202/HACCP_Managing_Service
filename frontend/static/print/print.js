@@ -143,7 +143,9 @@
       <tbody>${body}</tbody></table>`;
   }
 
-  function rows2bHtml(doc) {
+  function rows2bHtml(data) {
+    const doc = data.document;
+    const elapsed = data.template.version >= 3;
     const rows = pad(doc.sections.rounds || [], MIN_ROWS);
     const left = `<div class="bold">${esc(doc.info.item_name)}</div>`;
     const body = rows.map((r, i) => {
@@ -152,7 +154,7 @@
         <td>${r ? esc(clock(v.measured_at, doc.work_date)) : ':'}</td>
         <td>${r ? `${esc(v.temp_c)} ℃` : '℃'}</td>
         <td>${r ? esc(minutesHm(v.dry_minutes)) : '시간 &nbsp; 분'}</td>
-        <td>${verdict(v.verdict)}</td>
+        <td>${elapsed ? (r ? `<span class="chk${v.verdict === '부적합' || v.time_verdict === '부적합' ? ' bad' : ''}">온도 ${esc(v.verdict || '–')}${v.phase === '건조종료 전' ? `<br>시간 ${esc(v.time_verdict || '–')}` : ''}</span>` : '') : verdict(v.verdict)}</td>
         <td class="signer">${r ? sign(r.recorded_by) : ''}</td>
         <td class="l sm">${esc(v.note)}</td></tr>`;
     }).join('');
@@ -600,7 +602,7 @@
     const is3p = data.type_code === 'CCP-3P';
     let body;
     if (is3p) body = guide3pHtml(data) + rows3pHtml(data);
-    else if (data.type_code === 'CCP-2B') body = guideRowsHtml(group(data, '관리기준').rows) + rows2bHtml(doc);
+    else if (data.type_code === 'CCP-2B') body = guideRowsHtml(group(data, '관리기준').rows) + rows2bHtml(data);
     else body = guideRowsHtml(group(data, '관리기준').rows) + rows1pHtml(doc);
     body += actionHtml(data, is3p) + deviationsHtml(doc);
     return `<div class="prt-sheet" data-type="${esc(data.type_code)}">

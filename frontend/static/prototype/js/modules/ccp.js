@@ -10,16 +10,16 @@ const CCPPage = {
     'CCP-1P': {
       id:'CCP-1P', label:'쇳가루 제거', icon:'🧲', color:'#f59e0b',
       hazard:'물리적',
-      limits:'자력 10,000가우스(G) 이상 / 자석봉 8개 / 분말투입량 1kg/min / 3,530rpm 속도고정',
+      limits:'자력 8,000가우스(G) 이상 / 자석봉 Φ42.7 / 분말투입량 1kg/min / 3,530rpm 속도고정',
       monitoring:'작업 시작 전·1시간마다·작업종료 후 가우스미터기로 자력 측정 + 자석봉 청소 확인',
       corrective:[
-        '자력 미달(10,000G 미만) 시: 즉시 작업 중단 → 자석봉 재조정 → 이탈 제품 재검사 → 기록',
+        '자력 미달(8,000G 미만) 시: 즉시 작업 중단 → 자석봉 재조정 → 이탈 제품 재검사 → 기록',
         '기계 고장 시: 즉시 작업 중단 → 수리 후 재가동 (즉각 수리 불가 시 부적합품 보관소 격리)',
         '공통: 문제 발생 시 HACCP팀장 보고 후 조치, 개선조치 후 모니터링 일지 기록 및 HACCP팀장 승인',
       ],
       // type:'gauss' — 가우스미터 측정 전용 폼
       type:'gauss',
-      limitGauss: 10000,  // 한계기준: 10,000G 이상
+      limitGauss: 8000,  // 한계기준: 8,000G 이상
     },
     'CCP-2B': {
       id:'CCP-2B', label:'건조 공정', icon:'🌡️', color:'#6366f1',
@@ -422,16 +422,16 @@ const CCPPage = {
   renderGaussForm(j, def, isView) {
     const times = ['작업시작 전', '1시간 후', '2시간 후', '3시간 후', '4시간 후', '작업종료 후'];
     const ex = j.entries || [];
-    const limitG = def.limitGauss || 10000;
+    const limitG = def.limitGauss || 8000;
     return `
     <div style="margin-bottom:.75rem;padding:.6rem .9rem;background:#f59e0b11;border:1px solid #f59e0b44;border-radius:8px;font-size:.82rem;">
       <strong style="color:#f59e0b;">📌 한계기준:</strong> 자력 <strong>${limitG.toLocaleString()}G(가우스) 이상</strong>
-      &nbsp;|&nbsp; 자석봉 8개 &nbsp;|&nbsp; 투입량 1kg/min &nbsp;|&nbsp; 3,530rpm
+      &nbsp;|&nbsp; 자석봉 Φ42.7 &nbsp;|&nbsp; 투입량 1kg/min &nbsp;|&nbsp; 3,530rpm
     </div>
     <div style="overflow-x:auto;"><table class="data-table">
       <thead><tr>
         <th>측정시점</th>
-        <th>자력(G) <span style="font-size:.7rem;color:var(--text-secondary);">10,000G↑</span></th>
+        <th>자력(G) <span style="font-size:.7rem;color:var(--text-secondary);">8,000G↑</span></th>
         <th>자석봉 청소</th>
         <th>판정</th>
         <th>측정자</th>

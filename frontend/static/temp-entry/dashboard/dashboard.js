@@ -53,7 +53,7 @@
   ];
   const VALUE_TEXT = {
     'CCP-1P': (v) => `${num(v.gauss)}G · 청소 ${esc(v.rod_cleaned ?? '-')}`,
-    'CCP-2B': (v) => `${esc(v.temp_c ?? '-')}℃ · ${fmtMinutes(v.dry_minutes)}`,
+    'CCP-2B': (v) => `${esc(v.temp_c ?? '-')}℃${typeof v.dry_minutes === 'number' ? ` · ${v.time_verdict ? '총 ' : ''}${fmtMinutes(v.dry_minutes)}${v.time_verdict ? ` · 시간 ${esc(v.time_verdict)}` : ''}` : ''}`,
     'CCP-3P': (v) => {
       const off = P3_EXPECT.filter(([k, , want]) => v[k] !== want).map(([, label]) => label);
       return off.length ? `어긋남 ${esc(off.join('·'))}` : '5칸 정상';

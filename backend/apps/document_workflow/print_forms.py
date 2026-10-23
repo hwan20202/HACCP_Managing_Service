@@ -6,6 +6,8 @@
 - 형식은 양식 `guide`와 같다: [{title, rows: [[칸 이름, 내용]]}]. 내용의 줄바꿈은 종이 줄바꿈.
 """
 
+from copy import deepcopy
+
 PRINT_SHEETS = {
     "CCP-1P": "single",
     "CCP-2B": "single",
@@ -139,3 +141,18 @@ GUIDES = {
         },
     ],
 }
+
+CCP_1P_8000_GUIDE = deepcopy(GUIDES["CCP-1P"])
+CCP_1P_8000_GUIDE[0]["rows"][0][1] = (
+    "자력 8,000가우스 이상 / 자석봉 청소상태 확인\n"
+    "- 자력 8,000가우스, Φ42.7\n"
+    "- 분말 투입량 : 분당 1kg / 3530rpm/min 속도고정\n"
+    "- 금속이물 (쇳가루) 10mg/kg 이하로 관리"
+)
+
+CCP_2B_ELAPSED_GUIDE = deepcopy(GUIDES["CCP-2B"])
+CCP_2B_ELAPSED_GUIDE[0]["rows"][2][1] = (
+    "○ 건조온도 : 건조기 판넬에 표시되는 온도를 확인하여 기록한다.\n"
+    "○ 총 건조시간 : 건조시작 전과 건조종료 전 측정일시의 차이로 자동 계산한다.\n"
+    "※ 건조기 온도계/타이머는 연 1회 검·교정을 실시한다."
+)
