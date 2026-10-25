@@ -11,9 +11,11 @@ The disposition is a record only: returning or disposing the stock is a separate
 (movements.return_to_supplier / dispose).
 
 Source types that need evidence (hold_source_types.requires_evidence: CCP, INCOMING_INSPECTION,
-FINISHED_INSPECTION) need source_document_id = the document app's document_id. The document app
-is expected to call hold_batch() when a CCP deviation is recorded (to be agreed). A release
-condition on the document side (e.g. 개선조치 완료) is not checked yet.
+FINISHED_INSPECTION) need source_document_id = the document app's document_id. Under the
+2026-10-24 decision, document deviations/approvals do not automatically open or release holds.
+Staff handle holds independently (MANUAL allows an optional document reference), confirm
+corrective action, and release with a reason. Document approval is not a release prerequisite;
+corrective action confirmation is an operational check, not a document-state API check.
 
 Every function runs in one transaction (BEGIN IMMEDIATE, rule S5). Messages are user-facing.
 """

@@ -311,11 +311,21 @@ const App = {
   },
 
   closeModal(useHistory = true) {
-    if (useHistory && this.inventoryModal && this.historyEnabled && !this.restoringHistory) { history.back(); return; }
+    // Closing is distinct from Back: detail filters may have added many modal entries.
+    // Cancel an in-flight history restore before it can render the detail a second time.
+    if (useHistory) {
+      this.restoreSerial = (this.restoreSerial || 0) + 1;
+      this.restoringHistory = false;
+      if (typeof InventoryApiPage !== 'undefined') {
+        InventoryApiPage.itemSerial = (InventoryApiPage.itemSerial || 0) + 1;
+        InventoryApiPage.detailContext = null;
+      }
+    }
     this.inventoryModal = null;
     document.getElementById('modalOverlay')?.classList.remove('active');
     document.getElementById('modalContainer')?.classList.remove('active');
     document.body.style.overflow = '';
+    if (useHistory) this.recordHistory(true);
   },
 
   // ===== 토스트 알림 =====

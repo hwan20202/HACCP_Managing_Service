@@ -120,6 +120,7 @@ class Item(models.Model):
     shelf_life_months = models.IntegerField(null=True, blank=True)
     origin_country = models.TextField(null=True, blank=True)
     food_type = models.TextField(null=True, blank=True)
+    manufacturing_report_number = models.TextField(null=True, blank=True)
     minimum_stock_e6 = models.BigIntegerField(default=0)
     # False: 정제수 같은 공정용수 — LOT·재고·투입 기록 없음 (10/14 PM 미팅 C1, 0005)
     is_stock_managed = models.BooleanField(default=True)

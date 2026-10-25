@@ -1,5 +1,7 @@
 """Holds (holds.py, sql/0003_holds.sql): LOT / batch holds, propagation, release."""
 
+import json
+
 from django.db import IntegrityError, connection, transaction
 
 from .errors import InventoryError
@@ -19,6 +21,66 @@ def usable(lot):
 
 
 class HoldTests(ProductionTestCase):
+    def test_batch_api_manual_hold_and_release_without_document_approval(self):
+        lot = self.receive(self.raw, "10", "r1")
+        batch = self.batch(self.semi)
+        self.use(batch, lot, "1", "u1")
+        output = self.output(batch, "100", "o1").lot
+        base = "/api/v1/inventory"
+
+        def post(path, data):
+            return self.client.post(base + path, json.dumps(data), content_type="application/json")
+
+        response = post(
+            "/holds/",
+            {
+                "batch_id": batch.pk,
+                "source_type": "MANUAL",
+                "reason": "CCP 이탈 확인",
+                "staff_id": self.staff.pk,
+            },
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        hold_id = response.json()["id"]
+        self.assertIsNone(response.json()["source_document_id"])
+        detail = self.client.get(f"{base}/batches/{batch.pk}/").json()
+        self.assertEqual(detail["active_hold_count"], 1)
+        self.assertEqual(len(detail["holds"]), 1)  # LOT propagation is not a second batch hold.
+        self.assertEqual(detail["holds"][0]["reason"], "CCP 이탈 확인")
+        listing = self.client.get(f"{base}/batches/", {"item_id": self.semi.pk}).json()["results"]
+        self.assertEqual(listing[0]["active_hold_count"], 1)
+        self.assertEqual(usable(output), (0, 1))
+        rejected = post(
+            f"/batches/{batch.pk}/outputs/",
+            {
+                "quantity": "1",
+                "staff_id": self.staff.pk,
+                "idempotency_key": "held-output",
+            },
+        )
+        self.assertGreaterEqual(rejected.status_code, 400)
+
+        independent = self.lot_hold(output)
+        response = post(
+            f"/holds/{hold_id}/release/",
+            {
+                "disposition": "RELEASE",
+                "reason": "개선조치 완료 및 현장 확인",
+                "staff_id": self.staff.pk,
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["released_by"]["id"], self.staff.pk)
+        detail = self.client.get(f"{base}/batches/{batch.pk}/").json()
+        self.assertEqual(detail["active_hold_count"], 0)
+        self.assertFalse(detail["holds"][0]["is_open"])
+        self.assertEqual(detail["holds"][0]["release_reason"], "개선조치 완료 및 현장 확인")
+        listing = self.client.get(f"{base}/batches/", {"item_id": self.semi.pk}).json()["results"]
+        self.assertEqual(listing[0]["active_hold_count"], 0)
+        independent.refresh_from_db()
+        self.assertIsNone(independent.released_at)
+        self.assertEqual(usable(output), (0, 1))  # Direct LOT hold remains in effect.
+
     def lot_hold(self, lot, source="MANUAL", **extra):
         return hold_lot(
             lot_id=lot.pk, source_type=source, reason="이물 의심", staff_id=self.staff.pk, **extra
