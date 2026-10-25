@@ -14,6 +14,7 @@ const MassUnits = {
     digits=digits.padStart(places+1,'0');
     let result=places?digits.slice(0,-places)+'.'+digits.slice(-places):digits;
     if(result.includes('.')) result=result.replace(/0+$/,'').replace(/\.$/,'');
+    result=result.replace(/^0+(?=\d)/,'');
     if(validate && (result.split('.')[1]||'').length>6) throw new Error('기준단위 환산 후 소수점 6자리를 초과합니다.');
     return n.negative && result!=='0'?'-'+result:result;
   },

@@ -131,13 +131,14 @@ const InventoryApiPage = {
           <button id="receiptCancelPickerOpen" class="btn btn-danger" onclick="InventoryApiPage.openReceiptPicker()">입고 취소</button>
           <button class="btn btn-secondary" onclick="InventoryApiPage.load()">새로고침</button>
           <button class="btn btn-secondary" id="invExport" onclick="InventoryApiPage.exportExcel()">엑셀 다운로드</button>
+          <button class="btn btn-secondary" id="invPrint" onclick="InventoryApiPage.state().printSelecting?InventoryApiPage.endPrintSelection():InventoryApiPage.beginPrintSelection()">${this.state().printSelecting?'인쇄 선택 취소':'인쇄 / PDF'}</button>
         </div>
       </div>
       <div class="tabs" style="margin-bottom:0.75rem;">
         ${[['ledger','수불 내역'],['stock','현재고']].map(([v,l]) => `<button data-inventory-tab="${v}" aria-pressed="${this.state().tab === v}" class="tab-btn ${this.state().tab === v ? 'active' : ''}" onclick="InventoryApiPage.set('tab','${v}')">${l}</button>`).join('')}
       </div>
       <div class="card" style="padding:0.75rem;margin-bottom:0.75rem;">
-        <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:flex-end;">${this.renderFilters()}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:flex-end;">${this.renderFilters()}<button class="btn btn-secondary btn-sm" onclick="InventoryApiPage.resetFilters()">조회 조건 초기화</button></div>
         <p style="margin:0.6rem 0 0;font-size:0.78rem;color:var(--text-muted);">현재고는 조회 시점의 잔량입니다. 수불 내역은 선택한 기간의 기록입니다. 품목 상세창에서 기간을 변경할 수 있습니다.</p>
       </div>
       <div id="invApiContent"><div class="empty-state"><p>불러오는 중…</p></div></div>
@@ -172,9 +173,12 @@ const InventoryApiPage = {
       ${this.field('소비기한', `<select class="form-control" onchange="InventoryApiPage.set('expiryDays',this.value)">${[['','전체'],['7','경과·7일 이내'],['30','경과·30일 이내'],['90','경과·90일 이내']].map(([v,l])=>`<option value="${v}" ${s.expiryDays===v?'selected':''}>${l}</option>`).join('')}</select>`)}
       ${this.field('표시 단위', `<select class="form-control" onchange="InventoryApiPage.set('displayUnit',this.value)">${[['','기준 단위'],['kg','kg'],['g','g']].map(([v,l])=>`<option value="${v}" ${s.displayUnit===v?'selected':''}>${l}</option>`).join('')}</select>`)}`;
     return `${search}
+      ${this.field('LOT 번호', `<input id="invLotNumber" type="search" class="form-control" value="${this.esc(s.lotNumber)}" placeholder="LOT 번호 일부" onchange="InventoryApiPage.set('lotNumber',this.value)">`)}
       <div style="display:flex;gap:0.3rem;flex-wrap:wrap">${[['','전체'],['IN','입고'],['OUT','출고']].map(([v,l])=>`<button data-direction="${v}" aria-pressed="${s.direction===v && (v!=='' || !(s.selectedLot || s.itemId || s.lotNumber))}" class="btn ${s.direction===v && (v!=='' || !(s.selectedLot || s.itemId || s.lotNumber))?'btn-primary':'btn-secondary'} btn-sm" onclick="InventoryApiPage.set('direction','${v}')">${l}</button>`).join('')}</div>
       <div style="display:flex;gap:0.3rem;flex-wrap:wrap">${[['today','오늘'],['month','이번 달'],['3month','3개월'],['6month','6개월'],['year','1년']].map(([v,l])=>`<button data-period="${v}" aria-pressed="${s.period===v}" class="btn ${s.period===v?'btn-primary':'btn-secondary'} btn-sm" onclick="InventoryApiPage.setPeriod('${v}')">${l}</button>`).join('')}</div>
       ${this.field('조회 기간', `<span style="display:flex;gap:0.3rem"><input id="invFrom" type="date" class="form-control" value="${s.from}" onchange="InventoryApiPage.set('from',this.value)"> ~ <input id="invTo" type="date" class="form-control" value="${s.to}" onchange="InventoryApiPage.set('to',this.value)"></span>`)}
+      <div style="display:flex;gap:0.3rem"><button class="btn btn-secondary btn-sm" onclick="InventoryApiPage.shiftMonth(-1)">이전 달</button>
+      <button class="btn btn-secondary btn-sm" onclick="InventoryApiPage.shiftMonth(1)">다음 달</button></div>
       ${this.sortControls()}
       ${this.field('취소 입고 이력', `<select id="invReceiptVisibility" class="form-control" onchange="InventoryApiPage.set('receiptVisibility',this.value)">${[['all','포함'],['hide','제외'],['only','취소 건만']].map(([v,l]) => `<option value="${v}" ${s.receiptVisibility===v?'selected':''}>${l}</option>`).join('')}</select>`)}
       ${this.field('표시 단위', `<select class="form-control" onchange="InventoryApiPage.set('displayUnit',this.value)">${[['','기준 단위'],['kg','kg'],['g','g']].map(([v,l])=>`<option value="${v}" ${s.displayUnit===v?'selected':''}>${l}</option>`).join('')}</select>`)}`;
@@ -182,6 +186,7 @@ const InventoryApiPage = {
 
   search(value) {
     this.state().q = value;
+    this.state().ledgerPage = this.state().stockPage = 1;
     this.state().selectedLot = null;
     this.state().itemId = '';
     this.state().selectedItem = null;
@@ -192,6 +197,7 @@ const InventoryApiPage = {
   },
 
   setPeriod(period) {
+    this.state().ledgerPage=1;
     const today = this.today();
     const d = new Date(today + 'T12:00:00');
     if (period === 'month') d.setDate(1);
@@ -204,16 +210,66 @@ const InventoryApiPage = {
     this.rerender();
   },
 
+  resetFilters() {
+    clearTimeout(this.searchTimer);
+    const tab=this.state().tab;
+    delete this.states[this.type];
+    this.state().tab=tab;
+    this.cache=null;
+    this.rerender();
+  },
+
+  shiftMonth(delta) {
+    const s=this.state(), base=/^\d{4}-\d{2}-\d{2}$/.test(s.from)?s.from:this.today();
+    const [year,month]=base.split('-').map(Number);
+    const first=new Date(year,month-1+delta,1,12), last=new Date(year,month+delta,0,12);
+    const format=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    s.from=format(first);s.to=format(last);s.period='';s.ledgerPage=1;
+    this.cache=null;this.rerender();
+  },
+
+  pageRows(rows, key, detail=false) {
+    const s=detail?this.detailContext:this.state();
+    const size=Number(s.pageSize)||50, pages=Math.max(1,Math.ceil(rows.length/size));
+    const page=Math.max(1,Math.min(Number(s[key])||1,pages));
+    s[key]=page;
+    const start=(page-1)*size;
+    return {rows:rows.slice(start,start+size), controls:`<div class="inv-pagination" style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;padding:0.6rem 1rem;" role="navigation" aria-label="조회 결과 페이지">
+      <span role="status">전체 ${rows.length}건 · ${rows.length?start+1:0}–${Math.min(start+size,rows.length)}번째 · ${page}/${pages} 페이지</span>
+      <button class="btn btn-secondary btn-sm" ${page===1?'disabled':''} onclick="InventoryApiPage.changePage('${key}',1,${detail})">처음</button>
+      <button class="btn btn-secondary btn-sm" ${page===1?'disabled':''} onclick="InventoryApiPage.changePage('${key}',${page-1},${detail})">이전</button>
+      <button class="btn btn-secondary btn-sm" ${page===pages?'disabled':''} onclick="InventoryApiPage.changePage('${key}',${page+1},${detail})">다음</button>
+      <button class="btn btn-secondary btn-sm" ${page===pages?'disabled':''} onclick="InventoryApiPage.changePage('${key}',${pages},${detail})">마지막</button>
+      <label>페이지 이동 <input type="number" min="1" max="${pages}" value="${page}" aria-label="이동할 페이지" class="form-control" style="width:5rem;display:inline-block" onchange="InventoryApiPage.changePage('${key}',Number(this.value),${detail})"></label>
+      <label>페이지당 <select class="form-control" style="width:auto;display:inline-block" onchange="InventoryApiPage.changePageSize(this.value,${detail})">${[25,50,100].map(n=>`<option ${size===n?'selected':''}>${n}</option>`).join('')}</select>건</label>
+    </div>`};
+  },
+
+  changePage(key,page,detail=false) {
+    if(!['ledgerPage','stockPage'].includes(key)) return;
+    (detail?this.detailContext:this.state())[key]=page;
+    if(detail) this.renderItemDetail();
+    else if(this.cache) document.getElementById('invApiContent').innerHTML=this.cache.tab==='ledger'?this.renderSelection()+this.renderLedger(this.cache.data):this.renderTotals(this.cache.data);
+    App.recordHistory?.();
+  },
+
+  changePageSize(value,detail=false) {
+    const s=detail?this.detailContext:this.state();
+    s.pageSize=Number(value); s.ledgerPage=s.stockPage=1;
+    this.changePage(detail?'ledgerPage':this.state().tab==='stock'?'stockPage':'ledgerPage',1,detail);
+  },
+
   // ---------- 이벤트 ----------
   set(key, value) {
     const s = this.state();
+    s.ledgerPage=s.stockPage=1;
     s[key] = value;
     if(key==='direction' && value==='') {
       s.selectedLot=null; s.selectedItem=null; s.itemId=''; s.lotNumber='';
     }
     if(key==='from' || key==='to') s.period='';
     this.cache = null;
-    if (key === 'tab') { s.selectedLot = null; s.itemId = ''; s.selectedItem=null; }
+    if (key === 'tab') { s.selectedLot = null; s.itemId = ''; s.selectedItem=null;s.printSelecting=false;s.printItemIds=[]; }
     // Search changes must not leave an invisible selected LOT restricting the ledger.
     if (['itemId', 'lotNumber', 'expirationStatus', 'madeFrom', 'madeTo', 'includeEmpty', 'usableOnly'].includes(key)) s.selectedLot = null;
     this.rerender();
@@ -221,6 +277,7 @@ const InventoryApiPage = {
 
   selectLot(id, number = '', item = null) {
     const s = this.state();
+    s.ledgerPage=1;
     s.selectedLot = id ? { id: Number(id), number, item } : null;
     s.selectedItem=null; s.itemId=''; s.q=''; s.lotNumber='';
     s.tab = 'ledger';
@@ -228,6 +285,8 @@ const InventoryApiPage = {
   },
 
   rerender() {
+    this.cache=null;
+    this.loadSerial=(this.loadSerial||0)+1;
     const container = document.getElementById('pageContainer');
     if (container) container.innerHTML = this.render(this.type);
     App.recordHistory?.();
@@ -244,9 +303,14 @@ const InventoryApiPage = {
     try {
       const s = this.state();
       if (s.tab === 'ledger') {
+        if(!s.from || !s.to || s.to<s.from || (new Date(s.to)-new Date(s.from))/86400000>366) throw new Error('시작일과 종료일을 확인하세요. 조회 기간은 1년 이내입니다.');
         const data=await this.fetchLedger();
         if(!current()) return;
-        this.cache={tab:'ledger',data};
+        if(s.focusBatch && !s.ledgerPage) {
+          const index=this.ledgerLines(data).findIndex(r=>r.line.source?.batch?.id===s.focusBatch);
+          s.ledgerPage=index<0?1:Math.floor(index/(Number(s.pageSize)||50))+1;
+        }
+        this.cache={tab:'ledger',data,queriedAt:new Date().toLocaleString('ko-KR')};
         document.getElementById('invApiContent').innerHTML=this.renderSelection()+this.renderLedger(data);
         document.querySelector('#invLedgerTable tr[data-highlight="true"]')?.scrollIntoView({block:'center'});
       } else {
@@ -257,7 +321,7 @@ const InventoryApiPage = {
         const filtered = totals.results.filter(r=>(!query || `${r.item.item_code} ${r.item.name}`.toLowerCase().includes(query) || matches.has(r.item.id)) && (!s.expiryDays || matches.has(r.item.id)) && (!s.lowOnly || r.below_minimum));
         this.stockRows = stock.results;
         const sorted = this.sortStockTotals(filtered);
-        this.cache = {tab:'stock', data:{results:sorted}, stock};
+        this.cache = {tab:'stock', data:{results:sorted}, stock,queriedAt:new Date().toLocaleString('ko-KR')};
         document.getElementById('invApiContent').innerHTML = this.renderTotals({results:sorted});
       }
     } catch(error) {
@@ -266,7 +330,7 @@ const InventoryApiPage = {
     }
   },
 
-  clearSelection() { this.state().itemId=''; this.state().selectedItem=null; this.state().selectedLot=null; this.rerender(); },
+  clearSelection() { this.state().ledgerPage=1; this.state().itemId=''; this.state().selectedItem=null; this.state().selectedLot=null; this.rerender(); },
 
   renderSelection() {
     const s=this.state();
@@ -342,7 +406,8 @@ const InventoryApiPage = {
       <p id="invDetailScope">${selected?'선택 LOT: '+this.esc(selected.lot_number):'전체 LOT'} · ${this.esc(d.from)} ~ ${this.esc(d.to)}
         ${selected?'<button class="btn btn-secondary btn-sm" onclick="InventoryApiPage.selectDetailLot(null)">전체 LOT 보기</button>':''}</p>
       <details id="invPeriodSummary"><summary>LOT별 기간 요약 · 조회 종료일 ${this.esc(d.to)} 기준 잔량</summary>${this.renderPeriodSummary(this.detailLedgerData())}</details>
-      ${this.renderLedger(this.detailLedgerData(),d.direction)}
+      <button type="button" class="btn btn-secondary" onclick="InventoryApiPage.printResults(true)">선택 기간 수불 인쇄 / PDF</button>
+      ${this.renderLedger(this.detailLedgerData(),d.direction,true)}
       <button class="btn btn-secondary" onclick="InventoryApiPage.applyDetailSelection()">${selected?'선택 LOT':'품목 전체'} 수불대장에서 보기</button>
     </div>`;
   },
@@ -359,12 +424,14 @@ const InventoryApiPage = {
   selectDetailLot(id) {
     if(id && !this.detailCache.stock.results.some(r=>r.lot_id===id)) return;
     this.detailContext.lotId=id;
+    this.detailContext.ledgerPage=1;
     this.renderItemDetail();
     App.recordHistory?.();
   },
 
   setDetailDirection(value) {
     this.detailContext.direction=value;
+    this.detailContext.ledgerPage=1;
     if(!value) this.detailContext.lotId=null;
     this.renderItemDetail();
     App.recordHistory?.();
@@ -403,6 +470,7 @@ const InventoryApiPage = {
     App.closeModal(false);
     const s=this.state();
     const item=this.itemDetail?.id===id?this.itemDetail:this.cache?.data.results.find(r=>r.item.id===id)?.item;
+    s.ledgerPage=1;
     s.itemId=String(id); s.selectedItem=item || null; s.tab='ledger'; s.selectedLot=null; s.q=''; s.lotNumber='';
     this.rerender();
   },
@@ -515,9 +583,11 @@ const InventoryApiPage = {
 
   renderTotals(data) {
     const below = data.results.filter(r=>r.below_minimum).length;
-    return `<div style="display:flex;gap:1.5rem;margin:0.75rem 0"><strong>품목 ${data.results.length}개</strong><span>부족 품목 ${below}개</span></div>
-      <div class="table-wrapper"><table class="data-table" id="invStockTable"><thead><tr><th>품목</th><th>총재고</th><th>사용 가능</th><th>사용 불가</th><th>LOT 수</th></tr></thead><tbody>
-      ${data.results.map(r=>`<tr data-stock-item="${r.item.id}"><td><button class="inv-item-link" onclick="InventoryApiPage.openItem(${r.item.id})">${this.esc(r.item.name)}<br><span style="font-size:0.75rem;color:var(--text-muted)">${this.esc(r.item.item_code)}</span></button>${r.below_minimum?'<br><span class="badge badge-danger">최소재고 미만</span>':''}</td><td>${this.quantity(r.total,r.unit)}</td><td>${this.quantity(r.usable,r.unit)}</td><td>${this.quantity(this.addQuantities(r.quarantine,r.unusable),r.unit)}</td><td>${r.lot_count}</td></tr>`).join('') || '<tr><td colspan="5">조회 결과가 없습니다.</td></tr>'}
+    const page=this.pageRows(data.results,'stockPage');
+    const selecting=!!this.state().printSelecting;
+    return `${this.renderPrintSelection(data,false)}${page.controls}<div style="display:flex;gap:1.5rem;margin:0.75rem 0"><strong>품목 ${data.results.length}개</strong><span>부족 품목 ${below}개</span></div>
+      <div class="table-wrapper"><table class="data-table" id="invStockTable"><thead><tr>${selecting?'<th style="width:40px">선택</th>':''}<th>품목</th><th>총재고</th><th>사용 가능</th><th>사용 불가</th><th>LOT 수</th></tr></thead><tbody>
+      ${page.rows.map(r=>`<tr data-stock-item="${r.item.id}">${selecting?`<td>${this.printCheckbox(r.item)}</td>`:''}<td><button class="inv-item-link" onclick="InventoryApiPage.openItem(${r.item.id})">${this.esc(r.item.name)}<br><span style="font-size:0.75rem;color:var(--text-muted)">${this.esc(r.item.item_code)}</span></button>${r.below_minimum?'<br><span class="badge badge-danger">최소재고 미만</span>':''}</td><td>${this.quantity(r.total,r.unit)}</td><td>${this.quantity(r.usable,r.unit)}</td><td>${this.quantity(this.addQuantities(r.quarantine,r.unusable),r.unit)}</td><td>${r.lot_count}</td></tr>`).join('') || `<tr><td colspan="${selecting?6:5}">조회 결과가 없습니다.</td></tr>`}
       </tbody></table></div><p style="padding:0 0.85rem;font-size:0.78rem;color:var(--text-muted)">사용 불가에는 검사대기·부적합·보류·소비기한 경과 재고가 포함됩니다. 품목명을 누르면 현재 재고 요약·전체 LOT·선택 기간 수불을 확인할 수 있습니다.</p>`;
   },
 
@@ -547,9 +617,96 @@ const InventoryApiPage = {
 
   filePart(value) { return String(value||'').replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').slice(0,60); },
 
-  ledgerSheet(data,direction='') {
+  ledgerSheet(data,direction='',printLines=null) {
     const headers=['수불일자','품목코드','품목명','LOT','구분','입고','출고','거래 직후 LOT 잔량','단위','EA (참고 개수)','처리자','사유'];
-    return {name:'수불 내역',title:this.TYPES[this.type].title,subtitle:`${data.from} ~ ${data.to} · ${direction==='IN'?'입고':direction==='OUT'?'출고':'전체'} · 거래 직후 잔량`,columns:headers.map((header,i)=>({header,width:20,type:[5,6,7,9].includes(i)?'number':'text'})),rows:this.ledgerLines(data,direction).map(({item,lot,line})=>[line.occurred_at,item.item.item_code,item.item.name,lot.lot_number,line.movement_name,String(line.quantity).startsWith('-')?'':this.displayValue(line.quantity,item.unit),String(line.quantity).startsWith('-')?this.displayValue(String(line.quantity).slice(1),item.unit):'',this.displayValue(line.balance,item.unit),this.displayUnit(item.unit),line.ea_count??'',line.staff_name,line.reason||''])};
+    return {name:'수불 내역',title:this.TYPES[this.type].title,subtitle:`${data.from} ~ ${data.to} · ${direction==='IN'?'입고':direction==='OUT'?'출고':'전체'} · 거래 직후 잔량`,columns:headers.map((header,i)=>({header,width:20,type:[5,6,7,9].includes(i)?'number':'text'})),rows:(printLines||this.ledgerLines(data,direction)).map(({item,lot,line})=>[line.occurred_at,item.item.item_code,item.item.name,lot.lot_number,line.movement_name,String(line.quantity).startsWith('-')?'':this.displayValue(line.quantity,item.unit),String(line.quantity).startsWith('-')?this.displayValue(String(line.quantity).slice(1),item.unit):'',this.displayValue(line.balance,item.unit),this.displayUnit(item.unit),line.ea_count??'',line.staff_name,line.reason||''])};
+  },
+
+  stockSheet(data) {
+    const headers=['품목코드','품목명','총재고','사용 가능','사용 불가','최소재고','단위','LOT 수'];
+    return {title:'품목별 현재고',columns:headers.map(header=>({header})),rows:data.results.map(r=>[r.item.item_code,r.item.name,...[r.total,r.usable,this.addQuantities(r.quarantine,r.unusable),r.minimum_stock].map(v=>this.displayValue(v,r.unit)),this.displayUnit(r.unit),r.lot_count])};
+  },
+
+  renderPrintView() {
+    const el=document.getElementById('invApiContent'), c=this.cache;
+    if(el && c) el.innerHTML=c.tab==='ledger'?this.renderSelection()+this.renderLedger(c.data):this.renderTotals(c.data);
+    this.updatePrintSelection();
+  },
+  beginPrintSelection() {
+    if(!this.cache) return App.showToast('info','조회 중','검색 결과가 표시된 후 인쇄하세요.');
+    const s=this.state();
+    if(s.printSelecting) return;
+    s.printSelecting=true;s.printItemIds=[];
+    this.renderPrintView();
+  },
+  endPrintSelection() {
+    this.state().printSelecting=false;this.state().printItemIds=[];
+    this.renderPrintView();
+  },
+  printSelectedResults() {
+    if(!(this.state().printItemIds||[]).length) return App.showToast('info','인쇄','인쇄할 품목을 선택하세요.');
+    this.printResults();
+  },
+  printCandidates(data,ledger) {
+    const items=ledger?this.ledgerLines(data).map(r=>r.item.item):data.results.map(r=>r.item);
+    return [...new Map(items.map(item=>[item.id,item])).values()];
+  },
+  printCheckbox(item) {
+    if(!this.state().printSelecting) return '';
+    return `<input type="checkbox" data-print-item="${item.id}" aria-label="${this.esc(item.item_code)} 품목 인쇄 선택" ${(this.state().printItemIds||[]).includes(item.id)?'checked':''} onchange="InventoryApiPage.selectPrintItem(${item.id},this.checked)">`;
+  },
+  renderPrintSelection(data,ledger) {
+    if(!this.state().printSelecting) return '';
+    const items=this.printCandidates(data,ledger), s=this.state();
+    s.printItemIds=(s.printItemIds||[]).filter(id=>items.some(item=>item.id===id));
+    return `<div style="display:flex;flex-wrap:wrap;gap:1rem;align-items:center;padding:0.65rem 1rem;border-bottom:1px solid var(--border-subtle)"><label><input type="checkbox" id="invPrintAll" ${s.printItemIds.length===items.length?'checked':''} onchange="InventoryApiPage.selectAllPrintItems(this.checked)"> 조회 품목 전체 선택 (${items.length}개)</label><button class="btn btn-primary btn-sm" id="invPrintSelected" ${s.printItemIds.length?'':'disabled'} onclick="InventoryApiPage.printSelectedResults()">선택 ${s.printItemIds.length}개 인쇄</button><button class="btn btn-secondary btn-sm" id="invPrintCancel" onclick="InventoryApiPage.endPrintSelection()">취소</button></div>`;
+  },
+  selectPrintItem(id,checked) {
+    const s=this.state();s.printItemIds=checked?[...new Set([...(s.printItemIds||[]),id])]:(s.printItemIds||[]).filter(v=>v!==id);
+    this.updatePrintSelection();
+  },
+  selectAllPrintItems(checked) {
+    if(!this.cache) return;
+    this.state().printItemIds=checked?this.printCandidates(this.cache.data,this.cache.tab==='ledger').map(item=>item.id):[];
+    this.updatePrintSelection();
+  },
+  updatePrintSelection() {
+    const ids=this.state().printItemIds||[];
+    document.querySelectorAll('[data-print-item]').forEach(el=>{el.checked=ids.includes(Number(el.dataset.printItem));});
+    const selected=document.getElementById('invPrintSelected');if(selected){selected.textContent=`선택 ${ids.length}개 인쇄`;selected.disabled=!ids.length;}
+    const button=document.getElementById('invPrint');if(button){button.textContent=this.state().printSelecting?'인쇄 선택 취소':'인쇄 / PDF';button.disabled=false;}
+    const items=this.cache?this.printCandidates(this.cache.data,this.cache.tab==='ledger'):[];
+    const all=document.getElementById('invPrintAll');if(all){all.checked=items.length>0 && ids.length===items.length;all.indeterminate=ids.length>0&&!all.checked;}
+  },
+  printResults(detail=false) {
+    const c=detail?this.detailCache:this.cache, s=this.state(), d=this.detailContext;
+    if(!c) return App.showToast('info','조회 중','검색 결과가 표시된 후 인쇄하세요.');
+    const ledger=detail || c.tab==='ledger';
+    const original=detail?this.detailLedgerData():c.data;
+    const ids=detail?[]:s.printItemIds||[];
+    const data={...original,results:original.results.filter(item=>!ids.length||ids.includes(item.item.id))};
+    const direction=detail?d.direction:s.direction;
+    const lines=ledger?this.ledgerLines(data,direction).sort((a,b)=>a.item.item.item_code.localeCompare(b.item.item.item_code,'ko',{numeric:true})||a.line.occurred_at.localeCompare(b.line.occurred_at)||a.line.movement_id-b.line.movement_id):[];
+    const sheet=ledger?this.ledgerSheet(data,direction,lines):this.stockSheet(data);
+    if(ledger) {
+      sheet.columns.push({header:'취소 입고 여부'});
+      sheet.rows.forEach((row,i)=>{
+        row[0]=String(row[0]).replace('T',' ').slice(0,19);
+        row.push(lines[i].line.source?.receipt_status==='CANCELLED'?'취소됨':'');
+      });
+    }
+    if(!sheet.rows.length) return App.showToast('info','인쇄','조회 결과가 없습니다.');
+    const selection=detail?`${c.item.item_code} ${c.item.name} · ${d.lotId?'선택 LOT '+(c.stock.results.find(r=>r.lot_id===d.lotId)?.lot_number||d.lotId):'전체 LOT'}`:`검색: ${s.q||'전체'} · ${s.selectedLot?'LOT '+s.selectedLot.number:s.selectedItem?.name||'전체 품목'}${s.lotNumber?' · LOT 검색 '+s.lotNumber:''}`;
+    const conditions=ledger?`취소 입고 이력: ${{all:'포함',hide:'제외',only:'취소 건만'}[s.receiptVisibility]||'포함'} · 잔량은 거래 직후 LOT 잔량`:`${s.lowOnly?'부족 품목만':'전체 품목'} · 소비기한: ${s.expiryDays?'경과·'+s.expiryDays+'일 이내':'전체'} · 조회 시점의 품목 전체 합계`;
+    const e=v=>this.esc(v);
+    const codeIndex=ledger?1:0, groups=new Map();
+    if(!ledger) sheet.rows.sort((a,b)=>String(a[0]).localeCompare(String(b[0]),'ko',{numeric:true}));
+    for(const row of sheet.rows) {const key=ledger?row[codeIndex]:'현재고';if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);}
+    const sections=[...groups.entries()].sort(([a],[b])=>String(a).localeCompare(String(b),'ko',{numeric:true})).map(([code,rows])=>`<section class="print-sheet" data-print-item="${e(code)}"><h1>${e(this.TYPES[this.type].title)} · ${ledger?'수불 내역':'현재고'}</h1><h2>${ledger?`${e(code)} ${e(rows[0][codeIndex+1])}`:`품목 ${rows.length}개`}</h2><p>${e(sheet.subtitle||'조회 시점 현재고')}<br>${e(selection)}<br>${e(conditions)}<br>조회 시점: ${e(c.queriedAt||'')} · 인쇄 준비: ${e(new Date().toLocaleString('ko-KR'))} · ${rows.length}건 (모든 페이지)</p><table><thead><tr>${sheet.columns.map(col=>`<th>${e(col.header)}</th>`).join('')}</tr></thead><tbody>${rows.map(row=>`<tr>${row.map(cell=>`<td>${e(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table></section>`).join('');
+    const html=`<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${e(this.TYPES[this.type].title)} · ${ledger?'수불 내역':'현재고'}</title><style>@page{size:A4 landscape;margin:10mm}*{box-sizing:border-box}body{font:11px "Malgun Gothic",sans-serif;color:#111;margin:0}h1{font-size:20px}h2{font-size:15px}p{line-height:1.6}table{width:100%;border-collapse:collapse;table-layout:fixed}th,td{border:1px solid #888;padding:5px;overflow-wrap:anywhere;vertical-align:top}th{background:#eee}thead{display:table-header-group}tr{break-inside:avoid}.print-sheet+.print-sheet{break-before:page;page-break-before:always}</style></head><body>${sections}</body></html>`;
+    const onClose=detail?undefined:()=>{s.printSelecting=false;s.printItemIds=[];if(this.state()===s)this.renderPrintView();};
+    try {if(!BrowserPrint.print(html,onClose)) App.showToast('info','인쇄','열려 있는 인쇄 창을 마친 후 다시 시도하세요.');}
+    catch(error) {App.showToast('error','인쇄',error.message);}
   },
 
   exportExcel() {
@@ -704,25 +861,28 @@ const InventoryApiPage = {
     </div>`;
   },
 
-  renderLedger(data, direction=this.state().direction) {
+  renderLedger(data, direction=this.state().direction, detail=false) {
+    const selecting=!detail && !!this.state().printSelecting;
     const lines = this.ledgerLines(data,direction);
-    const rows = lines.map(({ item, lot, line }) => {
+    const page=this.pageRows(lines,'ledgerPage',detail);
+    const rows = page.rows.map(({ item, lot, line }) => {
       const negative = String(line.quantity).startsWith('-');
       const highlighted=!!this.state().focusBatch && line.source?.batch?.id===this.state().focusBatch;
-      return `<tr data-ledger-lot="${lot.lot_id}" data-movement="${line.movement_id}" data-highlight="${highlighted}" ${highlighted?'style="background:#e7f1ff;outline:2px solid #3b82f6;outline-offset:-2px"':''}>
+      return `<tr data-ledger-lot="${lot.lot_id}" data-movement="${line.movement_id}" data-highlight="${highlighted}" ${highlighted?'style="background:#e7f1ff"':''}>
+        ${selecting?`<td>${this.printCheckbox(item.item)}</td>`:''}
         <td class="no-wrap">${this.esc(String(line.occurred_at).replace('T', ' ').slice(0, 19))}</td>
-        <td>${this.esc(item.item.item_code)}</td><td><button type="button" class="inv-item-link" onclick="InventoryApiPage.openItem(${item.item.id})">${this.esc(item.item.name)}</button></td>
+        <td class="no-wrap">${this.esc(item.item.item_code)}</td><td><button type="button" class="inv-item-link" onclick="InventoryApiPage.openItem(${item.item.id})">${this.esc(item.item.name)}</button></td>
         <td class="no-wrap">${this.esc(lot.lot_number)}</td><td>${this.esc(line.movement_name)}${line.source?.receipt_status==='CANCELLED'?'<br><span class="badge badge-neutral">취소된 입고</span>':''}</td>
         <td style="text-align:right;">${negative ? '' : this.esc(this.displayValue(line.quantity,item.unit))}</td>
         <td style="text-align:right;">${negative ? this.esc(this.displayValue(String(line.quantity).slice(1),item.unit)) : ''}</td>
         <td style="text-align:right;">${this.esc(this.displayValue(line.balance,item.unit))}</td><td>${this.esc(this.displayUnit(item.unit))}</td>
         <td>${this.esc(line.ea_count ?? '—')}</td><td>${this.esc(line.staff_name)}</td><td>${this.esc(line.reason || '')}</td><td>${this.renderSourceLinks(line,lot.lot_id)}</td></tr>`;
     }).join('');
-    return `<div class="card" style="padding:0;">
+    return `<div class="card" style="padding:0;">${detail?'':this.renderPrintSelection(data,true)}${page.controls}
       <div style="padding:0.6rem 1rem;color:var(--text-muted);font-size:0.78rem;">${this.esc(data.from)} ~ ${this.esc(data.to)} · 개별 수불 ${lines.length}건 · 잔량은 각 수불 발생 직후의 LOT 잔량 · 취소 표시·정렬은 실제 잔량에 영향을 주지 않습니다.</div>
       <div class="table-wrapper" style="max-height:420px;overflow:auto;"><table class="data-table" id="invLedgerTable">
-        <thead><tr><th>수불일자</th><th>품목코드</th><th>품목명</th><th>LOT 번호</th><th>구분</th><th>입고(+)</th><th>출고(-)</th><th>거래 직후 LOT 잔량</th><th>단위</th><th>EA (참고 개수)</th><th>처리자</th><th>사유</th><th>관련 기록</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="12" style="text-align:center;padding:2rem;">선택한 기간 안에 수불 이력이 없습니다. 현재 재고에는 이월 재고가 포함될 수 있습니다.</td></tr>'}</tbody>
+        <thead><tr>${selecting?'<th style="width:40px">선택</th>':''}<th>수불일자</th><th>품목코드</th><th>품목명</th><th>LOT 번호</th><th>구분</th><th>입고(+)</th><th>출고(-)</th><th>거래 직후 LOT 잔량</th><th>단위</th><th>EA (참고 개수)</th><th>처리자</th><th>사유</th><th>관련 기록</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="${selecting?14:13}" style="text-align:center;padding:2rem;">선택한 기간 안에 수불 이력이 없습니다. 현재 재고에는 이월 재고가 포함될 수 있습니다.</td></tr>`}</tbody>
       </table></div></div>`;
   },
 

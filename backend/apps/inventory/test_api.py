@@ -532,6 +532,7 @@ class ProductionApiTests(ApiTestCase):
                 "basis_quantity": "2000",
                 "lines": [
                     {
+                        "bom_line_id": self.line.pk,
                         "line_no": 1,
                         "item": {"id": self.raw.pk, "item_code": "1000001", "name": "가상원료A"},
                         "unit": "kg",

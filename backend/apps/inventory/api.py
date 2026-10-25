@@ -17,7 +17,7 @@ import json
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.db.models.deletion import ProtectedError
 from django.http import JsonResponse
 from django.views.decorators.csrf import ensure_csrf_cookie
@@ -653,6 +653,9 @@ def _batch_response(batch_id, status=200):
     summary["batch"] = ProductionBatch.objects.select_related(*BATCH_RELATED).get(pk=batch_id)
     data = out.batch_detail(summary)
     data["readiness"] = material_readiness(summary["batch"])
+    holds = Hold.objects.filter(batch_id=batch_id).select_related(*HOLD_RELATED).order_by("-pk")
+    data["holds"] = [out.hold(hold) for hold in holds]
+    data["active_hold_count"] = sum(hold["is_open"] for hold in data["holds"])
     return ok(data, status=status)
 
 
@@ -674,7 +677,11 @@ def batch_collection(request):
         )
         return _batch_response(batch.pk, status=201)
 
-    rows = ProductionBatch.objects.select_related(*BATCH_RELATED).order_by("-pk")
+    rows = (
+        ProductionBatch.objects.select_related(*BATCH_RELATED)
+        .annotate(active_hold_count=Count("holds", filter=Q(holds__released_at__isnull=True)))
+        .order_by("-pk")
+    )
     if _flag(request.GET.get("exclude_cancelled", "0")):
         rows = rows.exclude(status=BatchStatus.CANCELLED)
     if status := request.GET.get("status"):

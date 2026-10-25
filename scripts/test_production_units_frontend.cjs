@@ -1,0 +1,38 @@
+// Display units are defaults for ingredient inputs; stored drafts stay in base units.
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const nodes=new Map(),node=id=>{if(!nodes.has(id))nodes.set(id,{disabled:false,innerHTML:'',textContent:''});return nodes.get(id);};
+let picked=[],amounts={};
+const context=vm.createContext({console,URLSearchParams,window:{},App:{showToast:()=>{}},
+  document:{getElementById:node,querySelectorAll:s=>s.includes('data-pick')?picked:[],querySelector:s=>({value:amounts[s.match(/data-amount="(\d+)"/)?.[1]]})}});
+for(const name of ['mass-units','production-api'])vm.runInContext(fs.readFileSync(`frontend/static/prototype/js/modules/${name}.js`,'utf8')+(name==='production-api'?'\nthis.page=ProductionApiPage;':''),context);
+const p=context.page;p.renderDetail=()=>{};p.renderCreate=()=>{};p.s.creating=false;
+p.detail={id:1,unit:'kg',readiness:{lines:[{bom_line_id:1,unit:'kg',name:'테스트원료',item_code:'TEST',allowed_items:[]}]}};
+p.s.use={lineId:1,quantity:'0.25',allocations:{1:'0.1',2:'150'}};
+p.lotChoices=[{lot_id:1,unit:'kg',quantity:'1',item:{name:'원료'}},{lot_id:2,unit:'g',quantity:'1000',item:{name:'대체원료'}}];
+p.fefo={shortfall:'0'};
+p.setDisplayUnit('g');
+assert.equal(p.inputQuantity('0','kg'),'0','Zero must not display as 0000 after kg to g.');
+assert.equal(p.inputUnit('kg'),'g');assert.equal(p.inputQuantity(p.s.use.quantity,'kg'),'250');
+assert.match(p.renderUseForm(),/value="g" selected/);
+assert.match(p.renderUseForm(),/name="use_quantity"[^>]*value="250"/);
+assert.match(p.renderUseForm(),/data-amount="1" value="100"/);
+assert.equal(p.s.use.quantity,'0.25');
+p.s.use.inputUnit='kg';assert.equal(p.inputQuantity(p.s.use.quantity,'kg',p.s.use.inputUnit),'0.25');
+assert.equal(p.s.bomUnit,'g','Per-ingredient overrides must not change page unit.');
+p.setDisplayUnit('g');assert.equal(p.s.use.inputUnit,undefined,'A new page choice resynchronizes rows.');
+p.changeDisplayedUseQuantity('300');assert.equal(p.s.use.quantity,'0.3');
+picked=[{dataset:{pick:'1'}},{dataset:{pick:'2'}}];amounts={1:'100',2:'200'};
+p.captureAllocation();assert.equal(p.s.use.allocations[1],'0.1');assert.equal(p.s.use.allocations[2],'200');
+assert.equal(p.allocationTotal(),'0.3');assert.equal(node('prodUseBtn').disabled,false);
+amounts[1]='0.0000001';p.captureAllocation();assert.equal(node('prodUseBtn').disabled,true);
+assert.equal(p.allocationTotal(),null,'Unrepresentable LOT quantity cannot reuse a valid old amount.');
+assert.equal(p.inputUnit('개'),'개','Count units must never become mass units.');
+p.bulkUse={rows:[{bom_line_id:1,unit:'kg',quantity:'0.3',standard:'0.3',actual:'0',selected:true,inputUnit:'kg',allocations:{1:'0.3'},choices:[{lot_id:1,unit:'kg',stock:'1'}]}]};
+p.setDisplayUnit('g');const row=p.bulkUse.rows[0];assert.equal(row.inputUnit,undefined);
+p.editDisplayedBulk(0,'250');assert.equal(row.quantity,'0.25');
+p.editDisplayedBulkLot(0,1,'250');assert.equal(row.allocations[1],'0.25');
+assert.equal(p.bulkErrors().length,0);assert.match(p.bulkSummary(row),/250 g/);
+row.inputUnit='kg';p.editDisplayedBulkLot(0,1,'0.25');assert.equal(row.allocations[1],'0.25');
+p.setDisplayUnit('g');p.editDisplayedBulkLot(0,1,'0.0000001');assert.equal(p.bulkTotal(row),null);
+assert.ok(p.bulkErrors().length);
+console.log('PASS: global defaults, row overrides, exact g/kg totals and mixed-unit LOTs, precision guards and count units');

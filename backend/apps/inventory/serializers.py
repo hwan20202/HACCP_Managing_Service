@@ -46,6 +46,7 @@ def item(obj):
         "shelf_life_days": obj.shelf_life_days,
         "origin_country": obj.origin_country,
         "food_type": obj.food_type,
+        "manufacturing_report_number": obj.manufacturing_report_number,
         "minimum_stock": qty(obj.minimum_stock_e6),
         "is_stock_managed": obj.is_stock_managed,
         "is_active": obj.is_active,
@@ -218,6 +219,7 @@ def ledger_item(row):
 def batch(obj):
     return {
         "id": obj.pk,
+        "active_hold_count": getattr(obj, "active_hold_count", 0),
         "batch_number": obj.batch_number,
         "process_type": obj.process_type,
         "status": obj.status,
@@ -280,6 +282,7 @@ def batch_detail(summary):
         "basis_quantity": qty(check["basis_e6"]),
         "lines": [
             {
+                "bom_line_id": row["line"].pk,
                 "line_no": row["line"].line_no,
                 "item": {
                     "id": row["line"].component_item_id,

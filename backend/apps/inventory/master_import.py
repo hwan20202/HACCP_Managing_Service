@@ -8,6 +8,7 @@ whole import is rejected if any row is invalid, so a file is applied all or noth
     suppliers.csv  supplier_code*, name*, is_active
     items.csv      item_code*, item_type*, name*, base_unit*, short_code, unit_weight_mg,
                    shelf_life_months, shelf_life_days, origin_country, food_type,
+                   manufacturing_report_number,
                    minimum_stock, is_stock_managed, is_active   (소비기한은 개월·일수 중 하나만)
 
 (* required)  item_type: RAW / PACKAGING / SEMI / FINISHED.  minimum_stock is in the base
@@ -134,6 +135,12 @@ def parse_item_row(row, item_types=None):
         "shelf_life_days": shelf_life_days,
         "origin_country": _text(row, "origin_country"),
         "food_type": _text(row, "food_type"),
+        # Older CSVs omit this header: preserve existing externally registered numbers.
+        **(
+            {"manufacturing_report_number": _text(row, "manufacturing_report_number")}
+            if "manufacturing_report_number" in row
+            else {}
+        ),
         "minimum_stock_e6": minimum_stock_e6,
         "is_stock_managed": _bool(row, "is_stock_managed"),
         "is_active": _bool(row, "is_active"),

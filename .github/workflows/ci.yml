@@ -40,6 +40,7 @@ jobs:
           node scripts/test_receipt_frontend.cjs
           node scripts/test_navigation_frontend.cjs
           node scripts/test_inventory_feedback_frontend.cjs
+          node scripts/test_inventory_browsing_frontend.cjs
 
   deploy-qa:
     name: Deploy Cafe24 QA (code only)
