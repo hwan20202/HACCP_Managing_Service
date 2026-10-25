@@ -55,6 +55,40 @@
   const isResult = (fd) => fd.type === 'select' && (fd.options || []).includes('O') && (fd.options || []).includes('X');
   // [매일 항목 모두 O] 대상: 결과 필드 중 날짜 규칙(na_default)·기본값(initial)이 없는 것(D10 13 · D12 15 · D11 9)
   const isDaily = (fd) => isResult(fd) && !('na_default' in fd) && !('initial' in fd);
+  function phaseRows(section, rows) {
+    if (!section.fixed_phase_rows) return rows;
+    const { field, time_field, first, last } = section.phase_order;
+    return rows.slice().sort((a, b) => {
+      const av = a.values || {}; const bv = b.values || {};
+      const rank = (v) => v === first ? 0 : v === last ? 2 : 1;
+      return rank(av[field]) - rank(bv[field])
+        || String(av[time_field] || '').localeCompare(String(bv[time_field] || ''))
+        || (a.row_no || a.rowNo || a.uid || 0) - (b.row_no || b.rowNo || b.uid || 0);
+    });
+  }
+  function refreshElapsedValues(section, rows) {
+    if (!section.elapsed) return null;
+    const order = section.phase_order; const rule = section.elapsed;
+    const start = rows.find((r) => !r.deleted && r.values[order.field] === order.first);
+    const end = rows.find((r) => !r.deleted && r.values[order.field] === order.last);
+    if (!end) return null;
+    const minuteOf = (value) => {
+      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value || '')) return null;
+      const [y, m, d, h, min] = value.split(/[-T:]/).map(Number);
+      return Date.UTC(y, m - 1, d, h, min) / 60000;
+    };
+    const firstAt = minuteOf(start && start.values[order.time_field]);
+    const lastAt = minuteOf(end.values[order.time_field]);
+    const minutes = firstAt === null || lastAt === null ? null : lastAt - firstAt;
+    end.elapsedInvalid = minutes !== null && minutes <= 0;
+    if (minutes !== null && minutes > 0) {
+      end.values[rule.value_field] = minutes;
+      end.values[rule.verdict_field] = minutes >= rule.min && minutes <= rule.max ? '적합' : '부적합';
+    } else {
+      delete end.values[rule.value_field]; delete end.values[rule.verdict_field];
+    }
+    return end;
+  }
   function checkCounts(schema, d) {
     const c = { O: 0, X: 0, NA: 0, blank: 0 };
     let found = false;
@@ -1147,7 +1181,7 @@
         rows, basic, originalBasic: { ...basic }, nextUid: uid, errors: {}, errorList: [],
         pending: pending || [], hinted: new Set(hinted), recent,
       };
-      if (!document) schema.sections.filter((s) => s.repeat && !s.system_rows).forEach((s) => this.addRow(s.key, false));
+      if (!document) schema.sections.filter((s) => s.repeat && !s.system_rows && !s.fixed_phase_rows).forEach((s) => this.addRow(s.key, false));
       if (problems) this.applyErrors({ code: 'COMPLETION_INCOMPLETE', message: '작성완료할 수 없습니다. 빠진 항목을 채우세요.', details: problems }, {}, true);
       else this.renderForm();
     },
@@ -1157,6 +1191,10 @@
       const values = {};
       // CCP-3P 제품 통과 요약: 품명 기본값 = 기본정보의 품명(배치 품목, D-060 Q2)
       const section = f.sectionByKey[key];
+      if (section.fixed_phase_rows) {
+        const phase = section.fields.find((fd) => fd.key === section.phase_order.field);
+        values[phase.key] = phase.options.find((value) => value !== section.phase_order.first && value !== section.phase_order.last);
+      }
       const info = f.rows.find((r) => r.key === 'info');
       if (section.fields.some((fd) => fd.key === 'item_name' && !fd.readonly) && info && info.values.item_name) values.item_name = info.values.item_name;
       f.rows.push({ uid: ++f.nextUid, key, sectionId: null, values, original: null, deleted: false, hints: {} });
@@ -1166,6 +1204,8 @@
     fieldInput(field, value, row) {
       const name = `data-row="${row.uid}" data-field="${field.key}"`;
       const v = value === undefined || value === null ? '' : value;
+      const section = this.form.sectionByKey[row.key];
+      if (section.fixed_phase_rows && field.key === section.phase_order.field) return `<span class="te-ro">${esc(v)}</span>`;
       if (field.readonly) return `<span class="te-ro" title="자동 입력(수정 불가)">${this.display(field, value)}</span>`;
       if (isFileHint(field)) return `<span class="te-ro" title="같은 LOT 시험성적서 파일 유무로 자동(상신 때 확정)">${this.display(field, value)}</span>`;
       if (field.computed) {
@@ -1211,6 +1251,19 @@
           return `<input type="text" class="form-control" ${name} value="${esc(v)}" ${field.max_length ? `maxlength="${field.max_length}"` : ''}${list}>${options}`;
         }
       }
+    },
+
+    elapsedCell(section, field, row) {
+      const rule = section.elapsed;
+      if (!rule || ![rule.value_field, rule.verdict_field].includes(field.key)) return null;
+      if (row.values[section.phase_order.field] !== section.phase_order.last) return '<span class="te-hint">—</span>';
+      if (row.elapsedInvalid) return field.key === rule.verdict_field
+        ? '<span class="te-judge-ng">시각 순서 확인</span>' : '<span class="te-hint">—</span>';
+      const value = row.values[field.key];
+      if (field.key === rule.verdict_field && value) {
+        return `<span class="${value === '부적합' ? 'te-judge-ng' : 'te-judge-ok'}">${value === '부적합' ? '⚠ ' : ''}${esc(value)}</span>`;
+      }
+      return `${this.display(field, value)}${field.key === rule.value_field && value !== undefined ? ' <span class="te-hint">(자동)</span>' : ''}`;
     },
 
     readInput(el, field) {
@@ -1371,6 +1424,7 @@
 
     renderForm() {
       const f = this.form;
+      f.schema.sections.filter((s) => s.elapsed).forEach((s) => refreshElapsedValues(s, f.rows.filter((r) => r.key === s.key)));
       const d = f.document;
       const title = f.mode === 'create' ? `새 문서 › ${f.template.name} v${f.template.version}` : `문서 #${d.document_id} 수정 › ${f.template.name} v${f.template.version}`;
       const changed = this.basicChanges();
@@ -1385,7 +1439,7 @@
       f.canWrite = canWrite;
 
       const sectionsHtml = f.schema.sections.map((s) => {
-        const rows = f.rows.filter((r) => r.key === s.key);
+        const rows = phaseRows(s, f.rows.filter((r) => r.key === s.key));
         const sectionErr = f.errors[`section.${s.key}`] ? `<div class="te-error-text" data-error-section="${s.key}">${esc(f.errors[`section.${s.key}`])}</div>` : '';
         if (isChecklist(s)) return this.checklistFormHtml(s, rows[0], sectionErr);
         if (!s.repeat) {
@@ -1401,7 +1455,10 @@
             }).join('')}</div></div>`;
         }
         const legacy = this.legacyJudge(s);
-        const limits = s.fields.filter((fd) => fd.limit).map((fd) => `${fd.label} ${fd.limit.min !== undefined ? `${fd.limit.min}${fd.unit || ''} 이상` : ''}${fd.limit.max !== undefined ? ` ${fd.limit.max}${fd.unit || ''} 이하` : ''}`).join(', ');
+        const limits = [
+          ...s.fields.filter((fd) => fd.limit).map((fd) => `${fd.label} ${fd.limit.min !== undefined ? `${fd.limit.min}${fd.unit || ''} 이상` : ''}${fd.limit.max !== undefined ? ` ${fd.limit.max}${fd.unit || ''} 이하` : ''}`),
+          ...(s.elapsed ? [`총 건조시간 ${s.elapsed.min}~${s.elapsed.max}분`] : []),
+        ].join(', ');
         const canAdd = !s.system_rows;
         // 측정자 = 행 기록자(recorded_by). 설계 순서(판정 → 측정자 → 비고)대로 판정 열 바로 뒤에 둔다
         const recorder = hasComputed(s);
@@ -1409,15 +1466,15 @@
         const afterField = (fd, html) => (recorder && fd.computed ? html : '');
         return `<div class="te-section">
           <div class="te-section-head"><span class="te-section-title">${esc(s.label)} <span class="te-hint">반복${s.max_rows ? ` · 최대 ${s.max_rows}행` : ''}${s.min_rows ? ` · 최소 ${s.min_rows}행(작성완료 때)` : ''}${limits ? ` · 한계기준: ${esc(limits)}` : ''}${s.system_rows ? ' · 행은 입고 때 자동으로 추가됩니다' : ''}</span></span>
-            ${canAdd ? `<button class="btn btn-secondary btn-sm" data-add="${s.key}">+ 행 추가</button>` : ''}</div>${sectionErr}
+            ${canAdd ? `<button class="btn btn-secondary btn-sm" data-add="${s.key}">+ ${s.fixed_phase_rows ? `${esc(s.fields.find((fd) => fd.key === s.phase_order.field).options.find((value) => value !== s.phase_order.first && value !== s.phase_order.last))} ` : ''}행 추가</button>` : ''}</div>${sectionErr}
           <div class="te-table-wrap"><table class="data-table te-rows">
             <thead><tr><th>#</th>${s.fields.map((fd) => `<th class="${fd.readonly ? 'te-ro-head' : ''}">${esc(fd.label)}${fd.required ? ' *' : ''}${fd.unit ? ` (${esc(fd.unit)})` : ''}</th>${afterField(fd, '<th>측정자</th>')}`).join('')}${legacy ? '<th>판정</th>' : ''}${canAdd ? '<th></th>' : ''}</tr></thead>
             <tbody>${rows.length ? rows.map((row, i) => `
               <tr class="te-row-${this.rowState(row) || 'same'}${isNonconforming(s, row.values) ? ' te-row-ng' : ''}" data-tr="${row.uid}">
                 <td>${i + 1}</td>
-                ${s.fields.map((fd) => `<td class="${fd.readonly ? 'te-ro-cell' : ''}">${this.fieldInput(fd, row.values[fd.key], row)}${this.errorFor(row.uid, fd.key)}</td>${afterField(fd, recorderCell(row))}`).join('')}
+                ${s.fields.map((fd) => { const elapsed = this.elapsedCell(s, fd, row); return `<td class="${fd.readonly ? 'te-ro-cell' : ''}">${elapsed === null ? this.fieldInput(fd, row.values[fd.key], row) : `<span data-elapsed="${row.uid}.${fd.key}">${elapsed}</span>`}${this.errorFor(row.uid, fd.key)}</td>${afterField(fd, recorderCell(row))}`; }).join('')}
                 ${legacy ? `<td data-judge="${row.uid}">${this.judgeCell(s, row.values)}</td>` : ''}
-                ${canAdd ? `<td><button class="btn btn-secondary btn-sm" data-del="${row.uid}" title="${row.deleted ? '삭제 취소' : '행 삭제'}">${row.deleted ? '↺' : '✕'}</button></td>` : ''}
+                ${canAdd ? `<td>${s.fixed_phase_rows && [s.phase_order.first, s.phase_order.last].includes(row.values[s.phase_order.field]) ? '<span class="te-hint">기본행</span>' : `<button class="btn btn-secondary btn-sm" data-del="${row.uid}" title="${row.deleted ? '삭제 취소' : '행 삭제'}">${row.deleted ? '↺' : '✕'}</button>`}</td>` : ''}
               </tr>`).join('') : `<tr><td colspan="${s.fields.length + 3}" class="te-empty">${s.system_rows ? '아직 입고된 LOT가 없습니다' : '행이 없습니다.'}</td></tr>`}</tbody>
           </table></div></div>`;
       }).join('');
@@ -1470,6 +1527,17 @@
           const field = section.fields.find((fd) => fd.key === el.dataset.field);
           const value = this.readInput(el, field);
           if (value === undefined) delete row.values[field.key]; else row.values[field.key] = value;
+          if (section.elapsed && field.key === section.phase_order.time_field) {
+            const end = refreshElapsedValues(section, f.rows.filter((r) => r.key === section.key));
+            if (end) {
+              section.fields.filter((fd) => [section.elapsed.value_field, section.elapsed.verdict_field].includes(fd.key)).forEach((fd) => {
+                const cell = root.querySelector(`[data-elapsed="${end.uid}.${fd.key}"]`);
+                if (cell) cell.innerHTML = this.elapsedCell(section, fd, end);
+              });
+              const endTr = root.querySelector(`tr[data-tr="${end.uid}"]`);
+              if (endTr) endTr.classList.toggle('te-row-ng', isNonconforming(section, end.values));
+            }
+          }
           f.hinted.delete(`${row.uid}.${field.key}`);
           const tr = root.querySelector(`tr[data-tr="${row.uid}"]`);
           if (tr) tr.className = `te-row-${this.rowState(row) || 'same'}${isNonconforming(section, row.values) ? ' te-row-ng' : ''}`;
@@ -1799,7 +1867,8 @@
     // 문서 내용(섹션) 읽기 전용 표시. 결재 요청 상세(WF-SC-04)도 스냅샷을 이 함수로 그린다.
     sectionsHtml(schema, d, { detail = false } = {}) {
       return schema.sections.map((s) => {
-        const rows = d.sections.filter((x) => x.section_def === s.key);
+        const rows = phaseRows(s, d.sections.filter((x) => x.section_def === s.key));
+        if (s.elapsed) refreshElapsedValues(s, rows);
         if (isChecklist(s)) return this.checklistDetailHtml(s, d, detail);
         if (!s.repeat) {
           const v = rows[0] ? rows[0].values : {};
@@ -1816,7 +1885,7 @@
           const ng = this.judge(s, x.values) === 'ng';
           const rowName = x.values.lot_number || `${i + 1}행`;
           return `<tr class="${ng ? 'te-row-ng' : ''}" data-section-row="${x.section_id}">
-            <td>${i + 1}</td>${s.fields.map((fd) => `<td>${this.display(fd, values[fd.key], x.hints && x.hints[fd.key])}</td>`).join('')}
+            <td>${i + 1}</td>${s.fields.map((fd) => `<td>${this.elapsedCell(s, fd, x) ?? this.display(fd, values[fd.key], x.hints && x.hints[fd.key])}</td>`).join('')}
             ${legacy ? `<td>${this.judgeCell(s, x.values)}</td>` : ''}
             <td class="te-hint">${ng && !legacy && !hasComputed(s) ? '<span class="te-judge-ng">⚠ 부적합</span><br>' : ''}${T.fmtDateTime(x.recorded_at)} · ${T.personHtml(x.recorded_by)}${ng && canDev ? `<br><button class="btn btn-secondary btn-sm te-dev-add" data-dev-for="${x.section_id}" data-dev-text="${esc(`${s.label} ${rowName} 부적합`)}">개선조치 추가</button>` : ''}</td></tr>`;
         }).join('')

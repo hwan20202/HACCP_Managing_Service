@@ -91,10 +91,9 @@ def _ccp_rows(code, day):
         ]  # fmt: skip
     if code == "CCP-2B":
         return "rounds", [
-            {"phase": "건조시작 전", "measured_at": _at(day, "09:00"), "temp_c": 70.1,
-             "dry_minutes": 120},  # 설정 건조시간(시작 전 행도 판정 대상 — 확인 필요)
-            {"phase": "건조종료 전", "measured_at": _at(day + timedelta(days=1), "11:00"),
-             "temp_c": 69.8, "dry_minutes": 120},
+            {"phase": "건조시작 전", "measured_at": _at(day, "23:00"), "temp_c": 70.1},
+            {"phase": "건조종료 전", "measured_at": _at(day + timedelta(days=1), "01:00"),
+             "temp_c": 69.8},
         ]  # fmt: skip
     ok = {"fe_only": "○", "sts_only": "○", "product_only": "X"}
     ok.update(product_fe="○", product_sus="○")
@@ -106,13 +105,37 @@ def _ccp_rows(code, day):
 
 
 def _add_rows(actor, document_id, section, rows):
-    version = doc.get_document(document_id)["version"]
+    detail = doc.get_document(document_id)
+    existing = {
+        s["values"].get("phase"): s
+        for s in detail["sections"]
+        if s["section_def"] == section
+        and s["values"].get("phase")
+        in ("작업시작 전", "작업종료 후", "건조시작 전", "건조종료 전", "시작", "종료")
+    }
+    update, add = [], []
+    for values in rows:
+        anchor = existing.get(values.get("phase"))
+        if anchor:
+            update.append(
+                {
+                    "section_id": anchor["section_id"],
+                    "values": {k: v for k, v in values.items() if k != "phase"},
+                }
+            )
+        else:
+            add.append({"section_def": section, "values": values})
+    sections = {}
+    if update:
+        sections["update"] = update
+    if add:
+        sections["add"] = add
     return doc.update_document(
         actor,
         document_id,
         {
-            "expected_version": version,
-            "sections": {"add": [{"section_def": section, "values": v} for v in rows]},
+            "expected_version": detail["version"],
+            "sections": sections,
         },
     )
 

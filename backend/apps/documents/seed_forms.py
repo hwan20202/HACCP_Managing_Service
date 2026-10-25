@@ -1,10 +1,12 @@
-"""스프린트 2 작성 요구 양식 정의(v1).
+"""작성 요구 양식 정의.
 
 항목·판정 기준은 sprints/sprint2-s0-forms.md(✅ D-051·D-057)와 같다.
 
 모든 양식은 requirement_only(작성 요구로만 생성, P4-S1-Q1). 개선조치는 별도 테이블(D-054)이라
 섹션으로 두지 않고, `deviation`은 확인 대시보드 노출 시점만 정한다(ISS-008).
 """
+
+from copy import deepcopy
 
 GOOD_BAD = ["양호", "불량"]
 OX = ["O", "X"]
@@ -586,16 +588,99 @@ CCP_3P_V2 = {
     ],
 }
 
+# 고정된 시작·종료 행은 새 양식 버전에서만 적용한다. 기존 승인본은 종전 양식을 유지한다.
+CCP_1P_FIXED = deepcopy(CCP_1P)
+CCP_2B_FIXED = deepcopy(CCP_2B)
+CCP_3P_FIXED = deepcopy(CCP_3P_V2)
+for _schema in (CCP_1P_FIXED, CCP_2B_FIXED, CCP_3P_FIXED):
+    _section = next(s for s in _schema["sections"] if s.get("phase_order"))
+    _section["fixed_phase_rows"] = True
+
+# 건조시간은 기록·작성완료 필수값으로 남기되 행 판정에서는 제외한다.
+_dry_section = next(s for s in CCP_2B_FIXED["sections"] if s["key"] == "rounds")
+_dry_verdict = next(f for f in _dry_section["fields"] if f["key"] == "verdict")
+_dry_minutes = next(f for f in _dry_section["fields"] if f["key"] == "dry_minutes")
+_dry_minutes.pop("limit")
+_dry_verdict["computed"] = {
+    "all": [{"field": "temp_c", "min": 68.0, "max": 72.0}],
+    "then": "적합",
+    "else": "부적합",
+}
+CCP_2B_FIXED["guide"][0]["rows"][0] = [
+    "한계기준",
+    "환: 건조온도 70℃ ± 2℃, 건조시간 2시간 ± 5분(행 판정은 온도만)",
+]
+
+# v3: 시간은 시작·종료 측정일시 차이로 종료 행에만 계산한다.
+CCP_2B_ELAPSED = deepcopy(CCP_2B_FIXED)
+_elapsed_section = next(s for s in CCP_2B_ELAPSED["sections"] if s["key"] == "rounds")
+_elapsed_section["elapsed"] = {
+    "value_field": "dry_minutes",
+    "verdict_field": "time_verdict",
+    "min": 115,
+    "max": 125,
+}
+_elapsed_fields = _elapsed_section["fields"]
+_elapsed_temp_verdict = next(f for f in _elapsed_fields if f["key"] == "verdict")
+_elapsed_temp_verdict["label"] = "온도 판정"
+_elapsed_fields.remove(_elapsed_temp_verdict)
+_elapsed_fields.insert(
+    next(i for i, f in enumerate(_elapsed_fields) if f["key"] == "dry_minutes"),
+    _elapsed_temp_verdict,
+)
+_elapsed_minutes = next(f for f in _elapsed_fields if f["key"] == "dry_minutes")
+_elapsed_minutes.update(label="총 건조시간", readonly=True, required=False)
+_elapsed_fields.insert(
+    _elapsed_fields.index(_elapsed_minutes) + 1,
+    {
+        "key": "time_verdict",
+        "label": "시간 판정",
+        "type": "select",
+        "options": VERDICT,
+        "readonly": True,
+    },
+)
+_elapsed_section["nonconforming"] = {
+    "any": [
+        {"field": "verdict", "eq": "부적합"},
+        {"field": "time_verdict", "eq": "부적합"},
+    ]
+}
+CCP_2B_ELAPSED["guide"][0]["rows"][0] = [
+    "한계기준",
+    "환: 건조온도 70℃ ± 2℃, 총 건조시간 2시간 ± 5분",
+]
+CCP_2B_ELAPSED["guide"][0]["rows"][2] = [
+    "방법",
+    "건조기 판넬 온도를 기록. 총 건조시간은 시작 전·종료 전 측정일시 차이로 자동 계산",
+]
+
+# v3: 자력 한계기준을 8,000G로 낮추고 자석봉 규격을 Φ42.7로 표시한다.
+CCP_1P_8000 = deepcopy(CCP_1P_FIXED)
+CCP_1P_8000["guide"][0]["rows"][0] = [
+    "한계기준",
+    "자력 8,000 가우스 이상 / 자석봉 청소상태 확인. 자석봉 Φ42.7 사용. "
+    "분말 투입량 분당 1kg, 3530rpm 고정. 금속이물(쇳가루) 10mg/kg 이하",
+]
+_gauss_fields = next(s for s in CCP_1P_8000["sections"] if s["key"] == "rounds")["fields"]
+next(f for f in _gauss_fields if f["key"] == "gauss")["limit"]["min"] = 8000
+next(f for f in _gauss_fields if f["key"] == "verdict")["computed"]["all"][0]["min"] = 8000
+
 # (type_code, version, name, schema, is_active)
 P4_TEMPLATES = [
     ("D01", 1, "시험성적서", D01, True),
     ("D02", 1, "원산지 증명/수입면장", D02, True),
     ("D03", 1, "원료/부자재 육안검사일지", D03, False),  # P6a: LOT 문서(v2)로 바뀜
-    ("CCP-1P", 1, "CCP-1P 모니터링일지(쇳가루 제거)", CCP_1P, True),
-    ("CCP-2B", 1, "CCP-2B 모니터링일지(건조)", CCP_2B, True),
+    ("CCP-1P", 1, "CCP-1P 모니터링일지(쇳가루 제거)", CCP_1P, False),
+    ("CCP-2B", 1, "CCP-2B 모니터링일지(건조)", CCP_2B, False),
     ("CCP-3P", 1, "CCP-3P 모니터링일지(금속검출)", CCP_3P, False),  # P12 DP-03: v2로 바뀜
     ("D03", 2, "원료/부자재 육안검사일지", D03_V2, True),
-    ("CCP-3P", 2, "CCP-3P 모니터링일지(금속검출)", CCP_3P_V2, True),
+    ("CCP-3P", 2, "CCP-3P 모니터링일지(금속검출)", CCP_3P_V2, False),
+    ("CCP-1P", 2, "CCP-1P 모니터링일지(쇳가루 제거)", CCP_1P_FIXED, False),
+    ("CCP-1P", 3, "CCP-1P 모니터링일지(쇳가루 제거)", CCP_1P_8000, True),
+    ("CCP-2B", 2, "CCP-2B 모니터링일지(건조)", CCP_2B_FIXED, False),
+    ("CCP-2B", 3, "CCP-2B 모니터링일지(건조)", CCP_2B_ELAPSED, True),
+    ("CCP-3P", 3, "CCP-3P 모니터링일지(금속검출)", CCP_3P_FIXED, True),
 ]
 
 

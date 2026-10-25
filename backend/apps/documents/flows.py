@@ -32,6 +32,7 @@ FLOWS = {
         "DOC-UPD-06",
         "DOC-UPD-07",
         "DOC-UPD-08",
+        "DOC-UPD-08b",  # CCP-2B: 종료 행 건조시간 계산값 반영
         "DOC-UPD-09",
         "DOC-UPD-10",
     ],

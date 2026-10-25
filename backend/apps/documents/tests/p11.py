@@ -69,19 +69,49 @@ def version_of(document_id):
 
 def add_rows(document_id, section_def, rows):
     """행 추가. 반환: 새 행 section_id 목록(row_no 순)."""
-    services.update_document(
+    before = services.get_document(document_id)
+    existing = {
+        s["values"].get("phase"): s
+        for s in before["sections"]
+        if s["section_def"] == section_def
+        and s["values"].get("phase")
+        in ("작업시작 전", "작업종료 후", "건조시작 전", "건조종료 전", "시작", "종료")
+    }
+    update, add, targets = [], [], []
+    for values in rows:
+        if before["template"]["type_code"] == "CCP-2B" and before["template"]["version"] >= 3:
+            values = {k: v for k, v in values.items() if k not in ("dry_minutes", "time_verdict")}
+        anchor = existing.get(values.get("phase"))
+        if anchor:
+            update.append(
+                {
+                    "section_id": anchor["section_id"],
+                    "values": {k: v for k, v in values.items() if k != "phase"},
+                }
+            )
+            targets.append(anchor["section_id"])
+        else:
+            add.append({"section_def": section_def, "values": values})
+            targets.append(None)
+    parts = {}
+    if update:
+        parts["update"] = update
+    if add:
+        parts["add"] = add
+    result = services.update_document(
         3,
         document_id,
         {
             "expected_version": version_of(document_id),
-            "sections": {"add": [{"section_def": section_def, "values": v} for v in rows]},
+            "sections": parts,
         },
     )
-    return [
-        s["section_id"]
-        for s in sorted(services.get_document(document_id)["sections"], key=lambda s: s["row_no"])
-        if s["section_def"] == section_def
-    ]
+    now = [s for s in result["sections"] if s["section_def"] == section_def]
+    original_ids = {s["section_id"] for s in before["sections"]}
+    added = iter(
+        sorted((s for s in now if s["section_id"] not in original_ids), key=lambda s: s["row_no"])
+    )
+    return [target if target is not None else next(added)["section_id"] for target in targets]
 
 
 def at(hm, day=TODAY):

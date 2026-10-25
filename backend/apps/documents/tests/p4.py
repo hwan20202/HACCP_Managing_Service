@@ -8,7 +8,7 @@ LOT 88·89·90(입고), 생산 배치 12, 품목 1·2. 값은 모두 가상이�
 from django.db import connection, transaction
 
 from apps.documents import services
-from apps.documents.models import Document, DocumentFile, File
+from apps.documents.models import DocSection, Document, DocumentFile, DocumentTemplate, File
 from apps.documents.seed import _ensure, ensure_p4_templates, ensure_staff
 from apps.documents.seed_forms import D03 as D03_V1
 
@@ -206,13 +206,24 @@ def add_lot_row(document_id, lot_id, values=None):
         return services.add_ref_row(3, document_id, "lots", row, lot_ref(lot_id), "lot_id")
 
 
-def new_ccp(code="CCP-1P", process="1P"):
-    return goc(
+def new_ccp(code="CCP-1P", process="1P", *, legacy=True):
+    result = goc(
         code,
         f"{code}|batch:12",
         batch_ref(process),
         {"info": {"item_name": "유자차", "batch_qty_kg": 1200}},
     )
+    if legacy:
+        # 기존 P4 회귀 사례는 그때의 양식 버전과 빈 측정영역을 재현한다.
+        document_id = result["document"]["document_id"]
+        version = 2 if code == "CCP-3P" else 1
+        template = DocumentTemplate.objects.get(type_code=code, version=version)
+        Document.objects.filter(pk=document_id).update(template_id=template.pk)
+        DocSection.objects.filter(
+            document_id=document_id, section_def__in=("rounds", "checks")
+        ).delete()
+        result["document"] = services.get_document(document_id)
+    return result
 
 
 def version_of(document_id):
