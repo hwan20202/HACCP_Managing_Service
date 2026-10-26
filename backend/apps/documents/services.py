@@ -3982,3 +3982,20 @@ def check_deviation(actor_id, deviation_id, expected_version):
                     raise errors.NotChecker()
             _deviation_failure(deviation_id, expected_version, "DOC-DVK-02a")
     return _deviation_detail(deviation_id)
+
+
+# ---------------------------------------------------------------- P15 N15 섹션 값 사용 수
+
+
+def count_rows_with(type_code, section_def, field, value):
+    """N15(P15): 그 양식 문서(삭제 제외)의 섹션 행 중 `field` 값이 `value`인 행 수. SQL 1.
+
+    PLG가 공정 삭제 가능 여부(PLG-R15 — 생산일지 `steps.process_id`)를 볼 때 쓴다.
+    """
+    with step("DOC-CNT-01", "DOC", "섹션 값 사용 수"):
+        return DocSection.objects.filter(
+            document__template__type_code=type_code,
+            document__deleted_at__isnull=True,
+            section_def=section_def,
+            **{f"values_json__{field}": value},
+        ).count()
