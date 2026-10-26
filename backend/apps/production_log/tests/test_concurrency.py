@@ -83,3 +83,23 @@ class PlgConcurrencyTests(TransactionTestCase):
         self.assertIsInstance(error, errors.TemplateInvalid)
         self.assertEqual(error.details[0]["code"], "not_found")
         self.assertFalse(ProcessTemplate.objects.exists())
+
+    def test_tc10_same_batch_start_twice(self):
+        """PLG-R01 불변식: 같은 배치 생산 시작 동시 2번 → 생산일지 1건(N1 ON CONFLICT)."""
+        from apps.doc_requirements import services as req
+        from apps.documents import seed as doc_seed
+        from apps.documents.models import Document
+
+        from .prodlog_base import Inventory
+
+        doc_seed.ensure_p4_templates()
+        doc_seed.ensure_p15_templates()
+        Inventory()
+        results, waited = self.race(
+            lambda: req.require_for_batch(1, 400), lambda: req.require_for_batch(2, 400)
+        )
+        self.assertTrue(waited)
+        self.assertEqual((results["first"][0], results["second"][0]), ("ok", "ok"), results)
+        log = [d for d in results["second"][1]["documents"] if d["type_code"] == "PROD-LOG"]
+        self.assertEqual(log[0]["result"], "existing")
+        self.assertEqual(Document.objects.filter(record_key="PROD-LOG|batch:400").count(), 1)

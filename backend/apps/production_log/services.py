@@ -269,7 +269,7 @@ def get_process(process_id):
     return _process_dict(p, *_process_usage([process_id]).get(process_id, (0, None)))
 
 
-def create_process(actor_id, data):
+def create_process(actor_id, data, *, action="create", document_id=None):
     """PRC-NEW: 일반 공정만 추가(기본 제공은 시드). 이름 R13 · 입력 방식 필수 → 이력."""
     with step("PRC-NEW-01", "PLG", "입력 확인"):
         _require_transaction()
@@ -302,7 +302,7 @@ def create_process(actor_id, data):
             updated_by_id=actor_id,
             updated_at=now,
         )
-        _log(actor_id, "process", p.process_id, "create", None, _process_state(p))
+        _log(actor_id, "process", p.process_id, action, None, _process_state(p), document_id)
         return _process_dict(p)
 
 
@@ -648,7 +648,7 @@ def get_template(template_id):
         return out
 
 
-def create_template(actor_id, data, action="create"):
+def create_template(actor_id, data, action="create", document_id=None):
     """TPL-NEW: 이름 R13 · 단계 R16 → 이력."""
     with step("TPL-NEW-01", "PLG", "입력 확인·단계(R16)"):
         _require_transaction()
@@ -675,7 +675,7 @@ def create_template(actor_id, data, action="create"):
             updated_at=now,
         )
         _write_steps(t.pk, steps)
-        _log(actor_id, "template", t.pk, action, None, _template_state(t, steps))
+        _log(actor_id, "template", t.pk, action, None, _template_state(t, steps), document_id)
         return get_template(t.pk)
 
 

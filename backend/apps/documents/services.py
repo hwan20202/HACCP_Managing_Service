@@ -11,6 +11,7 @@
 """
 
 import json
+from dataclasses import dataclass
 
 from django.db import IntegrityError, models, transaction
 from django.db.models import Case, Count, Exists, F, Func, OuterRef, Q, Subquery, Value, When
@@ -1212,8 +1213,11 @@ def update_document(actor_id, document_id, patch):
                     sid: (f"section_id:{sid}", r.section_def, r.values_json)
                     for sid, r in current.items()
                 }
+                system_paths = []  # P15: 시스템 섹션(N13만 씀)에 사용자 쓰기
                 for sid in deletes:
                     key = current[sid].section_def
+                    if validation.is_system_section(schema_sections.get(key)):
+                        system_paths.append(f"sections.delete[{sid}]")
                     fixed = validation.fixed_phase_values(schema_sections.get(key, {}))
                     if fixed and (current[sid].values_json or {}).get(fixed[0]) in (
                         fixed[1],
@@ -1255,6 +1259,8 @@ def update_document(actor_id, document_id, patch):
                         continue
                     merged = validation.merge_patch(row.values_json, patch_values)
                     section = schema_sections.get(row.section_def)
+                    if validation.is_system_section(section):
+                        system_paths.append(path)
                     if section:
                         fixed = validation.fixed_phase_values(section)
                         if (
@@ -1287,6 +1293,9 @@ def update_document(actor_id, document_id, patch):
                                 f"{path}.section_def", "unknown_section", "양식에 없는 섹션입니다."
                             )
                         )
+                        continue
+                    if validation.is_system_section(section):
+                        system_paths.append(f"{path}.section_def")
                         continue
                     if not section["repeat"]:
                         problems.append(
@@ -1325,6 +1334,14 @@ def update_document(actor_id, document_id, patch):
                     staff_pairs += validation.staff_field_paths(section, values, f"{path}.values")
                     final[f"new{i}"] = (f"{path}.values", key, values)
                     new_rows.append((key, values))
+                if system_paths:
+                    s.fail("시스템 섹션 쓰기")
+                    raise errors.SystemSection(
+                        details=[
+                            validation.error(p, "system_section", "시스템이 채우는 영역입니다.")
+                            for p in system_paths
+                        ]
+                    )
                 _check_staff(staff_pairs, problems)
                 duplicates = []
                 for key, section in schema_sections.items():
@@ -1348,6 +1365,27 @@ def update_document(actor_id, document_id, patch):
                 if problems or duplicates:
                     s.fail(f"오류 {len(problems)}건, 중복 {len(duplicates)}건")
                 _raise_if_invalid(problems, duplicates)
+
+            extension = _EXTENSIONS.get(document.template.type_code)
+            extra_values = {}
+            if extension is not None and extension.check_rows is not None:
+                with step("DOC-EXT-01", "DOC", "양식 확장 저장 검사(N12)") as s:
+                    touched = {sid for sid, _ in merged_updates}
+                    rows_after = [
+                        {
+                            "ref": ref,
+                            "path": p,
+                            "section_def": k,
+                            "values": v,
+                            # 이번 저장에서 바뀌거나 새로 넣은 행(P15 S4b r1, 손대지 않음 False)
+                            "touched": isinstance(ref, str) or ref in touched,
+                        }
+                        for ref, (p, k, v) in final.items()
+                    ]
+                    ext_problems, extra_values = extension.check_rows(document, rows_after)
+                    if ext_problems:
+                        s.fail(f"오류 {len(ext_problems)}건")
+                        raise errors.ValidationFailed(details=ext_problems)
 
             with step("DOC-UPD-05b", "DOC", "판정(computed) 다시 계산") as s:
                 recomputed = 0
@@ -1406,6 +1444,12 @@ def update_document(actor_id, document_id, patch):
                         sid, user_patch = merged_updates[index]
                         merged_updates[index] = (sid, {**user_patch, **patch_values})
                 s.note(f"계산한 행 {recomputed + len(new_rows)}")
+            if extra_values:
+                with step("DOC-EXT-01b", "DOC", "확장 계산 값 합치기(시스템 필드만)") as s:
+                    s.note(f"{len(extra_values)}행")
+                    _merge_extension_values(
+                        extra_values, schema_sections, current, merged_updates, new_rows
+                    )
 
             with step("DOC-UPD-06", "DOC", "기본 정보 반영") as s:
                 if basic:
@@ -1780,9 +1824,17 @@ def complete_document(actor_id, document_id, expected_version, note=None):
                 deviation_count=deviation_count,
                 file_count=file_count,
             )
-            if problems:
-                s.fail(f"빠진 항목 {len(problems)}건")
+        extension = _EXTENSIONS.get(document.template.type_code)
+        if extension is not None and extension.completion_problems is not None:
+            with step("DOC-EXT-02", "DOC", "양식 확장 작성완료 검사(N12)") as s:
+                more = extension.completion_problems(document, rows)  # 409 예외는 그대로
+                if more:
+                    s.fail(f"빠진 항목 {len(more)}건")
+                problems = problems + more
+        if problems:
+            with step("DOC-CMP-03a", "DOC", "작성완료 검사 실패"):
                 raise errors.CompletionIncomplete(details=problems)
+        _transition_extension(document.template.type_code, document_id, "completed", actor_id)
         _send_signal(document_id, "completed", actor_id, note, now)
     with step("DOC-CMP-04", "DOC", "결과 조회"):
         return _detail(document_id)
@@ -1844,6 +1896,7 @@ def reopen_document(actor_id, document_id, expected_version):
                         }
                     ]
                 )
+        _transition_extension(document_type(document_id), document_id, "reopened", actor_id)
         _send_signal(document_id, "reopened", actor_id, at=now)
     with step("DOC-ROP-03", "DOC", "결과 조회"):
         return _detail(document_id)
@@ -2396,7 +2449,7 @@ def get_or_create_document(
                 recorded_by_id=actor_id,
             )
             for key, section in schema_sections.items()
-            if not section["repeat"]
+            if not section["repeat"] and not validation.is_system_section(section)
         ]
         for key, section in schema_sections.items():
             fixed = validation.fixed_phase_values(section)
@@ -3999,3 +4052,280 @@ def count_rows_with(type_code, section_def, field, value):
             section_def=section_def,
             **{f"values_json__{field}": value},
         ).count()
+
+
+# ---------------------------------------------------------------- P15 N12 양식 확장 등록
+# p15-s2-spec 3.1. 다른 앱(PLG)이 앱 시작 때 양식 유형별로 검사·전이 처리를 붙인다. DOC는 그 앱을
+# 모른다(import하지 않음). 등록이 없으면 지금과 같다.
+
+
+@dataclass(frozen=True)
+class FormExtension:
+    check_rows: object = None  # (document, rows_after) -> (problems, {ref: {key: value}})
+    completion_problems: object = None  # (document, rows) -> problems (예외는 그대로 올라감)
+    on_transition: object = None  # (document_id, event, actor_id) — 같은 트랜잭션, 예외면 롤백
+
+
+_EXTENSIONS = {}
+
+
+def register_form_extension(
+    type_code, *, check_rows=None, completion_problems=None, on_transition=None
+):
+    """N12: 양식 유형에 저장·작성완료 검사와 전이 처리(completed·reopened)를 붙인다."""
+    _EXTENSIONS[type_code] = FormExtension(check_rows, completion_problems, on_transition)
+
+
+def _transition_extension(type_code, document_id, event, actor_id):
+    extension = _EXTENSIONS.get(type_code)
+    if extension is not None and extension.on_transition is not None:
+        with step("DOC-EXT-03", "DOC", f"양식 확장 전이 처리({event})"):
+            extension.on_transition(document_id, event, actor_id)
+
+
+def _merge_extension_values(extra, schema_sections, current, merged_updates, new_rows):
+    """DOC-EXT-01b: 확장이 계산한 값을 행에 합친다 — 양식의 시스템 필드(readonly·computed)만.
+
+    extra 키: 기존 행 section_id 또는 "new{i}"(sections.add 순서).
+    """
+    for ref, values in extra.items():
+        if not values:
+            continue
+        if isinstance(ref, int):
+            key = current[ref].section_def
+        else:
+            key = new_rows[int(str(ref)[3:])][0]
+        fields = {f["key"]: f for f in schema_sections[key]["fields"]}
+        bad = [k for k in values if k not in fields or not validation.is_system_field(fields[k])]
+        if bad:
+            raise RuntimeError(f"확장 계산 값은 시스템 필드에만 넣을 수 있습니다: {key}.{bad}")
+        if isinstance(ref, int):
+            index = next((i for i, (sid, _) in enumerate(merged_updates) if sid == ref), None)
+            if index is None:
+                stored = current[ref].values_json or {}
+                changed = {k: v for k, v in values.items() if stored.get(k) != v}
+                if changed:
+                    merged_updates.append((ref, changed))
+            else:
+                sid, patch_values = merged_updates[index]
+                merged_updates[index] = (sid, {**patch_values, **values})
+        else:
+            i = int(str(ref)[3:])
+            key, row_values = new_rows[i]
+            new_rows[i] = (key, {**row_values, **values})
+
+
+# ---------------------------------------------------------------- P15 N13 시스템 섹션 쓰기
+
+
+def write_system_sections(document_id, rows, *, clear=()):
+    """N13: 양식의 `system: true` 섹션을 쓰거나 지운다. 트랜잭션 안에서만, 버전은 올리지 않음.
+
+    rows = {section_def: values(1행) 또는 [values, …](반복)}. 쓰는 섹션은 먼저 지우고 다시 넣는다.
+    """
+    _require_transaction()
+    with step("DOC-SYS-01", "DOC", "시스템 섹션 쓰기(N13)") as s:
+        document = Document.objects.select_related("template").get(pk=document_id)
+        schema_sections = validation.sections_of(document.template.schema_json)
+        keys = set(rows) | set(clear)
+        bad = [k for k in keys if not validation.is_system_section(schema_sections.get(k))]
+        if bad:
+            raise RuntimeError(f"시스템 섹션이 아닙니다: {sorted(bad)}")
+        DocSection.objects.filter(document_id=document_id, section_def__in=keys).delete()
+        objects = []
+        for key, values in rows.items():
+            items = values if isinstance(values, list) else [values]
+            for row_no, item in enumerate(items, 1):
+                objects.append(
+                    DocSection(
+                        document_id=document_id, section_def=key, row_no=row_no, values_json=item
+                    )
+                )
+        DocSection.objects.bulk_create(objects)
+        s.note(f"쓴 행 {len(objects)}, 지운 섹션 {sorted(clear)}")
+
+
+# ---------------------------------------------------------------- P15 N14 섹션 행 수
+
+
+def section_counts(document_ids, section_key):
+    """N14: {document_id: {"total": 행 수, "done": done=true 행 수}} — "공정 n/m". SQL 1."""
+    ids = sorted({i for i in document_ids if isinstance(i, int) and not isinstance(i, bool)})
+    out = {i: {"total": 0, "done": 0} for i in ids}
+    if not ids:
+        return out
+    with step("DOC-CNT-02", "DOC", "섹션 행 수(N14)"):
+        rows = (
+            DocSection.objects.filter(document_id__in=ids, section_def=section_key)
+            .values("document_id")
+            .annotate(
+                total=Count("section_id"),
+                done=Count("section_id", filter=Q(values_json__done=True)),
+            )
+        )
+        for row in rows:
+            out[row["document_id"]] = {"total": row["total"], "done": row["done"]}
+    return out
+
+
+# ---------------------------------------------------------------- P15 N16 작성 요구 키로 찾기
+
+
+def documents_by_record_keys(record_keys):
+    """N16: {record_key: {document_id, status, version}} (삭제 제외). SQL 1(빈 목록이면 0)."""
+    keys = sorted({k for k in record_keys if isinstance(k, str) and k})
+    if not keys:
+        return {}
+    with step("DOC-RKY-01", "DOC", "작성 요구 키로 문서 찾기(N16)"):
+        return {
+            row["record_key"]: {
+                "document_id": row["document_id"],
+                "status": row["status"],
+                "version": row["version"],
+            }
+            for row in Document.objects.filter(record_key__in=keys, deleted_at__isnull=True).values(
+                "record_key", "document_id", "status", "version"
+            )
+        }
+
+
+# ---------------------------------------------------------------- P15 양식 결재 여부(WF)
+
+
+def form_flags(document_id):
+    """P15: 문서 양식의 type_code와 결재 여부(`approval: false`면 결재 없음). SQL 1. 없으면 404."""
+    row = (
+        Document.objects.filter(pk=document_id, deleted_at__isnull=True)
+        .values_list("template__type_code", "template__schema_json")
+        .first()
+    )
+    if row is None:
+        raise errors.DocumentNotFound()
+    schema = row[1] or {}
+    return {"type_code": row[0], "approval": schema.get("approval", True) is not False}
+
+
+# ---------------------------------------------------------------- P15 N17 품목별 최근 값
+
+
+def latest_section_value(type_code, item_id, section_def, field):
+    """N17: 그 양식·그 품목(문서 단위 참조 item_id) 문서 중 `field` 값이 있는 가장 최근 문서의 값.
+
+    반환 {document_id, value} 또는 None. 삭제 제외, 최근 = updated_at·document_id 내림차순. SQL 1.
+    PLG-F12(같은 품목 최근 템플릿)용 — v7.3 check T27과 같은 조회(ix_document_ref_item).
+    """
+    if isinstance(item_id, bool) or not isinstance(item_id, int):
+        return None
+    with step("DOC-LSV-01", "DOC", "품목별 최근 값(N17)"):
+        with connection_cursor() as cursor:
+            cursor.execute(
+                "SELECT d.document_id, json_extract(s.values_json, %s) FROM document_ref r"
+                " JOIN document d ON d.document_id = r.document_id AND d.deleted_at IS NULL"
+                " JOIN document_template t ON t.template_id = d.template_id AND t.type_code = %s"
+                " JOIN doc_section s ON s.document_id = d.document_id AND s.section_def = %s"
+                " WHERE r.item_id = %s AND r.section_id IS NULL"
+                " AND json_extract(s.values_json, %s) IS NOT NULL"
+                " ORDER BY d.updated_at DESC, d.document_id DESC LIMIT 1",
+                [f"$.{field}", type_code, section_def, item_id, f"$.{field}"],
+            )
+            row = cursor.fetchone()
+    return None if row is None else {"document_id": row[0], "value": row[1]}
+
+
+# ---------------------------------------------------------------- P15 N18 가벼운 문서 읽기
+
+
+def document_sections(document_id, section_defs, *, with_refs=False):
+    """N18(P15 S4b r1·r2 — ISS-063): 문서 머리 + 고른 섹션 행을 SQL 1개로(문서 LEFT JOIN 섹션).
+
+    반환 {document_id, type_code, status, version, record_key, work_date, refs,
+    sections:{def: [행]}}. 행 = {section_id, row_no, values}. refs는 with_refs일 때만(+1 SQL,
+    문서 단위 참조), 아니면 None. 없거나 삭제된 문서면 404.
+    """
+    with step("DOC-SEC-01", "DOC", "문서·고른 섹션(N18)"):
+        keys = list(dict.fromkeys(section_defs))
+        join = ""
+        params = []
+        if keys:
+            join = (
+                " LEFT JOIN doc_section s ON s.document_id = d.document_id"
+                f" AND s.section_def IN ({', '.join(['%s'] * len(keys))})"
+            )
+            params += keys
+        section_cols = (
+            "s.section_id, s.section_def, s.row_no, s.values_json"
+            if keys
+            else "NULL, NULL, NULL, NULL"
+        )
+        with connection_cursor() as cursor:
+            cursor.execute(
+                "SELECT d.document_id, t.type_code, d.status, d.version, d.record_key,"
+                f" d.work_date, {section_cols} FROM document d"
+                " JOIN document_template t ON t.template_id = d.template_id"
+                f"{join} WHERE d.document_id = %s AND d.deleted_at IS NULL"
+                + (" ORDER BY s.section_def, s.row_no" if keys else ""),
+                [*params, document_id],
+            )
+            rows = cursor.fetchall()
+        if not rows:
+            raise errors.DocumentNotFound()
+        head = rows[0]
+        sections = {key: [] for key in keys}
+        for row in rows:
+            if row[6] is None:
+                continue
+            values = row[9]
+            if isinstance(values, str):
+                values = json.loads(values)
+            sections[row[7]].append(
+                {"section_id": row[6], "row_no": row[8], "values": values or {}}
+            )
+        refs = None
+        if with_refs:
+            refs = [
+                _ref_row(r)
+                for r in DocumentRef.objects.filter(
+                    document_id=document_id, section_id__isnull=True
+                )
+            ]
+        work_date = head[5]
+        return {
+            "document_id": head[0],
+            "type_code": head[1],
+            "status": head[2],
+            "version": head[3],
+            "record_key": head[4],
+            "work_date": work_date
+            if isinstance(work_date, str) or work_date is None
+            else work_date.isoformat(),
+            "refs": refs,
+            "sections": sections,
+        }
+
+
+def documents_by_batch_ref(production_batch_id, type_codes):
+    """N19(P15 S4b r2 B2): 배치 참조(문서·행 단위)가 있는 문서 {type_code: document_id}(삭제 제외).
+
+    고른 양식만. 같은 양식이 여럿이면 document_id가 가장 작은 것. SQL 1(빈 목록이면 0).
+    """
+    codes = sorted({c for c in type_codes if isinstance(c, str) and c})
+    if not codes:
+        return {}
+    with step("DOC-BRF-01", "DOC", "배치 참조로 문서 찾기(N19)"):
+        rows = (
+            Document.objects.filter(
+                Exists(
+                    DocumentRef.objects.filter(
+                        document_id=OuterRef("pk"), production_batch_id=production_batch_id
+                    )
+                ),
+                deleted_at__isnull=True,
+                template__type_code__in=codes,
+            )
+            .order_by("document_id")
+            .values_list("template__type_code", "document_id")
+        )
+        out = {}
+        for code, document_id in rows:
+            out.setdefault(code, document_id)
+        return out

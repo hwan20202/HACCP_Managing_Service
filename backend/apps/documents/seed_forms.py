@@ -1066,3 +1066,146 @@ P8_TEMPLATES = [
     ("D12", 1, "공정별 이물관리 점검표", D12, True),
     ("D11", 1, "방충방서점검표", D11, True),
 ]
+
+
+# ------------------------------------------------ P15 생산일지 (ERD v7.3, D-244·D-246)
+# 결재 없는 양식(approval false), 시스템 섹션 frozen_*(작성완료 때 PLG가 씀 — N13), steps.done은
+# 저장 때 PLG가 계산(N12). 필수 검사는 양식 required가 아니라 PLG completion_problems(R07).
+# 설치: install_document_templates --production-log
+# (별도 — S4b 결정 a, 수불 테스트·QA 시드 보호).
+PROD_LOG = {
+    "requirement_only": True,
+    "approval": False,
+    "layout": "prodlog",
+    "sections": [
+        {
+            "key": "info",
+            "label": "기본정보",
+            "repeat": False,
+            "fields": [
+                {
+                    "key": "pre_label",
+                    "label": "원료 적합라벨 확인",
+                    "type": "select",
+                    "options": ["적합", "부적합"],
+                },
+                {
+                    "key": "pre_clean",
+                    "label": "검교정 상태 후 칭량도구 청결",
+                    "type": "select",
+                    "options": ["적합", "부적합"],
+                },
+                {
+                    "key": "pre_lot",
+                    "label": "작업 로트·제품명 재확인",
+                    "type": "select",
+                    "options": ["적합", "부적합"],
+                },
+                {"key": "inspector", "label": "점검자", "type": "staff"},
+                {"key": "template_id", "label": "불러온 템플릿", "type": "number"},
+                {"key": "template_name", "label": "템플릿 이름", "type": "text", "max_length": 40},
+                {"key": "template_at", "label": "불러온 시각", "type": "datetime"},
+            ],
+        },
+        {
+            "key": "materials",
+            "label": "1. 원료칭량",
+            "repeat": True,
+            "fields": [
+                {"key": "bom_line_id", "label": "BOM 줄", "type": "number"},
+                {"key": "worker", "label": "작업자", "type": "staff"},
+                {"key": "note", "label": "비고", "type": "text", "max_length": 100},
+                {"key": "used", "label": "사용량(직접 입력)", "type": "number"},
+            ],
+        },
+        {
+            "key": "steps",
+            "label": "공정",
+            "repeat": True,
+            "max_rows": 30,
+            "fields": [
+                {
+                    "key": "kind",
+                    "label": "기능",
+                    "type": "select",
+                    "options": ["CCP-1P", "CCP-2B", "CCP-3P", "INNER", "OUTER", "GEN"],
+                },
+                {"key": "process_id", "label": "공정", "type": "number"},
+                {"key": "name", "label": "표시명", "type": "text", "max_length": 40},
+                {
+                    "key": "mode",
+                    "label": "입력 방식",
+                    "type": "select",
+                    "options": ["JUDGE", "TEMP_TIME", "QTY"],
+                },
+                {"key": "work_date", "label": "작업일", "type": "date"},
+                {"key": "worker", "label": "작업자", "type": "staff"},
+                {"key": "desc", "label": "공정설명", "type": "text", "max_length": 300},
+                {"key": "dur_on", "label": "소요기간 기록", "type": "bool"},
+                {"key": "dur_value", "label": "소요기간", "type": "number"},
+                {
+                    "key": "dur_unit",
+                    "label": "소요기간 단위",
+                    "type": "select",
+                    "options": ["분", "시간", "일"],
+                },
+                {
+                    "key": "verdict",
+                    "label": "판정",
+                    "type": "select",
+                    "options": ["적합", "부적합"],
+                },
+                {"key": "temp", "label": "온도(℃)", "type": "number"},
+                {"key": "time_min", "label": "시간(분)", "type": "number"},
+                {"key": "qty", "label": "작업수량", "type": "number"},
+                {"key": "qty_unit", "label": "수량 단위", "type": "text", "max_length": 10},
+                {"key": "spec", "label": "포장 규격", "type": "text", "max_length": 40},
+                {"key": "material", "label": "포장재질", "type": "text", "max_length": 100},
+                {"key": "expiry", "label": "소비기한", "type": "date"},
+                {"key": "fg_qty", "label": "완제품수량", "type": "number"},
+                {"key": "fg_unit", "label": "완제품 단위", "type": "text", "max_length": 10},
+                {"key": "remark", "label": "특이사항", "type": "text", "max_length": 300},
+                {"key": "ccp_pulled_at", "label": "CCP 값 가져온 시각", "type": "datetime"},
+                {"key": "done", "label": "필수 칸 다 참(시스템)", "type": "bool", "readonly": True},
+            ],
+        },
+        {
+            "key": "frozen_batch",
+            "label": "고정 기본정보",
+            "repeat": False,
+            "system": True,
+            "fields": [
+                {"key": "manufactured_date", "label": "제조일자", "type": "date", "readonly": True},
+                {"key": "lot_numbers", "label": "LOT NO", "type": "text", "readonly": True},
+                {"key": "product", "label": "유형 및 제품명", "type": "text", "readonly": True},
+                {"key": "report_no", "label": "품목제조보고번호", "type": "text", "readonly": True},
+                {"key": "planned", "label": "생산지시량", "type": "text", "readonly": True},
+                {"key": "output", "label": "실생산량", "type": "text", "readonly": True},
+                {"key": "frozen_at", "label": "고정 시각", "type": "datetime", "readonly": True},
+            ],
+        },
+        {
+            "key": "frozen_materials",
+            "label": "고정 원료칭량",
+            "repeat": True,
+            "system": True,
+            "fields": [
+                {"key": "bom_line_id", "label": "BOM 줄", "type": "number", "readonly": True},
+                {"key": "line_no", "label": "순서", "type": "number", "readonly": True},
+                {"key": "item_code", "label": "원료코드", "type": "text", "readonly": True},
+                {"key": "item_name", "label": "원료명", "type": "text", "readonly": True},
+                {"key": "origin", "label": "원산지", "type": "text", "readonly": True},
+                {"key": "ratio_e6", "label": "비율(e6)", "type": "number", "readonly": True},
+                {"key": "standard_e6", "label": "투입량(e6)", "type": "number", "readonly": True},
+                {"key": "used_e6", "label": "사용량(e6)", "type": "number", "readonly": True},
+                {"key": "unit", "label": "단위", "type": "text", "readonly": True},
+                {"key": "first_date", "label": "투입일", "type": "date", "readonly": True},
+                {"key": "alternatives", "label": "대체 원료", "type": "text", "readonly": True},
+            ],
+        },
+    ],
+}
+
+P15_TEMPLATES = [
+    ("PROD-LOG", 1, "생산일지", PROD_LOG, True),
+]

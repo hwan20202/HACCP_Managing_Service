@@ -1,6 +1,7 @@
 """PLG-TC-27 / PLG-NFR-01: 계층 경계.
 
-- PLG는 수불(apps.inventory)·REQ 뷰 읽기(apps.doc_requirements.sources)를 import하지 않는다.
+- PLG는 수불(apps.inventory)·REQ 뷰 읽기(apps.doc_requirements.sources)를 import하지 않는다
+  (REQ 공개 함수 services·rules는 부름 — 명세 1장).
 - DOC·REQ는 PLG(apps.production_log)를 import하지 않는다.
 """
 
@@ -20,6 +21,7 @@ def imports(package):
                 found += [(path, alias.name) for alias in node.names]
             elif isinstance(node, ast.ImportFrom) and node.module:
                 found += [(path, node.module)]
+                found += [(path, f"{node.module}.{alias.name}") for alias in node.names]
     return found
 
 
@@ -28,7 +30,7 @@ class BoundaryTests(SimpleTestCase):
         bad = [
             f"{p.name}: {m}"
             for p, m in imports("production_log")
-            if m.startswith(("apps.inventory", "apps.doc_requirements"))
+            if m.startswith("apps.inventory") or m == "apps.doc_requirements.sources"
         ]
         self.assertEqual(bad, [])
 

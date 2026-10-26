@@ -41,11 +41,21 @@ def _rollback_note(tx_step, error):
 SUBMIT_ROLE_NAMES = {"leader": "HACCP팀장", "owner": "담당자", "writer": "작성 권한자"}
 
 
+class NoApprovalForm(ApiError):
+    """P15: 결재 없는 양식(`approval: false` — 생산일지)은 상신하지 않는다."""
+
+    status, code, message = 409, "NO_APPROVAL_FORM", "결재 없는 양식은 상신할 수 없습니다."
+
+
 def _line_for(actor_id, document_id):
     """WF-SUB-02b·03·03b(트랜잭션 밖): 양식 유형 → 설정 상태·권한(ROLE-R01, ROLE-C07) → 결재선."""
-    with step("WF-SUB-02b", "WF", "문서 요약(양식 유형)") as s:
-        type_code = doc.document_type(document_id)
+    with step("WF-SUB-02b", "WF", "문서 요약(양식 유형·결재 여부)") as s:
+        form = doc.form_flags(document_id)
+        type_code = form["type_code"]
         s.note(type_code)
+        if not form["approval"]:  # P15: 역할 검사보다 먼저(누구든 409)
+            s.fail("NO_APPROVAL_FORM")
+            raise NoApprovalForm()
     with step("WF-SUB-03", "WF", "설정 상태·권한(ROLE-R01)") as s:
         try:
             role = roles.require_submitter(actor_id, type_code)  # 담당자·작성 권한자·팀장(D-198)

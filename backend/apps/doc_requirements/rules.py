@@ -40,3 +40,26 @@ def processes_for(item_id, process_type):
 def process_of(type_code):
     """F04 process_code: 'CCP-1P' → '1P'(DOC 변경 없이 type_code에서 계산, s2-spec 2.5)."""
     return type_code[4:] if type_code.startswith("CCP-") else None
+
+
+# P15 생산일지(PLG-R01): 제조 배치마다 1건, 생산 시작(F02) 때 공정 없이. 양식이 설치돼 있을 때만
+# (install_document_templates --production-log — S4b 결정 a).
+PROD_LOG = "PROD-LOG"
+PROD_LOG_PROCESS_TYPE = "MANUFACTURE"
+
+
+def prod_log_key(batch_id):
+    """배치당 1건 불변식의 키 — 생산일지 키는 여기서만 만든다(PLG-R01)."""
+    return f"{PROD_LOG}|batch:{batch_id}"
+
+
+def batch_of_prod_log_key(record_key):
+    """'PROD-LOG|batch:12' → 12, 아니면 None."""
+    prefix = f"{PROD_LOG}|batch:"
+    if (
+        isinstance(record_key, str)
+        and record_key.startswith(prefix)
+        and record_key[len(prefix) :].isdigit()
+    ):
+        return int(record_key[len(prefix) :])
+    return None

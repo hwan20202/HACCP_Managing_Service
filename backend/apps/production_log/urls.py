@@ -19,4 +19,30 @@ urlpatterns = [
         name="api-process-template-active",
     ),
     path("master-history", api.master_history, name="api-master-history"),
+    # S4b 생산일지(A01~A05)
+    path(
+        "production-logs/<int:document_id>/linked",
+        api.production_log_linked,
+        name="api-production-log-linked",
+    ),
+    path(
+        "production-logs/<int:document_id>/template-rows",
+        api.production_log_template_rows,
+        name="api-production-log-template-rows",
+    ),
+    path(
+        "production-logs/<int:document_id>/save-template",
+        api.production_log_save_template,
+        name="api-production-log-save-template",
+    ),
+    path(
+        "production-logs/<int:document_id>/ccp-values",
+        api.production_log_ccp_values,
+        name="api-production-log-ccp-values",
+    ),
+    path(
+        "production-logs/<int:document_id>/register-process",
+        api.production_log_register_process,
+        name="api-production-log-register-process",
+    ),
 ]

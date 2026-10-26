@@ -251,6 +251,32 @@ def require_for_batch(actor_id, batch_id):
     if not processes:
         with step("REQ-BAT-03", "REQ", "CCP 공정 없음") as s:
             s.skip("요구되는 CCP 문서 없음")
+    with step("REQ-BAT-05", "REQ", "제조 배치면 생산일지(P15)") as s:
+        make_log = batch["process_type"] == rules.PROD_LOG_PROCESS_TYPE
+        if not make_log:
+            s.skip(f"제조 배치 아님({batch['process_type']})")
+    if make_log:
+        with step("REQ-BAT-06", "REQ", "생산일지 찾기/만들기(N1, PLG-R01)") as s:
+            label = " · ".join(p for p in (batch["batch_number"], batch["item_name"]) if p)[:100]
+            refs = [{"production_batch_id": batch_id, "item_id": batch["item_id"], "label": label}]
+            try:
+                out = doc.get_or_create_document(
+                    actor_id, rules.PROD_LOG, rules.prod_log_key(batch_id), day, refs
+                )
+            except ApiError as error:
+                # S4b 결정 a: 생산일지 양식을 설치하지 않은 DB(수불 테스트·QA 시드)는 건너뜀
+                if error.code not in ("TEMPLATE_NOT_FOUND", "TEMPLATE_INACTIVE"):
+                    raise
+                s.skip(f"생산일지 양식 없음({error.code})")
+            else:
+                documents.append(
+                    _item(
+                        rules.PROD_LOG,
+                        out["document"],
+                        "created" if out["created"] else "existing",
+                        process_code=None,
+                    )
+                )
     with step("REQ-BAT-04", "REQ", "결과"):
         return {"production_batch_id": batch_id, "documents": documents}
 
@@ -385,6 +411,8 @@ def docs_for_batch(batch_id):
                     "version": ref["version"],
                 }
             )
+        # P15: 생산일지를 맨 앞으로(나머지 순서 그대로 — 안정 정렬)
+        documents.sort(key=lambda d: d["type_code"] != rules.PROD_LOG)
     with step("REQ-FND-B03", "REQ", "CCP 측정 요약(DOC N8, P11 S5 r2)") as s:
         # 생산 화면 [연결 문서]의 줄마다 최근 측정·이탈·개선조치 상태(D-176). 문서 없으면 건너뜀
         if documents:
@@ -392,7 +420,7 @@ def docs_for_batch(batch_id):
                 _text(batch["manufactured_date"]), [d["document_id"] for d in documents]
             )
             for d in documents:
-                d["summary"] = summaries.get(d["document_id"])
+                d["summary"] = summaries.get(d["document_id"])  # 생산일지는 None(CCP 아님)
         else:
             s.skip("연결 문서 없음")
         return {
@@ -651,3 +679,48 @@ def periodic_bundle(actor_id, type_code, week_start):
             "approval_line": line,
             "permissions": _bundle_permissions(actor_id, type_code),  # r13 ROLE-R08
         }
+
+
+# ---------------------------------------------------------------- F13 생산일지 연동 데이터 (P15)
+
+
+def production_log_source(batch_id):
+    """F13(p15-s2-spec 3.2·4.3): 수불 0009 뷰 3개를 읽기만 한다(비율·환산은 PLG가 계산). SQL 3.
+
+    배치가 없으면 404 BATCH_NOT_FOUND, 뷰가 없으면 SourceUnavailable(PLG가 연동 오류로 표시).
+    """
+    with step("REQ-PLS-01", "REQ", "배치·BOM 줄·투입(뷰 3개)"):
+        _check_id("batch_id", batch_id)
+        batch = sources.prod_log_batch(batch_id)
+        if batch is None:
+            raise errors.BatchNotFound()
+        return {
+            "batch": batch,
+            "materials": sources.batch_bom_lines(batch_id),
+            "usages": sources.batch_usages(batch_id),
+        }
+
+
+def production_batch_state(batch_id, with_lines=False):
+    """P15 S4b r1(B1)·r2(A2): 생산일지 쓰기 전 배치 상태(취소 여부)·품목·제조일.
+
+    with_lines면 BOM 줄도 같은 SQL로 읽어 `lines`에 담는다(SQL 1). BOM 줄 뷰(0009)를 못 읽으면
+    상태만 다시 읽고 `lines: None`(SQL 2). 상태는 배치 뷰 기본 컬럼이라 0009 없어도 읽힌다.
+    배치가 없으면 404, 배치 뷰도 못 읽으면 SourceUnavailable.
+    """
+    with step("REQ-PLS-02", "REQ", "배치 상태(배치 뷰 기본 컬럼)") as s:
+        _check_id("batch_id", batch_id)
+        lines = None
+        if with_lines:
+            try:
+                state, lines = sources.batch_state_with_lines(batch_id)
+            except errors.SourceUnavailable:
+                s.note("BOM 줄 뷰 없음 — 상태만 다시")
+                state = sources.batch_state(batch_id)
+        else:
+            state = sources.batch_state(batch_id)
+        if state is None:
+            raise errors.BatchNotFound()
+        if with_lines:
+            state = {**state, "lines": lines}
+        return state

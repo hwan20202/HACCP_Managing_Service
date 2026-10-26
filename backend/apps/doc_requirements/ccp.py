@@ -252,6 +252,29 @@ def ccp_dashboard(actor_id=None, base_date=None):
                 "output_qty": b["output_qty"] if b else None,
                 "unit": b["unit"] if b else None,
             }
+        with step("REQ-CCP-06", "REQ", "배치별 생산일지·공정 n/m(DOC N16·N14, P15)") as s:
+            keyed = {
+                rules.prod_log_key(b["batch_id"]): b
+                for b in batches.values()
+                if b["batch_id"] is not None
+            }
+            logs = doc.documents_by_record_keys(keyed)
+            counts = doc.section_counts([v["document_id"] for v in logs.values()], "steps")
+            for key, b in keyed.items():
+                log = logs.get(key)
+                b["production_log"] = (
+                    None
+                    if log is None
+                    else {
+                        "document_id": log["document_id"],
+                        "status": log["status"],
+                        "steps_total": counts[log["document_id"]]["total"],
+                        "steps_done": counts[log["document_id"]]["done"],
+                    }
+                )
+            for b in batches.values():
+                b.setdefault("production_log", None)
+            s.note(f"생산일지 {len(logs)}건")
         notes.sort(key=lambda x: (x["at"] is None, x["at"] or "", x["document_id"], x["row_no"]))
         from django.utils import timezone
 

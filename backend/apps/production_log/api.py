@@ -13,7 +13,7 @@ from apps.core.http import ApiError, error_response, json_response, parse_json_b
 from apps.core.trace import step
 from apps.staff.services import actor_from_header
 
-from . import services
+from . import logbook, services
 
 
 def _api(view):
@@ -177,3 +177,64 @@ def master_history(request):
     raw = request.GET.get("id") or ""
     target_id = int(raw) if raw.isascii() and raw.isdigit() else 0
     return json_response(services.history(request.GET.get("target", ""), target_id))
+
+
+# ---------------------------------------------------------------- A01~A05 생산일지 (S4b)
+
+
+@require_http_methods(["GET"])
+@_api
+def production_log_linked(request, document_id):
+    """A01 연동 조회(PLG-LNK) — 읽기, 헤더 없이."""
+    return json_response(logbook.linked_data(document_id))
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@_api
+def production_log_template_rows(request, document_id):
+    """A02 {template_id, mode} — 일지에는 쓰지 않음(화면이 넣고 [저장]), 템플릿 사용 기록만."""
+    with step("PLG-TPL-00", "API", "요청 형식 확인"):
+        body = parse_json_body(request)
+        template_id = body.get("template_id")
+        if isinstance(template_id, bool) or not isinstance(template_id, int):
+            raise ApiError(
+                "template_id(정수)가 필요합니다.",
+                [{"path": "template_id", "code": "required", "message": "필수입니다."}],
+            )
+    actor = _actor(request, "PLG-TPL-00b")
+    return json_response(
+        _write(logbook.template_rows, actor, document_id, template_id, body.get("mode"))
+    )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@_api
+def production_log_save_template(request, document_id):
+    """A03 {name, steps, overwrite, expected_version, confirm_similar}."""
+    with step("PLG-TSV-00", "API", "요청 형식 확인"):
+        body = parse_json_body(request)
+    actor = _actor(request, "PLG-TSV-00b")
+    return json_response(
+        _write(logbook.save_template_from_rows, actor, document_id, body), status=201
+    )
+
+
+@require_http_methods(["GET"])
+@_api
+def production_log_ccp_values(request, document_id):
+    """A04 ?kind=CCP-2B — 읽기."""
+    return json_response(logbook.ccp_values(document_id, request.GET.get("kind")))
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@_api
+def production_log_register_process(request, document_id):
+    """A05 {name, mode, confirm_similar}."""
+    with step("PLG-REG-00", "API", "요청 형식 확인"):
+        body = parse_json_body(request)
+    actor = _actor(request, "PLG-REG-00b")
+    out = _write(logbook.register_from_document, actor, document_id, body)
+    return json_response(out, status=200 if out["linked_existing"] else 201)
