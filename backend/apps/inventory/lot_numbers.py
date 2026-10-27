@@ -1,6 +1,6 @@
 """LOT number generation from lot_number_rules + lot_number_sequences.
 
-Default rules (see docs/inventory-decisions.md)
+Default rules (see docs/reference/inventory-decisions.md)
     INCOMING (원료·포장재)   {short_code}{date:yyMMdd}{seq:-N}   AHN261005, AHN261005-2
                             원료의 날짜는 소비기한 있음이면 소비기한, 없음이면 입고일 (0007,
                             expiration.incoming_number_date). 포장재는 입고일

@@ -83,7 +83,9 @@ def main():
             destination, encoding="utf-8", xml_declaration=True
         )
         print(f"Generated {destination}")
-    print("No services were installed. Follow docs/deployment.md to install using WinSW.")
+    print(
+        "No services were installed. Follow docs/handover/installation.md to install using WinSW."
+    )
 
 
 if __name__ == "__main__":
