@@ -149,7 +149,9 @@ def caddy(args):
 
     executable = args.binary or shutil.which("caddy")
     if not executable:
-        raise SystemExit("Install Caddy, or pass --binary /path/to/caddy. See docs/deployment.md.")
+        raise SystemExit(
+            "Install Caddy, or pass --binary /path/to/caddy. See docs/handover/installation.md."
+        )
     env = os.environ.copy()
     env.update(
         HACCP_STATIC_DIR=settings.STATIC_ROOT.as_posix(),
@@ -175,7 +177,8 @@ def caddy(args):
 def backup(args):
     if not args.writes_stopped:
         raise SystemExit(
-            "Stop application writes, then pass --writes-stopped. See docs/deployment.md."
+            "Stop application writes, then pass --writes-stopped. "
+            "See docs/handover/installation.md."
         )
     django_setup(args.production, args.qa)
     import zipfile

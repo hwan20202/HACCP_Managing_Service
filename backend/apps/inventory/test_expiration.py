@@ -1,7 +1,7 @@
 """소비기한 유무 (0007) and the stock / ledger queries the 재고장·수불일지 screens use.
 
-Covers the checks listed in docs/inventory-erd-review-20261014.md that fall in the confirmed
-scope: 원료 채번 기준, NONE / UNKNOWN 구분, 같은 소비기한 반복 입고, 500 + 500 - 300 = 700 with
+Covers the confirmed checks in docs/history/planning/inventory-erd-review-20261014.md:
+원료 채번 기준, NONE / UNKNOWN 구분, 같은 소비기한 반복 입고, 500 + 500 - 300 = 700 with
 three ledger lines, 0 재고 기본 제외 with the history kept, LOT 번호·제조일 검색.
 """
 

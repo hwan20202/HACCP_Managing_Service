@@ -1,7 +1,7 @@
 # Windows 11 운영
 
 운영 구성은 Caddy → Waitress → Django → SQLite입니다.
-설치 순서와 HTTPS·서비스·백업 절차는 [배포 안내](../../docs/deployment.md)를 따릅니다.
+설치 순서와 HTTPS·서비스·백업 절차는 [배포 안내](../../docs/handover/installation.md)를 따릅니다.
 
 - `scripts/windows_services.py`: 대상 Windows에서 절대 경로가 반영된 WinSW XML 생성
 - `tools/services/haccp-app.xml`: Waitress 서비스 (생성 파일, Git 제외)

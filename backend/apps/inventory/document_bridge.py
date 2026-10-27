@@ -1,8 +1,8 @@
 """Calls from inventory into the document app (agreed: direct service calls, ids only).
 
-Contract: docs/document-inventory-interface.md (document side) and
-docs/inventory-document-interface.md (inventory side). The document app reads the data itself,
-so these hooks pass identifiers, not payloads:
+Contract: docs/reference/document-inventory-interface.md (document side) and
+docs/reference/inventory-document-interface.md (inventory side).
+The document app reads the data itself, so these hooks pass identifiers, not payloads:
     incoming LOT     -> v_doc_incoming_lot by lot_id
     production batch -> v_doc_batch by production_batch_id
     stock ledger     -> apps.inventory.ledger.stock_ledger(...) by item + period

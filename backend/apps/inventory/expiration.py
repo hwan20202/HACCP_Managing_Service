@@ -1,6 +1,6 @@
 """소비기한 유무 (lots.expiration_status, 0007) and the date an incoming LOT is numbered by.
 
-Confirmed (docs/inventory-erd-review-20261014.md):
+Confirmed (docs/history/planning/inventory-erd-review-20261014.md):
     원료 LOT 채번   소비기한 있음(KNOWN) -> LOT 약어 + 소비기한
                     소비기한 없음(NONE)  -> LOT 약어 + 입고일
     A missing date is not "없음": a raw material receipt must say KNOWN or NONE.

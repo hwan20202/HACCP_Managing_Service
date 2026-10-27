@@ -1,6 +1,6 @@
 // =============================================
 // 제조배치 (생산) — /api/v1/inventory/batches/ 연결 화면
-// (docs/inventory-frontend.md: 시제품 틀·디자인은 그대로, 데이터는 생산 API 로)
+// (docs/history/planning/inventory-frontend.md: 시제품 틀·디자인은 그대로, 데이터는 생산 API 로)
 //
 // 흐름: 반제품 제조배치 생성 → 시작(CCP 일지 생성) → 원료 LOT 선택·투입 → 산출 등록 → 완료
 //       → 재고·수불 확인. 모든 기록은 생산 API 로만 (SQL 직접 입력 없음)
