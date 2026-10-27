@@ -459,3 +459,26 @@ class SeedPrintTests(TestCase):
         self.assertEqual([r["week_no"] for r in data["remarks"]], [1, 2])
         self.assertEqual([b["staff_id"] for b in data["boxes"]], [3, 5])  # 3주 승인이 가장 최근
         self.assertFalse(seed_print_monthly("2026-10-15")["created"])
+
+
+class SeedProdLogTests(TestCase):
+    """P15 S5a: 개발 생산일지 시드 — 수불 공개 서비스로 배치·투입·산출, 생산 시작 때 생산일지."""
+
+    def test_scenarios(self):
+        from apps.devtools import prodlog_dev
+        from apps.production_log import logbook
+        from apps.staff import services as staff_services
+
+        staff_services.ensure_dev_staff(range(1, 6))
+        used = prodlog_dev.make("used", 1)
+        self.assertEqual(
+            [d["type_code"] for d in used["documents"]], ["PROD-LOG", "CCP-1P", "CCP-2B", "CCP-3P"]
+        )
+        linked = logbook.linked_data(used["prod_log_id"])["linked"]
+        first = linked["materials"][0]
+        self.assertEqual((first["used_e6"], first["origin"]), (9_000000, "뉴질랜드 → 러시아(대체)"))
+        self.assertEqual(linked["batch"]["output"], "98 kg")
+        cancelled = prodlog_dev.make("cancelled", 1)
+        self.assertEqual(
+            logbook.linked_data(cancelled["prod_log_id"])["linked"]["batch"]["status"], "CANCELLED"
+        )
