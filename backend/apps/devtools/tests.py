@@ -546,6 +546,41 @@ class ProdLogFixtureTests(TestCase):
         self.assertEqual(self.client.get("/api/dev/prodlog/link-fail").json(), {"on": False})
         self.assertIsNotNone(linked_of(log)["linked"])
 
+    def test_ccp_draft_blocks_completion(self):
+        """S6 r3(D-253 R25): fill은 CCP 일지를 작성완료·값 가져옴 → ccp_draft면 막힘."""
+        ok = self.post(
+            "/api/dev/fixtures/prodlog",
+            {"scenario": "used", "template": "효력환", "fill": True, "complete": True},
+        )
+        self.assertEqual(ok.status_code, 201, ok.content)
+        made = self.post(
+            "/api/dev/fixtures/prodlog",
+            {"scenario": "used", "template": "효력환", "fill": True, "ccp_draft": "CCP-2B"},
+        ).json()
+        r = self.client.post(
+            f"/api/v1/documents/{made['prod_log_id']}/complete",
+            json.dumps({"expected_version": made["version"]}),
+            content_type="application/json",
+            HTTP_X_STAFF_ID="1",
+        )
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertEqual([d["code"] for d in r.json()["details"]], ["ccp_not_completed"])
+
+    def test_excel_scenario_matches_sheet(self):
+        """S6 r3(D-253 R6): 엑셀 효력환261006 — 원료 18줄·비율·지시량 40 kg·모두 투입."""
+        from apps.devtools import prodlog_dev
+
+        r = self.post("/api/dev/fixtures/prodlog", {"scenario": "excel"})
+        self.assertEqual(r.status_code, 201, r.content)
+        linked = self.client.get(f"/api/v1/production-logs/{r.json()['prod_log_id']}/linked").json()
+        mats = linked["linked"]["materials"]
+        self.assertEqual(linked["linked"]["batch"]["planned"], "40 kg")
+        self.assertEqual(len(mats), 18)
+        self.assertEqual(sum(m["ratio_e6"] for m in mats), 1_000_000)
+        for m, (_, ratio) in zip(mats, prodlog_dev.EXCEL_LINES, strict=True):
+            self.assertEqual(m["ratio_e6"], int(float(ratio) * 1_000_000))
+            self.assertEqual(m["used_e6"], m["standard_e6"])
+
     def test_nobom_drop_ccp_and_master_snapshot(self):
         r = self.post("/api/dev/fixtures/prodlog", {"scenario": "nobom", "drop_ccp": "CCP-2B"})
         self.assertEqual(r.status_code, 201, r.content)
@@ -563,7 +598,7 @@ class ProdLogFixtureTests(TestCase):
         )
         flows = self.client.get("/api/dev/flows").json()
         self.assertIn("PLG-SAV", flows["flows"])
-        self.assertEqual(flows["optional"]["PLG-LNK"], ["PLG-LNK-02", "DOC-BRF-01"])
+        self.assertEqual(flows["optional"]["PLG-LNK"], ["PLG-LNK-02"])
         # 다른 단위 흐름엔 없음
         self.assertTrue(all(k.startswith("PLG-") for k in flows["optional"]))
         self.assertNotIn("DOC-BRF", flows["optional"])

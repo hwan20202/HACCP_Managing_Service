@@ -4329,3 +4329,43 @@ def documents_by_batch_ref(production_batch_id, type_codes):
         for code, document_id in rows:
             out.setdefault(code, document_id)
         return out
+
+
+def documents_by_batch_ref_with_sections(production_batch_id, section_by_type):
+    """N20(P15 S6 r3, D-253): N19 + 상태·버전·고른 섹션 행을 SQL 1개로.
+
+    section_by_type = {type_code: section_def}. 반환 {type_code: {document_id, status, version,
+    rows: [values…](row_no 순)}} — 같은 양식이 여럿이면 document_id가 가장 작은 것(N19와 같음).
+    빈 입력이면 SQL 0.
+    """
+    pairs = {c: d for c, d in section_by_type.items() if isinstance(c, str) and c and d}
+    if not pairs:
+        return {}
+    codes = sorted(pairs)
+    defs = sorted(set(pairs.values()))
+    with step("DOC-BRF-02", "DOC", "배치 참조로 문서·상태·섹션(N20)"):
+        with connection_cursor() as cursor:
+            cursor.execute(
+                "SELECT d.document_id, t.type_code, d.status, d.version, s.section_def,"
+                " s.row_no, s.values_json FROM document d"
+                " JOIN document_template t ON t.template_id = d.template_id"
+                " LEFT JOIN doc_section s ON s.document_id = d.document_id"
+                f" AND s.section_def IN ({', '.join(['%s'] * len(defs))})"
+                f" WHERE d.deleted_at IS NULL AND t.type_code IN ({', '.join(['%s'] * len(codes))})"
+                " AND EXISTS (SELECT 1 FROM document_ref r WHERE r.document_id = d.document_id"
+                " AND r.production_batch_id = %s)"
+                " ORDER BY d.document_id, s.row_no",
+                [*defs, *codes, production_batch_id],
+            )
+            rows = cursor.fetchall()
+        out = {}
+        for document_id, code, status, version, section_def, _, values in rows:
+            found = out.setdefault(
+                code, {"document_id": document_id, "status": status, "version": version, "rows": []}
+            )
+            if found["document_id"] != document_id or section_def != pairs[code]:
+                continue
+            if isinstance(values, str):
+                values = json.loads(values)
+            found["rows"].append(values or {})
+        return out

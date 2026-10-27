@@ -64,7 +64,7 @@ CONSOLE = {
         "PLG-LNK-04",
         "PLG-LNK-05",
         "DOC-LSV-01",
-        "DOC-BRF-01",
+        "DOC-BRF-02",
     ],
     "PLG-TPL": [
         "PLG-TPL-00",
@@ -109,9 +109,7 @@ CONSOLE = {
         "PLG-CCP-01",
         "DOC-SEC-01",
         "PLG-CCP-02",
-        "DOC-BRF-01",
-        "DOC-SEC-01",
-        "PLG-CCP-03",
+        "DOC-BRF-02",
         "PLG-CCP-04",
     ],
     # 생산일지 저장 = DOC-UPD + 확장 검사(N12)
@@ -144,7 +142,7 @@ CONSOLE = {
         "PLG-CMP-03",
         "PLG-CMP-03b",
         "PLG-CMP-03c",
-        "DOC-BRF-01",
+        "DOC-BRF-02",
         "DOC-EXT-03",
         "DOC-SEC-01",
         "PLG-CMP-04",
@@ -168,8 +166,13 @@ CONSOLE = {
     ],
 }
 # 조건부 단계 — 흐름별(S5b r1 B3: 다른 단위 흐름의 필수 단계를 숨기지 않게).
-# CCP 행이 없으면 CCP 일지 찾기(DOC-BRF-01) 없음, 작성완료 전이면 고정 섹션(PLG-LNK-02) 없음
+# CCP 행이 없으면 CCP 일지 찾기(DOC-BRF-01·02 — S6 r3 N20) 없음, 작성완료 전이면 고정 섹션
+# (PLG-LNK-02) 없음. 연동 조회(PLG-LNK)는 CCP 일지 상태를 늘 읽는다(DOC-BRF-02 필수).
 OPTIONAL = {
-    **{k: ["DOC-BRF-01"] for k, v in CONSOLE.items() if "DOC-BRF-01" in v},
-    "PLG-LNK": ["PLG-LNK-02", "DOC-BRF-01"],
+    **{
+        k: [s for s in ("DOC-BRF-01", "DOC-BRF-02") if s in v]
+        for k, v in CONSOLE.items()
+        if k != "PLG-LNK" and ("DOC-BRF-01" in v or "DOC-BRF-02" in v)
+    },
+    "PLG-LNK": ["PLG-LNK-02"],
 }

@@ -1769,7 +1769,7 @@
     if (!d) throw new Error(`생산일지 #${id}를 읽지 못했습니다.`);
     return d;
   }
-  async function templateIdOf(name) {
+  async function processTemplateIdOf(name) {
     const list = await quietGet('process-templates');
     const t = list && list.items.find((x) => x.name === name);
     if (!t) throw new Error(`템플릿 '${name}'이 없습니다(개발 시드 seed_dev_prodlog).`);
@@ -1797,7 +1797,7 @@
         const m = await plgFixture({ scenario: 'used' });
         return { func: 'plgLinked', staff: '1', id: String(m.prod_log_id) };
       } }),
-    plg({ id: 'PLG-PS-04', label: '재고 관리 안 하는 원료(정제수) 직접 입력', expect: '1번째 200 · PLG-SAV 도식 일치(PLG-SAV-05가 BOM 줄로 ③④ 검사) · ④ doc_section materials +1(bom_line_id 정제수 줄, used 88.5) → 2번째 400 VALIDATION_ERROR details code stock_managed(재고 관리 원료 녹용에 used) · ④ 변화 없음',
+    plg({ id: 'PLG-PS-04', label: '재고 관리 안 하는 원료(정제수) 직접 입력', expect: '1번째 200 → 2번째 400 · 1번째: PLG-SAV 도식 일치(PLG-SAV-05가 BOM 줄로 ③④ 검사) · ④ doc_section materials +1(bom_line_id 정제수 줄, used 88.5) · 2번째: VALIDATION_ERROR details code stock_managed(재고 관리 원료 녹용에 used) · ④ 변화 없음',
       prepare: async () => {
         const m = await plgFixture({ scenario: 'used' });
         const linked = await quietGet(`production-logs/${m.prod_log_id}/linked`);
@@ -1840,10 +1840,10 @@
         const d = await plgDoc(m.prod_log_id);
         return { func: 'plgSave', staff: '1', id: String(m.prod_log_id), body: J({ expected_version: d.version, sections: { update: [{ section_id: infoOf(d).section_id, values: { pre_label: '적합' } }] } }) };
       } }),
-    plg({ id: 'PLG-PS-09', label: 'CCP-2B 일지 없음(일지를 지워 만듦 — 품목 예외 아님) — 건조 CCP 빠짐', expect: '1번째 200 · PLG-TPL 도식 일치 · skipped_ccp ["CCP-2B"](템플릿 7단계 중 6행) · 템플릿 used_count +1 → 2번째 400 VALIDATION_ERROR details code ccp_doc_missing(CCP-2B 행 넣기) · ④ 일지 변화 없음',
+    plg({ id: 'PLG-PS-09', label: 'CCP-2B 일지 없음(일지를 지워 만듦 — 품목 예외 아님) — 건조 CCP 빠짐', expect: '1번째 200 → 2번째 400 · 1번째: PLG-TPL 도식 일치 · skipped_ccp ["CCP-2B"](템플릿 7단계 중 6행) · 템플릿 used_count +1 · 2번째: VALIDATION_ERROR details code ccp_doc_missing(CCP-2B 행 넣기) · ④ 일지 변화 없음',
       prepare: async () => {
         const m = await plgFixture({ scenario: 'used', drop_ccp: 'CCP-2B' });
-        const tid = await templateIdOf('효력환');
+        const tid = await processTemplateIdOf('효력환');
         const dry = await builtinOf('CCP-2B');
         const rows = { func: 'plgTemplateRows', staff: '1', id: String(m.prod_log_id), body: J({ template_id: tid, mode: 'replace' }) };
         return { ...rows, script: async (exec) => {
@@ -1859,6 +1859,12 @@
           await exec(list);
           await exec({ func: 'templatesList', staff: '1', query: 'status=all' });
         } };
+      } }),
+    // S6 r3(D-253 R25): CCP 공정 값은 CCP 일지가 작성완료 이후이고 같아야 작성완료
+    plg({ id: 'PLG-PS-11', label: 'CCP 일지 작성중 — 생산일지 작성완료 막힘(R25)', expect: '400 COMPLETION_INCOMPLETE · PLG-CMP 도식에서 PLG-CMP-03c 뒤 실패(롤백) · details code ccp_not_completed(sections[steps#n].kind, "CCP-2B 일지를 먼저 작성완료하세요(지금 작성중 …)") 1건 · ④ 상태 draft 그대로',
+      prepare: async () => {
+        const m = await plgFixture({ scenario: 'used', template: '효력환', fill: true, ccp_draft: 'CCP-2B' });
+        return { func: 'plgComplete', staff: '1', id: String(m.prod_log_id), body: J({ expected_version: m.version }) };
       } }),
   );
 

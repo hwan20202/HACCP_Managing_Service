@@ -6,10 +6,12 @@
 POST /api/dev/fixtures/prodlog {
   scenario: started|used|partial|cancelled|nobom   (prodlog_dev.make — 새 배치·생산일지),
   template: "효력환"        (그 템플릿 행을 불러와 저장 — A02 + DOC PATCH, 선택),
-  fill: true                (작업 전 점검·점검자 + 공정마다 필수 칸, 선택),
+  fill: true                (작업 전 점검·점검자 + 공정마다 필수 칸, 선택 —
+                             CCP 일지는 측정·작성완료 뒤 그 값을 가져옴, S6 r3 R25),
   complete: true            (작성완료, 선택 — fill 필요),
   output_after_kg: 40       (작성완료 뒤 수불 산출 등록 — "연동 값이 바뀌었습니다", 선택),
   drop_ccp: "CCP-2B"        (그 배치의 그 CCP 일지를 논리 삭제 — 품목 예외 흉내, 선택)
+  ccp_draft: "CCP-2B"       (fill 뒤 그 CCP 일지 작성 재개 — 작성완료가 막힘, R25, 선택)
 } → 201 {scenario, batch_id, batch_number, prod_log_id, documents, version}
 
 GET·POST /api/dev/prodlog/link-fail {on: bool, batch_id} → {on, batch_id, seconds_left}
@@ -44,11 +46,8 @@ from apps.production_log.models import (
 from . import prodlog_dev
 from .fixtures import ACTOR, _bad
 
-KEYS = {"scenario", "template", "fill", "complete", "output_after_kg", "drop_ccp"}
+KEYS = {"scenario", "template", "fill", "complete", "output_after_kg", "drop_ccp", "ccp_draft"}
 RESULT = {
-    "CCP-1P": {"verdict": "적합"},
-    "CCP-3P": {"verdict": "적합"},
-    "CCP-2B": {"temp": 70.1, "time_min": 118},
     "INNER": {"qty": 12000, "qty_unit": "환"},
     "OUTER": {"material": "PP", "expiry": "2028-10-26", "fg_qty": 100, "fg_unit": "box"},
 }
@@ -108,6 +107,9 @@ def prodlog_fixture(request):
                 rows = logbook.template_rows(ACTOR, log, found.pk, "replace")
             _patch(log, {"add": [{"section_def": "steps", "values": v} for v in rows["rows"]]})
         if body.get("fill"):
+            # S6 r3(D-253 R25): CCP 공정 값은 CCP 일지에서 — 측정 넣고 작성완료한 뒤 그 값을 가져옴
+            prodlog_dev.complete_ccp_docs(ACTOR, made["batch_id"])
+            ccp = logbook._ccp_state(made["batch_id"])
             d = doc.get_document(log)
             info = next(s for s in d["sections"] if s["section_def"] == "info")
             steps = [s for s in d["sections"] if s["section_def"] == "steps"]
@@ -124,16 +126,26 @@ def prodlog_fixture(request):
             ]
             for s in steps:
                 v = s["values"]
-                extra = (
-                    GEN.get(v.get("mode"), {})
-                    if v.get("kind") == "GEN"
-                    else RESULT.get(v.get("kind"), {})
-                )
+                kind = v.get("kind")
+                if kind == "GEN":
+                    extra = GEN.get(v.get("mode"), {})
+                elif kind in ccp:
+                    extra = dict(ccp[kind]["values"])
+                else:
+                    extra = RESULT.get(kind, {})
                 extra = {**extra, "worker": ACTOR}
                 if v.get("dur_on") and v.get("dur_value") is None:
                     extra.update(dur_value=1, dur_unit="시간")
                 updates.append({"section_id": s["section_id"], "values": extra})
             _patch(log, {"update": updates})
+        if body.get("ccp_draft"):
+            target = next(
+                (d for d in made["documents"] if d["type_code"] == body["ccp_draft"]), None
+            )
+            if target is None or not body.get("fill"):
+                raise _bad("ccp_draft는 fill과 함께, 이 배치에 있는 CCP 일지로 씁니다.")
+            with transaction.atomic():
+                doc.reopen_document(ACTOR, target["document_id"], _version(target["document_id"]))
         if body.get("complete"):
             with transaction.atomic():
                 doc.complete_document(ACTOR, log, _version(log))

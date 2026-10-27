@@ -67,6 +67,7 @@
     return touched ? 'doing' : 'idle';
   }
   const STATE_LABEL = { ok: '완료', doing: '입력 중', idle: '미입력' };
+  const CCP_STATUS = { draft: '작성중', rejected: '반려', correcting: '정정 중', skipped: '작성 안 함', completed: '작성완료', submitted: '결재 중', approved: '승인' };
 
   function modal({ title, body, wide = false }) {
     const wrap = document.createElement('div');
@@ -92,6 +93,7 @@
       this.d = d;
       this.schema = schema;
       this.linked = linked.ok ? linked.data : null;
+      this.ccpPulled = {};
       this.linkedError = linked.ok ? null : T.errorText(linked);
       this.procs = procs.ok ? procs.data.items : [];
       this.load();
@@ -149,6 +151,7 @@
       const notes = [];
       if (this.cancelled) notes.push('<div class="te-pl-cancel" id="plCancelled">취소된 배치입니다 — 읽기 전용</div>');
       if (this.completed && this.linked && this.linked.changed) notes.push('<div class="te-pl-warn" id="plChanged">연동 값이 바뀌었습니다 — 반영하려면 [작성 재개]</div>');
+      if (this.completed && this.linked && this.linked.ccp_changed) notes.push('<div class="te-pl-warn" id="plCcpChanged">CCP 일지가 바뀌었습니다(작성완료 뒤 정정·재개 또는 값 변경) — [작성 재개] 뒤 [CCP 일지 값 가져오기]</div>');
       if (this.completed) notes.push(`<div class="te-status-note" id="teStatusNote">작성완료된 생산일지입니다. 연동 값(기본정보·원료칭량)은 작성완료 시점 값으로 고정해 보여 줍니다. 고치려면 [작성 재개].</div>`);
       if (api.staffId && !this.mayWrite && !this.cancelled) notes.push(`<div class="te-perm-note" id="teWriteWhy">${esc(T.WRITE_WHY)} ${T.roleLink()}</div>`);
       const target = (d.refs || []).find((r) => r.section_id === null && r.production_batch_id !== null);
@@ -370,18 +373,19 @@
         const opts = QTY_UNITS.includes(v[key]) || blank(v[key]) ? QTY_UNITS : [v[key], ...QTY_UNITS];
         return `<select class="form-control te-pl-unit${er(key)}" data-step="${i}" data-key="${key}" aria-label="단위"${dis}><option value="">-</option>${opts.map((u) => `<option${v[key] === u ? ' selected' : ''}>${esc(u)}</option>`).join('')}</select>`;
       };
-      const tt = () => {
+      const tt = (d = dis) => {
         const h = blank(v.time_min) ? '' : Math.floor(v.time_min / 60);
         const m = blank(v.time_min) ? '' : v.time_min % 60;
-        return `<div class="te-pl-grid"><div class="form-group"><label class="form-label">온도 *</label><div class="te-pl-inline"><input type="number" step="0.1" class="form-control${er('temp')}" data-step="${i}" data-key="temp" value="${esc(blank(v.temp) ? '' : v.temp)}" aria-label="온도"${dis}><span>℃</span></div></div>
-          <div class="form-group"><label class="form-label">시간 *</label><div class="te-pl-inline"><input type="number" min="0" class="form-control${er('time_min')}" data-step="${i}" data-key="time_h" value="${esc(h)}" aria-label="시간"${dis}><span>시간</span><input type="number" min="0" max="59" class="form-control${er('time_min')}" data-step="${i}" data-key="time_m" value="${esc(m)}" aria-label="분"${dis}><span>분</span></div></div>
+        return `<div class="te-pl-grid"><div class="form-group"><label class="form-label">온도 *</label><div class="te-pl-inline"><input type="number" step="0.1" class="form-control${er('temp')}" data-step="${i}" data-key="temp" value="${esc(blank(v.temp) ? '' : v.temp)}" aria-label="온도"${d}><span>℃</span></div></div>
+          <div class="form-group"><label class="form-label">시간 *</label><div class="te-pl-inline"><input type="number" min="0" class="form-control${er('time_min')}" data-step="${i}" data-key="time_h" value="${esc(h)}" aria-label="시간"${d}><span>시간</span><input type="number" min="0" max="59" class="form-control${er('time_min')}" data-step="${i}" data-key="time_m" value="${esc(m)}" aria-label="분"${d}><span>분</span></div></div>
           <div class="form-group"><span class="form-label">판정</span><span class="te-hint">기준·판정 없음(값만 기록)</span></div></div>`;
       };
       if (K.ccp) {
+        // S6 r3(D-253 R3 a): CCP 값은 CCP 일지에서만 — 칸은 읽기 전용, [CCP 일지 값 가져오기]로 채움
         const docId = this.ccpDocs[v.kind];
-        const input = v.kind === 'CCP-2B' ? tt() : `<div class="form-group"><span class="form-label">결과 *</span>${this.seg(`step:${i}:verdict`, v.verdict, ro, er('verdict'))}</div>`;
-        return `${input}<div class="te-pl-inline te-pl-ccp-tools">${docId && !ro ? `<button class="btn btn-secondary btn-sm" data-pull="${i}">CCP 일지 값 가져오기</button>` : ''}${docId ? `<button class="btn btn-secondary btn-sm" data-open-ccp="${docId}">일지 열기 ↗</button>` : `<span class="te-pl-miss">이 배치의 ${K.doc}가 없습니다</span>`}
-          <span class="te-hint">출력에는 여기 입력한 값이 들어갑니다. CCP 일지와 같은지는 검사하지 않습니다.</span></div>`;
+        const input = v.kind === 'CCP-2B' ? tt(' disabled') : `<div class="form-group"><span class="form-label">결과 *</span>${this.seg(`step:${i}:verdict`, v.verdict, true, er('verdict'))}</div>`;
+        return `${input}${this.ccpChip(v)}<div class="te-pl-inline te-pl-ccp-tools">${docId && !ro ? `<button class="btn btn-secondary btn-sm" data-pull="${i}">CCP 일지 값 가져오기</button>` : ''}${docId ? `<button class="btn btn-secondary btn-sm" data-open-ccp="${docId}">일지 열기 ↗</button>` : `<span class="te-pl-miss">이 배치의 ${K.doc}가 없습니다</span>`}
+          <span class="te-hint">값은 CCP 일지에서만 가져옵니다. 생산일지를 작성완료하려면 CCP 일지가 작성완료(결재 중·승인 포함)이고 값이 같아야 합니다.</span></div>`;
       }
       if (v.kind === 'INNER' || (v.kind === 'GEN' && v.mode === 'QTY')) {
         return `<div class="te-pl-grid"><div class="form-group"><label class="form-label">${v.kind === 'INNER' ? '작업 수량' : '수량'} *</label><div class="te-pl-inline"><input type="number" min="0" class="form-control${er('qty')}" data-step="${i}" data-key="qty" value="${esc(blank(v.qty) ? '' : v.qty)}" aria-label="수량"${dis}>${qtyUnit('qty_unit')}</div></div>
@@ -627,6 +631,20 @@
     },
 
     // S5b: 생산 기준정보로(저장 안 한 변경은 화면 이동 확인이 받음), [뒤로]는 사이드바·문서함으로
+    // R25(D-253): 그 CCP 일지 상태·값과 이 행 — 가져온 직후는 A04 응답, 아니면 A01 ccp_check
+    ccpChip(v) {
+      const st = (this.ccpPulled && this.ccpPulled[v.kind]) || (this.linked && this.linked.ccp_check && this.linked.ccp_check[v.kind]);
+      if (!st || st.status === null || st.status === undefined) return '';
+      const docId = this.ccpDocs[v.kind];
+      if (!st.ready) return `<div class="te-pl-warn" data-ccp-state="not_completed">${esc(v.kind)} 일지 #${docId}가 아직 ${esc(CCP_STATUS[st.status] || st.status)}입니다 — CCP 일지를 작성완료해야 생산일지를 작성완료할 수 있습니다</div>`;
+      const keys = v.kind === 'CCP-2B' ? ['temp', 'time_min'] : ['verdict'];
+      const vals = st.values || {};
+      if (keys.some((k) => blank(vals[k]))) return `<div class="te-pl-warn" data-ccp-state="no_value">${esc(v.kind)} 일지에 측정 값이 없습니다</div>`;
+      const same = keys.every((k) => (typeof vals[k] === 'number' ? Number(v[k]) === vals[k] : v[k] === vals[k]));
+      return same ? '<div class="te-hint" data-ccp-state="same">✓ CCP 일지와 같음</div>'
+        : `<div class="te-pl-warn" data-ccp-state="mismatch">CCP 일지 값과 다릅니다 — [CCP 일지 값 가져오기]</div>`;
+    },
+
     manage(tab) {
       this.menu = false;
       T.open('prod-master', { tab });
@@ -645,9 +663,10 @@
         v.verdict = r.data.verdict;
       }
       v.ccp_pulled_at = nowText();
+      this.ccpPulled = { ...(this.ccpPulled || {}), [v.kind]: { status: r.data.source_status, ready: r.data.source_ready, values: v.kind === 'CCP-2B' ? { temp: r.data.temp, time_min: r.data.time_min } : { verdict: r.data.verdict } } };
       this.markDirty();
       this.render();
-      T.toast(`CCP 일지 #${r.data.source_document_id} 값을 가져왔습니다. [저장]을 눌러 반영하세요.`);
+      T.toast(`CCP 일지 #${r.data.source_document_id} 값을 가져왔습니다. [저장]을 눌러 반영하세요.${r.data.source_ready ? '' : ' (CCP 일지가 아직 작성완료 전 — 작성완료해야 생산일지를 작성완료할 수 있습니다)'}`);
     },
 
     // ------------------------------------------------------------ 저장
@@ -726,6 +745,7 @@
       if (!d.ok) { T.toast(T.errorText(d), 'error'); return; }
       this.d = d.data;
       this.linked = linked.ok ? linked.data : null;
+      this.ccpPulled = {};
       this.load();
       this.render();
     },

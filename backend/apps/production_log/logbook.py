@@ -109,6 +109,76 @@ def _ccp_docs(batch_id, kinds=CCP_KINDS):
     return doc.documents_by_batch_ref(batch_id, kinds)
 
 
+# CCP 일지 상태·값(S6 r3, D-253 — R25): 작성완료 이후 상태여야 하고 값이 같아야 생산일지 작성완료
+CCP_READY = ("completed", "submitted", "approved")
+CCP_STATUS_LABEL = {
+    "draft": "작성중",
+    "rejected": "반려",
+    "correcting": "정정 중",
+    "skipped": "작성 안 함",
+}
+CCP_FIELDS = {"CCP-1P": ("verdict",), "CCP-3P": ("verdict",), "CCP-2B": ("temp", "time_min")}
+
+
+def _ccp_result(kind, rows):
+    """PLG-F07: 1P·3P 판정(모두 적합 → 적합, 하나라도 부적합 → 부적합), 2B 종료전 온도·총 시간."""
+    if kind == "CCP-2B":
+        end = next((v for v in rows if v.get("phase") == CCP_2B_LAST), {})
+        return {"temp": end.get("temp_c"), "time_min": end.get("dry_minutes")}
+    verdicts = [v.get("verdict") for v in rows if v.get("verdict")]
+    return {"verdict": None if not verdicts else ("부적합" if "부적합" in verdicts else "적합")}
+
+
+def _ccp_state(batch_id, kinds=CCP_KINDS):
+    """그 배치 CCP 일지 {kind: {document_id, status, version, ready, values}} — DOC N20, SQL 1."""
+    found = doc.documents_by_batch_ref_with_sections(batch_id, {k: CCP_SECTION[k] for k in kinds})
+    return {
+        kind: {
+            "document_id": f["document_id"],
+            "status": f["status"],
+            "version": f["version"],
+            "ready": f["status"] in CCP_READY,
+            "values": _ccp_result(kind, f["rows"]),
+        }
+        for kind, f in found.items()
+    }
+
+
+def _same(a, b):
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(a, bool):
+        return float(a) == float(b)
+    return a == b
+
+
+def ccp_problems(kind, values, state):
+    """R25: 한 CCP 공정 행 ↔ 그 CCP 일지. 반환 [(필드, code, 메시지)] — 없으면 맞음."""
+    if state is None:
+        return [("kind", "ccp_doc_missing", f"이 배치에 {kind} 일지가 없습니다.")]
+    if not state["ready"]:
+        label = CCP_STATUS_LABEL.get(state["status"], state["status"])
+        return [
+            (
+                "kind",
+                "ccp_not_completed",
+                f"{kind} 일지를 먼저 작성완료하세요(지금 {label}, 문서 #{state['document_id']}).",
+            )
+        ]
+    out = []
+    for key in CCP_FIELDS[kind]:
+        want = state["values"].get(key)
+        if want is None:
+            out.append((key, "ccp_no_value", f"{kind} 일지에 이 값이 없습니다."))
+        elif not _same((values or {}).get(key), want):
+            out.append(
+                (
+                    key,
+                    "ccp_mismatch",
+                    f"{kind} 일지 값({want})과 다릅니다 — [CCP 일지 값 가져오기]로 다시 채우세요.",
+                )
+            )
+    return out
+
+
 def _convert(quantity_e6, unit, to):
     """e6 정수 환산(kg↔g만). 못 바꾸면 None."""
     if quantity_e6 is None:
@@ -257,7 +327,7 @@ def linked_data(document_id):
     """PLG-A01: 연동 값(작성완료면 고정 값) + 바뀜 + 같은 품목 최근 템플릿 + CCP 일지 번호."""
     with step("PLG-LNK-01", "PLG", "문서·배치"):
         document, batch_id = _prod_log(
-            document_id, ("materials", "frozen_batch", "frozen_materials")
+            document_id, ("materials", "frozen_batch", "frozen_materials", "steps")
         )
         completed = document["status"] == "completed"
     frozen = None
@@ -292,7 +362,22 @@ def linked_data(document_id):
         else:
             item_id = next((r["item_id"] for r in refs if r["item_id"] is not None), None)
         last = last_template_for_item(item_id)
-        ccp = _ccp_docs(batch_id)
+        states = _ccp_state(batch_id)
+        ccp = {k: v["document_id"] for k, v in states.items()}
+    # R25(D-253): CCP 공정 행마다 CCP 일지 상태·값 — 작성완료 뒤 바뀌면 ccp_changed
+    ccp_check = {}
+    for r in _rows(document, "steps"):
+        v = r["values"] or {}
+        kind = v.get("kind")
+        if kind in CCP_KINDS:
+            st = states.get(kind)
+            ccp_check[kind] = {
+                "status": st["status"] if st else None,
+                "ready": bool(st and st["ready"]),
+                "values": st["values"] if st else None,
+                "problems": [c for _, c, _ in ccp_problems(kind, v, st)],
+            }
+    ccp_changed = completed and any(c["problems"] for c in ccp_check.values())
     return {
         "document_id": document_id,
         "batch_id": batch_id,
@@ -303,6 +388,8 @@ def linked_data(document_id):
         "error": None if source is not None else "SOURCE_UNAVAILABLE",
         "last_template": last,
         "ccp_documents": ccp,
+        "ccp_check": ccp_check,
+        "ccp_changed": ccp_changed,
     }
 
 
@@ -520,19 +607,14 @@ def completion_problems(document, rows):
     with step("PLG-CMP-03b", "PLG", "원료 행 R23 ③④ 다시"):
         materials = [(f"sections[materials#{n}]", v or {}) for k, n, v in rows if k == "materials"]
         problems += _material_problems(materials, lines)
-    with step("PLG-CMP-03c", "PLG", "CCP 행 → 그 배치 CCP 일지 다시(R04)") as s:
+    with step("PLG-CMP-03c", "PLG", "CCP 행 ↔ CCP 일지: 있음·작성완료·같은 값(R04·R25)") as s:
         wanted = sorted({v.get("kind") for _, v in steps} & set(CCP_KINDS))
         if wanted:
-            have = _ccp_docs(batch_id, wanted)
+            states = _ccp_state(batch_id, wanted)
             for n, v in steps:
-                if v.get("kind") in wanted and v["kind"] not in have:
-                    problems.append(
-                        _detail(
-                            f"sections[steps#{n}].kind",
-                            "ccp_doc_missing",
-                            f"이 배치에 {v['kind']} 일지가 없습니다.",
-                        )
-                    )
+                if v.get("kind") in wanted:
+                    for key, code, message in ccp_problems(v["kind"], v, states.get(v["kind"])):
+                        problems.append(_detail(f"sections[steps#{n}].{key}", code, message))
         else:
             s.skip("CCP 행 없음")
     return problems
@@ -794,34 +876,25 @@ def save_template_from_rows(actor_id, document_id, data):
 
 
 def ccp_values(document_id, kind):
-    """PLG-CCP-01~04: 1P·3P 판정(모두 적합 → 적합, 하나라도 부적합 → 부적합),
-    2B 종료전 온도·총 시간."""
+    """PLG-CCP-01·02·04: 1P·3P 판정(모두 적합 → 적합, 하나라도 부적합 → 부적합),
+    2B 종료전 온도·총 시간 + CCP 일지 상태(S6 r3 — 작성완료 전이면 생산일지 작성완료가 막힘)."""
     if kind not in CCP_KINDS:
         raise errors.ValidationFailed(details=[_detail("kind", "invalid", "CCP-1P·CCP-2B·CCP-3P")])
     with step("PLG-CCP-01", "PLG", "문서·배치"):
         _, batch_id = _prod_log(document_id)
-    with step("PLG-CCP-02", "PLG", "그 CCP 일지(배치 참조 N19)"):
-        found = _ccp_docs(batch_id, (kind,))
-        if kind not in found:
+    with step("PLG-CCP-02", "PLG", "그 CCP 일지·상태·측정 섹션(배치 참조 N20)"):
+        state = _ccp_state(batch_id, (kind,)).get(kind)
+        if state is None:
             raise CcpDocMissing()
-        ccp = doc.document_sections(found[kind], (CCP_SECTION[kind],))
-    with step("PLG-CCP-03", "PLG", "측정 섹션"):
-        rows = [r["values"] or {} for r in ccp["sections"][CCP_SECTION[kind]]]
     with step("PLG-CCP-04", "PLG", "규칙(F07)"):
-        out = {
+        return {
             "kind": kind,
-            "source_document_id": ccp["document_id"],
-            "source_version": ccp["version"],
+            "source_document_id": state["document_id"],
+            "source_version": state["version"],
+            "source_status": state["status"],
+            "source_ready": state["ready"],
+            **state["values"],
         }
-        if kind == "CCP-2B":
-            end = next((v for v in rows if v.get("phase") == CCP_2B_LAST), {})
-            out.update(temp=end.get("temp_c"), time_min=end.get("dry_minutes"))
-        else:
-            verdicts = [v.get("verdict") for v in rows if v.get("verdict")]
-            out["verdict"] = (
-                None if not verdicts else ("부적합" if "부적합" in verdicts else "적합")
-            )
-        return out
 
 
 # ---------------------------------------------------------------- PLG-F10 일지에서 공정 등록 (A05)
