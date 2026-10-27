@@ -4,17 +4,51 @@
 
 카페24 Ubuntu의 기존 테스트 서버를 이어받는 경우에는 [QA 서버 준비 기록](../history/deployment/cafe24-qa-deployment.md)과 [QA 업데이트 기록](../history/deployment/github-actions-qa-deployment.md)을 함께 참고합니다. 이 기록은 기존 QA 환경용이며, 새 운영 서버에 그대로 실행하는 범용 설치 절차가 아닙니다. Ubuntu 운영을 선택하면 담당자가 서비스·인증서·데이터 경로를 해당 환경에 맞게 구성하고 검증해야 합니다.
 
+## 인수와 설치의 구분
+
+GitHub fork는 바이오닷이 관리할 소스 사본을 만드는 단계입니다. 실제 접속할 사이트가 설치되거나 실행되는 단계는 아닙니다. 배포 방식·설치 장비·도메인·운영 시작일은 바이오닷이 이후 결정합니다. 아래 Windows 절차는 선택 가능한 설치 예시이며 확정된 배포 환경을 뜻하지 않습니다.
+
+### GitHub fork로 소스 받기
+
+1. 바이오닷이 관리할 GitHub 계정 또는 조직으로 로그인하고 [원본 저장소](https://github.com/hwan20202/HACCP_Managing_Service)에서 Fork를 만듭니다. 최종 변경이 반영된 `main`을 기준으로 받습니다. 저장소·조직의 권한에 따라 fork 가능 여부가 다를 수 있으므로, 허용되지 않으면 소유자와 인수 방식을 조율합니다.
+2. fork된 저장소의 `Code`에서 주소를 복사해 설치 장비로 clone합니다. 아래 `YOUR-ORG`는 실제 계정·조직명으로 바꿉니다. 경로도 장비에 맞게 정합니다.
+
+```powershell
+git clone https://github.com/YOUR-ORG/HACCP_Managing_Service.git C:\HACCP
+Set-Location C:\HACCP
+git switch main
+```
+
+3. 기준정보 초기 DB와 BOM 원본은 저장소와 별도로 전달받습니다. `data/` 대부분은 Git에서 제외되므로 fork·clone만으로 초기 DB가 들어오지 않습니다.
+4. 기존 QA 서버·DB·도메인·GitHub 배포 키와 설정은 새 설치 담당자가 인수 범위를 확인합니다. fork만으로 새 운영 배포가 준비됐다고 판단하지 않습니다. 기존 QA용 배포 workflow를 사용할지는 새 운영 환경에 맞춰 별도로 결정합니다.
+
+GitHub의 일반 fork·clone 방법은 [공식 fork 안내](https://docs.github.com/en/pull-requests/how-tos/work-with-forks/fork-a-repo)를 참고합니다.
+
+### 별도 전달하는 v8 기준정보 초기 DB
+
+`biodot-master-v8-20261027.zip`은 v8 원본과 DB·등록 자료·검증 목록을 묶은 초기 데이터 전달 파일입니다. GitHub에는 올리지 않고 사내 전달 경로로 별도 공유합니다. 압축을 풀면 `biodot-master-v8-20261027/db/app.sqlite3`에 DB가 있습니다.
+
+- 등록: 원료 175·반제품 85·포장재 13품목, 반제품 BOM 85개/322행, 대체 원료 연결 16건, 확인 가능한 공급처명 19개, 기본 문서 양식·시스템 공정
+- 미등록: 실제 직원·역할, 기초재고·LOT·입고·생산지시·투입·산출·문서 작성/결재·첨부·데모 거래, 현업별 공정 템플릿
+- 제외: 현재 범위 밖의 완제품 포장 후보와 완제품 BOM, 공급처명이 미확인인 행과 자사 입고처 표기
+- 환산: g는 kg으로 정확히 환산하고 금박은 `장`, 포장재는 `개`로 구분. BOM 기준량은 원본의 1kg을 유지. BOM 적용일 2026-10-27은 등록일이며 운영 시작일이 아님
+- 확인 필요: 원본에 소비기한이 없는 반제품 2품목, BOM에 단위 근거가 없는 원료 1품목, 원료별 소비기한 유무의 현장 확정. 상세 품목과 원본 위치는 전달 파일의 README·manifest·inputs 참고
+- 업무 규칙 차이: v8은 원료 LOT를 입고일 기준으로 설명하지만 현재 소스는 소비기한 유무에 따라 채번 날짜를 정합니다. 이번 초기 DB 준비에서는 소스 동작을 바꾸지 않았습니다. 실제 입고 전에 현업과 기준을 대조해 필요한 변경을 결정합니다.
+
+이 DB를 사용하면 품목·BOM을 처음부터 다시 입력할 필요는 없습니다. 바이오닷이 직원·역할·배포 환경을 설정하고 운영 시작일·재고 기준일을 정한 뒤 실제 기초재고와 업무 기록을 등록합니다.
+
 ## 설치 전에 정할 사항
 
 - Windows PC를 서버로 사용할지, 별도 서버를 사용할지와 실행·관리 담당자
 - 직원이 접속할 주소·네트워크 범위, 사용할 HTTPS 인증서
-- 새 업무를 시작할 빈 DB인지, 전달받은 기존 DB·첨부를 이어 쓸 것인지
-- 실제 직원·공급처·품목·배합표, 기초재고 기준일과 양식별 역할
+- 전달받을 기준정보 초기 DB의 배치 경로와 소스 호환성 확인·추가 마이그레이션 담당자. QA DB는 별도 보관
+- 초기 DB에 등록한 BOM·기준정보 목록, 별도로 준비할 실제 직원과 양식별 역할
+- 바이오닷이 정할 운영 시작일·기초재고 기준일과 해당 일자의 실제 재고
 - 전달받은 소스의 기준 버전, 자료·설정·백업 보관 위치
 
-기존 자료를 이어 쓸 때는 [운영·복구 안내](operations.md)를 먼저 확인합니다. 다음 최초 설치 예시는 새 환경용입니다. 기존 DB에 샘플 생성 명령을 실행하거나 개발 기록의 DB 삭제 지시를 적용하지 않습니다.
+개발팀이 제공받은 v8으로 QA DB와 별도의 기준정보 초기 DB를 준비했습니다. 설치 담당자는 전달 DB를 운영 데이터 경로에 배치한 뒤 소스 호환성을 확인하고 필요한 추가 마이그레이션만 적용합니다. 아래 빈 DB 생성·기준정보 등록 예시는 초기 DB를 직접 재구성할 때 사용합니다. 전달 DB에 같은 자료를 다시 등록하기 전에는 기존 등록 목록을 확인합니다. 실제 업무 자료의 보관·복구는 [운영 안내](operations.md)를 참고합니다.
 
-개발 명령은 README에 있습니다. 여기서는 **Caddy → Waitress → Django → SQLite** 구성을 다룹니다. 기본 설정은 모두 로컬 접속만 허용하며, 아래 운영 단계에서 실제 주소와 HTTPS를 설정합니다.
+개발 명령은 [프로젝트 README](../../README.md)에 있습니다. 여기서는 **Caddy → Waitress → Django → SQLite** 구성을 다룹니다. 기본 설정은 모두 로컬 접속만 허용하며, 아래 운영 단계에서 실제 주소와 HTTPS를 설정합니다.
 
 ## 1. 같은 PC에서 운영 구성 시험
 
@@ -82,8 +116,21 @@ Ubuntu 샌드박스에서도 동일한 Python 명령과 Caddyfile을 사용합�
 ```powershell
 py -3.14 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements/production.txt
+```
+
+4. **전달받은 초기 DB를 사용할 경우**, `init`을 실행하기 전에 DB를 배치합니다. 아래는 전달 ZIP을 `C:\HACCPDelivery`에 풀고 실제 데이터 경로로 `C:\HACCPData`를 사용하는 예시입니다. 기존 DB가 있으면 복사하지 않고 중단합니다. 해당 DB의 용도·백업을 먼저 확인하고 별도 데이터 경로를 사용합니다.
+
+```powershell
+$initialDb = 'C:\HACCPDelivery\biodot-master-v8-20261027\db\app.sqlite3'
+$targetDb = 'C:\HACCPData\db\app.sqlite3'
+if (-not (Test-Path -LiteralPath $initialDb)) { throw '전달받은 초기 DB 경로를 확인하세요.' }
+if (Test-Path -LiteralPath $targetDb) { throw '기존 DB가 있습니다. 용도와 백업을 먼저 확인하세요.' }
+New-Item -ItemType Directory -Path 'C:\HACCPData\db' -Force | Out-Null
+Copy-Item -LiteralPath $initialDb -Destination $targetDb
 .\.venv\Scripts\python.exe scripts/project.py --env-file .env.production --production init
 ```
+
+초기 DB 없이 빈 DB에서 시작하려면 복사 단계를 생략하고 `init`을 실행합니다. 이후 ‘최초 업무 설정’의 기준정보 등록이 필요합니다. `init`은 지정한 DB의 미적용 마이그레이션을 적용하며, 초기 DB의 BOM을 지우지 않습니다. 실제 데이터 경로가 예시와 다르면 복사 경로와 환경 설정의 `HACCP_DATA_DIR`을 먼저 일치시킵니다.
 
 `.env.production`이 없으면 예시에서 새 비밀키를 생성하여 만듭니다. `.env.production`을 열어 다음 항목을 실제 환경에 맞춥니다.
 
@@ -117,6 +164,10 @@ Remove-Item Env:HACCP_ENV_FILE
 
 `init`은 폴더 생성과 DB 마이그레이션을 수행합니다. 실제 직원·품목·재고나 기본 문서 양식을 모두 채워주는 명령은 아닙니다.
 
+**전달 초기 DB를 쓰는 경우에는 품목·공급처·BOM과 기본 양식이 이미 있습니다.** 아래 전체 기준정보 CSV 적재를 반복하지 말고, 실제 직원 CSV를 준비해 `seed_master --staff data/import/staff.csv --dry-run`으로 확인한 뒤 `--dry-run`을 빼고 반영합니다. 이때도 아래 예시와 같은 환경 파일·운영 설정을 지정합니다. 직원 CSV의 `staff_code`는 역할 파일에서 참조하는 코드와 맞춰야 합니다.
+
+아래 전체 CSV 예시는 초기 DB 없이 새로 구성하거나 현업이 승인한 기준정보를 갱신할 때 사용합니다. 기존 정보를 덮어쓰는 코드가 없는지 먼저 확인합니다.
+
 1. 실제 직원·공급처·품목 CSV를 준비합니다. 헤더 양식은 `backend/apps/inventory/seed/templates/`에 있습니다. 아래 경로는 준비할 파일의 예시입니다. 같은 코드의 기존 정보는 갱신되므로 먼저 `--dry-run`으로 확인합니다.
 
 ```powershell
@@ -132,8 +183,9 @@ Remove-Item Env:HACCP_ENV_FILE
 
 2. 아래 ‘역할 설정’에 따라 실제 직원 코드로 역할 파일을 준비합니다. 기본 문서 양식은 참고 양식이므로 현업 기준과 대조합니다. 필요한 양식이 없거나 비활성이면 입고·생산 시작이 실패할 수 있습니다.
 3. `.env.production`에 `HACCP_DOC_MENU=haccp`를 추가하면 문서함·결재함·CCP 대시보드를 HACCP 관리 메뉴에서 사용할 수 있습니다. 개발 콘솔 노출과는 별도 설정입니다.
-4. 실제 배합표와 기초재고는 기준일·단위·LOT를 확인해 별도 등록합니다. 위 CSV 명령은 BOM·기초재고를 가져오지 않습니다. 필요 시 개발자가 별도 이관 절차를 준비합니다.
-5. `seed_master --sample`, `seed_dev_*`, `seed_qa_*`는 테스트 자료용입니다. 실제 업무 설치의 필수 단계가 아닙니다.
+4. 슬랙 공유 최종 BOM의 파일과 최종본 여부를 바이오닷과 확인하고 생산 화면의 BOM 관리에서 등록합니다. 일괄 변환·적재가 필요하면 설치 담당자가 입력 형식 검증과 별도 가져오기 절차를 준비합니다. `init`·`migrate`와 위 CSV 명령은 실제 BOM·기초재고를 자동으로 가져오지 않습니다.
+5. 바이오닷이 운영 시작일·기초재고 기준일을 정한 뒤 실제 재고의 수량·단위·LOT·소비기한을 확인해 등록합니다. QA DB의 잔량·거래를 실제 재고로 복사하지 않습니다.
+6. `seed_master --sample`, `seed_dev_*`, `seed_qa_*`는 테스트 자료용입니다. 실제 업무 설치의 필수 단계가 아닙니다.
 
 ### HTTPS와 사내 주소
 
