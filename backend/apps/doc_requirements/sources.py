@@ -58,18 +58,25 @@ LOT_COLUMNS = tuple(key for key, _ in LOT_SELECT)
 BATCH_COLUMNS = tuple(key for key, _ in BATCH_SELECT)
 
 
-def _select(view, select, where, params, order=""):
-    columns = [key for key, _ in select]
-    exprs = ", ".join(expr if expr == key else f"{expr} AS {key}" for key, expr in select)
-    sql = f"SELECT {exprs} FROM {view}{where}{order}"
+def _run(sql, params, columns, contract_0009=False):
     try:
         with connection.cursor() as cursor:
             cursor.execute(sql, params)
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
     except OperationalError as error:
-        if "no such table" in str(error):
+        message = str(error)
+        # 뷰가 없음(no such table). 0009 계약 컬럼을 읽는 조회만 컬럼 없음(수불 0009 전)도
+        # 연동 오류로 — 다른 조회의 컬럼 오타는 그대로 500(P15 S4b r2 C1)
+        if "no such table" in message or (contract_0009 and "no such column" in message):
             raise errors.SourceUnavailable() from error
         raise
+
+
+def _select(view, select, where, params, order="", contract_0009=False):
+    columns = [key for key, _ in select]
+    exprs = ", ".join(expr if expr == key else f"{expr} AS {key}" for key, expr in select)
+    sql = f"SELECT {exprs} FROM {view}{where}{order}"
+    return _run(sql, params, columns, contract_0009)
 
 
 def incoming_lot(lot_id):
@@ -133,3 +140,138 @@ def batches_made_on(day=None, limit=100):
         params,
         f" ORDER BY production_batch_id DESC LIMIT {int(limit)}",
     )
+
+
+# ---------------------------------------------------------------- P15 생산일지 연동(F13)
+# 수불 0009 계약 뷰(docs/inventory-document-interface.md "생산일지 추가 계약").
+# 컬럼은 계약 이름 그대로.
+
+BOM_LINE_VIEW = "v_doc_batch_bom_line"
+USAGE_VIEW = "v_doc_batch_usage"
+PROD_LOG_BATCH_SELECT = tuple(
+    (c, c)
+    for c in (
+        "production_batch_id",
+        "batch_number",
+        "status",
+        "process_type",
+        "item_id",
+        "item_code",
+        "item_name",
+        "food_type",
+        "manufacturing_report_number",
+        "manufactured_date",
+        "planned_quantity_e6",
+        "output_quantity_e6",
+        "base_unit",
+        "output_lot_number",
+    )
+)
+BOM_LINE_SELECT = tuple(
+    (c, c)
+    for c in (
+        "bom_line_id",
+        "line_no",
+        "item_id",
+        "item_code",
+        "item_name",
+        "origin_country",
+        "base_unit",
+        "is_stock_managed",
+        "bom_base_quantity_e6",
+        "bom_quantity_e6",
+        "standard_quantity_e6",
+    )
+)
+USAGE_SELECT = tuple(
+    (c, c)
+    for c in (
+        "usage_id",
+        "bom_line_id",
+        "bom_item_id",
+        "bom_base_unit",
+        "item_id",
+        "item_code",
+        "item_name",
+        "origin_country",
+        "base_unit",
+        "lot_id",
+        "lot_number",
+        "net_quantity_e6",
+        "input_date",
+    )
+)
+
+
+def prod_log_batch(batch_id):
+    rows = _select(
+        BATCH_VIEW,
+        PROD_LOG_BATCH_SELECT,
+        " WHERE production_batch_id = %s",
+        [batch_id],
+        contract_0009=True,
+    )
+    return rows[0] if rows else None
+
+
+def batch_bom_lines(batch_id):
+    """배치 × BOM 줄(미투입·재고 비관리 포함), line_no 순."""
+    return _select(
+        BOM_LINE_VIEW,
+        BOM_LINE_SELECT,
+        " WHERE production_batch_id = %s",
+        [batch_id],
+        " ORDER BY line_no, bom_line_id",
+        contract_0009=True,
+    )
+
+
+def batch_usages(batch_id):
+    """투입 1건 = 1행(전량 정정 행도 남음), 투입일·투입 순."""
+    return _select(
+        USAGE_VIEW,
+        USAGE_SELECT,
+        " WHERE production_batch_id = %s",
+        [batch_id],
+        " ORDER BY input_date, usage_id",
+        contract_0009=True,
+    )
+
+
+STATE_COLUMNS = ("production_batch_id", "status", "item_id", "manufactured_date")
+
+
+def batch_state(batch_id):
+    """P15 S4b r1(B1): 배치 상태만 — `v_doc_batch` 기본 컬럼(0002부터, 0009 없어도 읽힘). SQL 1."""
+    rows = _select(
+        BATCH_VIEW,
+        tuple((c, c) for c in STATE_COLUMNS),
+        " WHERE production_batch_id = %s",
+        [batch_id],
+    )
+    return rows[0] if rows else None
+
+
+def batch_state_with_lines(batch_id):
+    """P15 S4b r2(A2): 배치 상태 + BOM 줄을 SQL 1개로(배치 뷰 LEFT JOIN BOM 줄 뷰).
+
+    반환 (상태 또는 None, [BOM 줄]). BOM 줄 뷰(0009)가 없으면 SourceUnavailable.
+    """
+    state_cols = [f"b.{c}" for c in STATE_COLUMNS]
+    line_keys = [key for key, _ in BOM_LINE_SELECT]
+    sql = (
+        f"SELECT {', '.join(state_cols)}, {', '.join('l.' + k for k in line_keys)}"
+        f" FROM {BATCH_VIEW} b LEFT JOIN {BOM_LINE_VIEW} l"
+        " ON l.production_batch_id = b.production_batch_id"
+        " WHERE b.production_batch_id = %s ORDER BY l.line_no, l.bom_line_id"
+    )
+    rows = _run(
+        sql, [batch_id], [*STATE_COLUMNS, *("line_" + k for k in line_keys)], contract_0009=True
+    )
+    if not rows:
+        return None, []
+    state = {c: rows[0][c] for c in STATE_COLUMNS}
+    lines = [
+        {k: r["line_" + k] for k in line_keys} for r in rows if r["line_bom_line_id"] is not None
+    ]
+    return state, lines

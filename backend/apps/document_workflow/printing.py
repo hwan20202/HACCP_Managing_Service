@@ -2,7 +2,8 @@
 
 범위: CCP-1P·2B·3P 단건(`kind: single`) · D03 입고일 묶음(`kind: receiving`,
 p12-d03-policy.md DP-10) · D10·D12 주 묶음(`kind: weekly`, p12-d10-policy.md DP-12 ·
-p12-d12-policy.md DP-13) · D11 월 묶음(`kind: monthly`, p12-d11-policy.md DP-17).
+p12-d12-policy.md DP-13) · D11 월 묶음(`kind: monthly`, p12-d11-policy.md DP-17) ·
+P15 생산일지(`kind: prodlog`, p15-s7-print.md — 결재 칸 없음, 작성완료 고정 값).
 
 - 쓰기 없음(출력 기록 없음 — D-104 Q5). DOC·APR 공개 함수만 부른다(WF-NFR-01).
 - 값: 열린 정정이 있으면 유효 승인본 스냅샷(S2-Q1 a), 아니면 지금 문서 값. 개선조치는 늘 현재 값.
@@ -258,6 +259,72 @@ LOT_KEYS = (
     "quantity",
     "expiration_date",
 )
+
+
+# ---------------------------------------------------------------- P15 생산일지(prodlog)
+# p15-s7-print.md(D-255): 문서 1건 = A4 세로, 결재 칸 없음. 기본정보·원료는 작성완료 때 고정한
+# 시스템 섹션(frozen_batch·frozen_materials — 출력 시점 연동이 아님), 점검·원료 입력·공정은 문서 값.
+# WF는 PLG를 import하지 않는다 — 섹션 값만 읽는다.
+
+
+def _product_name(product):
+    """고정 값 `product` = "[유형] 이름" → 제목용 이름."""
+    text = (product or "").strip()
+    if text.startswith("[") and "]" in text:
+        return text[text.index("]") + 1 :].strip() or text
+    return text
+
+
+def _prodlog(detail):
+    with step("WF-PRT-08", "WF", "생산일지 조립(고정 값·점검·원료·공정)"):
+        sections = _rows_by_section(detail["sections"])
+        for rows in sections.values():
+            rows.sort(key=lambda r: r["row_no"])
+        batch = _first_values(sections, "frozen_batch")
+        info = _first_values(sections, "info")
+        inputs = {
+            r["values"].get("bom_line_id"): r["values"] for r in sections.get("materials", [])
+        }
+        materials = []
+        for row in sorted(
+            (r["values"] for r in sections.get("frozen_materials", [])),
+            key=lambda v: v.get("line_no") or 0,
+        ):
+            given = inputs.get(row.get("bom_line_id")) or {}
+            materials.append({**row, "worker": given.get("worker"), "note": given.get("note")})
+        steps = [
+            {k: v for k, v in r["values"].items() if k != "done"} for r in sections.get("steps", [])
+        ]
+        people = {info.get("inspector")}
+        people.update(m["worker"] for m in materials)
+        people.update(st.get("worker") for st in steps)
+        name = _product_name(batch.get("product"))
+        return {
+            "kind": "prodlog",
+            "type_code": detail["template"]["type_code"],
+            "template": {
+                "name": detail["template"]["name"],
+                "version": detail["template"]["version"],
+            },
+            "title": f"[ {name} ] 생산일지" if name else "생산일지",
+            "boxes": [],
+            "key": {"document_id": detail["document_id"]},
+            "printable_count": 1,
+            "prechecks": [list(x) for x in print_forms.PROD_LOG_PRECHECKS],
+            "document": {
+                "document_id": detail["document_id"],
+                "status": detail["status"],
+                "work_date": detail["work_date"],
+                "batch": batch,
+                "info": info,
+                "materials": materials,
+                "steps": steps,
+                "ccp_line": [
+                    st.get("name") for st in steps if st.get("kind") in print_forms.PROD_LOG_CCP
+                ],
+            },
+            "people": _people(people),
+        }
 
 
 def _details_and_slots(ids):
@@ -636,11 +703,16 @@ def print_sheet(document_id, kind=None):
         if detail["status"] not in PRINTABLE:
             s.fail(detail["status"])
             raise NotPrintableStatus()
+        if sheet["kind"] == "prodlog" and detail["status"] != "completed":
+            s.fail(detail["status"])  # 결재 없는 문서 — 작성완료만(D-255 Q2)
+            raise NotPrintableStatus()
         if sheet["kind"] != "single":
             s.note(f"{sheet['kind']} {detail['work_date']}")
             slot_info = None
         else:
             slot_info = apr.print_slots([document_id]).get(document_id, {})
+    if sheet["kind"] == "prodlog":
+        return _prodlog(detail)
     if sheet["kind"] == "receiving":
         return _receiving(detail["work_date"])
     if sheet["kind"] == "weekly":

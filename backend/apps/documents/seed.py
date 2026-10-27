@@ -129,6 +129,14 @@ def ensure_p8_templates():
     return {code: made[(code, version)] for code, version, *_ in P8_TEMPLATES}
 
 
+def ensure_p15_templates():
+    """P15 생산일지 양식(PROD-LOG v1). 반환: {type_code: template}. P4·P8과 따로(S4b a)."""
+    from .seed_forms import P15_TEMPLATES
+
+    made = _ensure(P15_TEMPLATES)
+    return {code: made[(code, version)] for code, version, *_ in P15_TEMPLATES}
+
+
 def ensure_staff(count=5):
     staff_services.ensure_dev_staff(range(1, count + 1))
 

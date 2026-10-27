@@ -237,7 +237,12 @@
     batchSummary(batch) {
       const docs = batch.documents;
       if (!docs.length) return batch.process_type === 'PACKAGING' ? '<span class="te-hint">요구되는 CCP 문서 없음</span>' : '<span class="te-hint">–</span>';
-      return `CCP-${docs.map((d) => d.process_code).join('·')} ✓`;
+      // P15 S4b r1(B2): CCP는 process_code 있는 문서만, 생산일지는 따로 표시
+      const ccp = docs.filter((d) => d.process_code);
+      const parts = [];
+      if (ccp.length) parts.push(`CCP-${ccp.map((d) => d.process_code).join('·')} ✓`);
+      if (docs.some((d) => d.type_code === 'PROD-LOG')) parts.push('생산일지 ✓');
+      return parts.length ? parts.join(' / ') : '<span class="te-hint">–</span>';
     },
 
     lotTable(items) {

@@ -38,14 +38,14 @@ LOT마다 D01 시험성적서·D02 원산지 증빙·D03 육안검사 문서를 
 result = services.require_for_batch(staff_id, batch_id)
 ```
 
-현재 제조 공정 기본값은 CCP-1P·2B·3P입니다. 품목별 예외는 `doc_requirements/rules.py`의 `CCP_BY_ITEM`에서 정할 수 있으며 현재는 비어 있습니다. 취소 배치는 거부합니다. 포장배치에는 작성 요구가 없고, 신규 포장배치 생성 자체도 MVP 범위에서 금지합니다.
+현재 제조 공정 기본값은 CCP-1P·2B·3P이고, 제조 배치에는 생산일지(`PROD-LOG`) 1건을 함께 만듭니다(공정 없이, 결재 없음 — 양식을 `install_document_templates --production-log`로 설치했을 때만). 품목별 예외는 `doc_requirements/rules.py`의 `CCP_BY_ITEM`에서 정할 수 있으며 현재는 비어 있습니다. 취소 배치는 거부합니다. 포장배치에는 작성 요구가 없고, 신규 포장배치 생성 자체도 MVP 범위에서 금지합니다.
 
-반환은 `production_batch_id`, `documents`이며 각 항목에 `process_code`가 있습니다. 생산 시작을 생략한 사후 입력은 수불의 완료 처리에서 이 함수를 호출합니다.
+반환은 `production_batch_id`, `documents`이며 CCP 일지 항목에는 `process_code`가 있고, 생산일지 항목은 `type_code: "PROD-LOG"`·`process_code` null입니다. 연결 문서를 셀 때 CCP 일지는 `process_code`(또는 `CCP-` 유형)로 구분합니다. 생산 시작을 생략한 사후 입력은 수불의 완료 처리에서 이 함수를 호출합니다.
 
 ## 4. 연결 문서 조회
 
 - `services.docs_for_lot(lot_id)`: `lot_id`, `lot` 요약, `documents` 반환. 문서 항목은 ID·유형·상태·버전·최신 승인 회차 요약·승인본 판정·열린 정정 여부/사유를 포함합니다. 현재 편집본의 검사값과 최신 승인본 판정은 구분합니다.
-- `services.docs_for_batch(batch_id)`: `production_batch_id`, `batch` 요약, `documents` 반환. 문서마다 공정·상태·버전과 CCP 측정/개선조치 `summary`를 제공합니다.
+- `services.docs_for_batch(batch_id)`: `production_batch_id`, `batch` 요약, `documents` 반환. 문서마다 공정·상태·버전과 CCP 측정/개선조치 `summary`를 제공합니다. 생산일지는 맨 앞에 오고 `process_code`·`summary`가 null입니다.
 
 반환 필드는 더 추가될 수 있으므로 사용하는 키만 읽습니다. 실제 반환 조립 코드를 기준으로 확인합니다.
 

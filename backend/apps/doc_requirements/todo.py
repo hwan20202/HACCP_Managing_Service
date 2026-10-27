@@ -13,7 +13,8 @@ from apps.core.trace import step
 from apps.documents import services as doc
 from apps.staff import roles
 
-from . import errors, periodic
+from . import errors, periodic, sources
+from . import rules as req_rules  # todo_list 안의 지역 변수 rules(주기 규칙)와 구분
 
 PAST_DAYS = 30  # 지난 미완료: 기준일 −30일 ~ −1일(주간은 월요일이 −30일 이후인 주)
 GROUPS = (
@@ -25,7 +26,7 @@ GROUPS = (
 )
 CADENCE_GROUP = {"daily": "today", "weekly": "week"}
 PERIODIC_DEFAULT = {"D10": "today", "D12": "today", "D11": "week"}  # 규칙 파일이 깨졌을 때
-EVENT_TYPES = {"D01", "D02", "D03", "CCP-1P", "CCP-2B", "CCP-3P"}  # 입고·생산 사건 → 오늘
+EVENT_TYPES = {"D01", "D02", "D03", "CCP-1P", "CCP-2B", "CCP-3P", "PROD-LOG"}  # 입고·생산 → 오늘
 TODO_STATUSES = doc.TODO_STATUSES
 BUNDLE_PRIORITY = ("rejected", "correcting", "draft")  # D03 묶음 상태: 앞선 것
 REQUIREMENT_ORDER = {"periodic": 0, "lot": 1, "batch": 2}  # 같은 날: 주기 → 입고 → 생산
@@ -149,12 +150,29 @@ def todo_list(actor_id, base_date=None, mine=False):
         found = doc.requirement_documents(
             periodic._monday(oldest), base, type_codes=sorted(cadence), count_older=True
         )
+    with step("REQ-TDO-04b", "REQ", "생산일지의 배치 상태(취소 제외 — PLG-R10)") as s:
+        log_batches = {
+            source["document_id"]: req_rules.batch_of_prod_log_key(source["record_key"])
+            for source in found["rows"]
+            if source["type_code"] == req_rules.PROD_LOG
+        }
+        cancelled = set()
+        if log_batches:
+            cancelled = {
+                b["production_batch_id"]
+                for b in sources.batches_by_ids(i for i in log_batches.values() if i)
+                if b["status"] == req_rules.CANCELLED
+            }
+        else:
+            s.skip("생산일지 없음")
     with step("REQ-TDO-05", "REQ", "구분·상태 거르기·문서 없음·D03 묶음·mine") as s:
         buckets = {key: {"current": [], "past": []} for key, _ in GROUPS}
         awaiting, older, keys = [], found["older_count"], set()
         for source in found["rows"]:
             keys.add(source["record_key"])
             code = source["type_code"]
+            if log_batches.get(source["document_id"]) in cancelled:
+                continue  # 취소된 배치의 생산일지는 [작성 필요]에서 뺌
             group = cadence.get(code) or ("today" if code in EVENT_TYPES else "adhoc")
             status = source["status"]
             if status == "completed":

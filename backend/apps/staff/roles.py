@@ -30,7 +30,12 @@ from apps.core.trace import step
 from .models import Staff
 
 DEFAULT_FILE = Path(__file__).resolve().parent / "roles.json"
-SLOT_CONFIGS = {"owner": ("owner",), "owner_leader": ("owner", "leader"), "leader": ("leader",)}
+SLOT_CONFIGS = {
+    "owner": ("owner",),
+    "owner_leader": ("owner", "leader"),
+    "leader": ("leader",),
+    "none": (),  # P15: 결재 없는 양식(생산일지) — 결재선 없음, 작성 권한만
+}
 ROLE_NAMES = ("owner", "leader")
 DEFAULT_LABELS = {"owner": "담당자", "leader": "HACCP팀장"}
 LABEL_MAX = 20
@@ -62,6 +67,7 @@ class NoApprovalLine(ApiError):
     MESSAGES = {
         "no_config": "이 양식의 결재 칸 구성이 역할 설정에 없습니다.",
         "no_candidates": "결재 칸을 처리할 사람이 없습니다(역할 보유자 0명).",
+        "no_approval": "결재 없는 양식입니다.",  # P15 slots none
     }
 
     def __init__(self, reason, type_code=None):
@@ -186,7 +192,7 @@ def _format_problems(data):
         if "writers" in form and not _code_list(form["writers"]):
             problems.append(f"{where}.writers는 직원 코드 문자열 목록(중복 없음)이어야 합니다.")
         if form.get("slots") not in SLOT_CONFIGS:
-            problems.append(f"{where}.slots는 owner·owner_leader·leader 중 하나여야 합니다.")
+            problems.append(f"{where}.slots는 owner·owner_leader·leader·none 중 하나여야 합니다.")
         labels = form.get("labels", {})
         if not isinstance(labels, dict) or set(labels) - set(ROLE_NAMES):
             problems.append(f"{where}.labels는 owner·leader 키만 가질 수 있습니다.")
@@ -450,7 +456,8 @@ def require_inspector_setter(staff_id, type_code):
 def approval_line(type_code, config=None):
     """ROLE-F01: 양식의 결재선. 반환 {ok, slots:[{slot_no, role, label, candidate_ids}], reason}.
 
-    reason ∈ config_invalid · no_config · no_candidates (ok면 None). 후보는 id 순(지금 활성 직원).
+    reason ∈ config_invalid · no_config · no_candidates · no_approval(P15)
+    (ok면 None). 후보는 id 순(지금 활성 직원).
     """
     if config is None:
         config = load()
@@ -459,6 +466,8 @@ def approval_line(type_code, config=None):
     form = config.forms.get(type_code)
     if form is None:
         return {"ok": False, "slots": [], "reason": "no_config"}
+    if not form.slots:
+        return {"ok": False, "slots": [], "reason": "no_approval"}  # P15 slots none
     slots = []
     for number, role in enumerate(form.slots, start=1):
         candidates = sorted(_holders(config, form, role))

@@ -498,7 +498,10 @@ const ProductionApiPage = {
   },
 
   renderCcp(b) {
-    const docs = (this.docs && this.docs.documents) || [];
+    // ISS-064(P15): 배치 연결 문서에는 생산일지(PROD-LOG)도 있다 — CCP 일지만 세고 생산일지는 따로 한 줄
+    const linked = (this.docs && this.docs.documents) || [];
+    const docs = linked.filter((d) => d.process_code || String(d.type_code || '').startsWith('CCP-'));
+    const logs = linked.filter((d) => d.type_code === 'PROD-LOG');
     let verdict;
     if (this.docsError) {
       verdict = `<span class="badge badge-danger">조회 실패</span> <span style="font-size:0.8rem;">${this.esc(this.docsError)}</span>`;
@@ -522,6 +525,9 @@ const ProductionApiPage = {
         <td>${this.ccpMeasure(d.summary)}</td><td>${this.ccpDeviation(d.summary)}</td>
         <td style="text-align:right;" class="no-wrap">#${this.esc(d.document_id)}
           ${docLinks ? `<button class="btn btn-secondary btn-sm" data-open-doc="${this.esc(d.document_id)}" onclick="ProductionApiPage.openDoc(${Number(d.document_id)})">열기</button>` : ''}</td></tr>`).join('');
+    const logRows = logs.map((d) => `<div id="prodLogRow" data-prod-log-doc="${this.esc(d.document_id)}" style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem;font-size:0.85rem;">
+        <b>생산일지</b> ${this.badge(this.DOC_STATUS[d.status] || [d.status, 'badge-neutral'])} <span style="color:var(--text-muted);">#${this.esc(d.document_id)} · 결재 없음</span>
+        ${docLinks ? `<button class="btn btn-secondary btn-sm" data-open-doc="${this.esc(d.document_id)}" onclick="ProductionApiPage.openDoc(${Number(d.document_id)})">열기</button>` : ''}</div>`).join('');
     return `
       <div class="card" style="margin-bottom:0.75rem;" id="prodCcp">
         <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
@@ -533,6 +539,7 @@ const ProductionApiPage = {
         </div>
         <div style="margin-bottom:0.5rem;">${verdict}</div>
         ${docs.length ? `<div class="table-wrapper"><table class="data-table"><thead><tr><th>문서</th><th>공정</th><th>상태</th><th>최근 측정</th><th>이탈 · 개선조치</th><th style="text-align:right;">문서</th></tr></thead><tbody>${rows}</tbody></table></div>` : ''}
+        ${logRows}
         <p style="font-size:0.72rem;color:var(--text-muted);margin:0.4rem 0 0;">생산 시작 시 필요한 CCP 일지가 함께 생성됩니다.</p>
       </div>`;
   },

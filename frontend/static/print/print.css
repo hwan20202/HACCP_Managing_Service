@@ -230,6 +230,20 @@ table.prt-page > thead > tr > td, table.prt-page > tbody > tr > td { padding: 0;
 .prt-file-page.prt-file-missing::after { content: "파일을 불러오지 못했습니다"; color: #a00; font-size: 12pt; }
 .prt-file-page.prt-file-missing img { display: none; }
 
+/* P15 생산일지(p15-s7-print.md): A4 세로 1장(원료 18줄 + 공정 7개), 결재 칸 없음 */
+.pl .pl-title { text-align: center; font-size: 15pt; font-weight: 700; padding: 2mm 0 1mm; }
+.pl .pl-sub { display: flex; justify-content: space-between; align-items: flex-end; font-size: 9.5pt; padding: 1mm 0 2mm; }
+.pl .pl-right { text-align: right; line-height: 1.5; }
+.pl .prt td, .pl .prt th { padding: .8mm 1.2mm; line-height: 1.2; }
+.pl .prt td.r { text-align: right; }
+.pl .prt td.pl-sec { background: #f5f5f5; }
+.pl .prt td.pl-desc { font-size: 8pt; }
+.pl .pl-mats td, .pl .pl-mats th { padding-top: .25mm; padding-bottom: .25mm; font-size: 8pt; line-height: 1.15; }
+.pl .pl-steps td, .pl .pl-steps th { padding-top: .6mm; padding-bottom: .6mm; }
+.pl .pl-ox.on { border: 1.2px solid var(--ink); border-radius: 50%; padding: 0 1.2mm; font-weight: 700; }
+.pl .pl-chk::before { content: "☐ "; }
+.pl .pl-chk.on::before { content: "☑ "; }
+
 @media print {
   body { background: #fff; }
   .prt-toolbar { display: none; }

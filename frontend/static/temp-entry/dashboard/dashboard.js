@@ -246,6 +246,7 @@
         b.qty = { planned: info.planned_qty, output: info.output_qty, unit: info.unit || '' };
         b.startedAt = info.started_at || '';
         b.batchId = info.batch_id || null;  // P11 S5 r2: [생산 기록] 링크
+        b.prodLog = info.production_log || null;  // P15 S5a: 생산일지 링크(REQ-CCP-06)
         b.prodRank = PROD_RANK[b.prod] ?? 3;
       });
       list.sort((a, b) => a.prodRank - b.prodRank
@@ -298,6 +299,10 @@
         this.renderBoard();
       }));
       box.querySelectorAll('[data-prod-batch]').forEach((el) => el.addEventListener('click', () => T.productionPage().openBatch(Number(el.dataset.prodBatch), 'work')));
+      box.querySelectorAll('[data-prod-log]').forEach((el) => el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        T.open('doc-box', { documentId: Number(el.dataset.prodLog), back: { page: 'ccp-dashboard' } });
+      }));
       if (this.focus) {  // 생산 화면에서 들어온 배치: 그 영역으로 스크롤·잠깐 강조(한 번만)
         const el = [...box.querySelectorAll('.te-dsh-area')].find((x) => x.dataset.batch === this.focus);
         if (el) { el.classList.add('te-dsh-focus'); el.scrollIntoView({ block: 'center' }); }
@@ -369,6 +374,15 @@
           <span class="te-dsh-devsum">${dev}</span>${last}`;
     },
 
+    // P15 S5a(화면 8장): 이름 줄 오른쪽 "생산일지 작성중 · 공정 3/7 ↗"(작성완료면 초록)
+    prodLogLink(b) {
+      const p = b.prodLog;
+      if (!p) return '';
+      const done = p.status === 'completed';
+      const label = done ? '작성완료' : (p.status === 'draft' ? '작성중' : p.status);
+      return `<button class="btn btn-sm ${done ? 'btn-success' : 'btn-secondary'} te-dsh-prodlog" data-prod-log="${p.document_id}" title="이 배치의 생산일지">생산일지 ${label} · 공정 ${p.steps_done}/${p.steps_total} ↗</button>`;
+    },
+
     // 배치 요약 줄(접힌 배치 영역)
     foldHtml(b) {
       return `<div class="card te-dsh-row te-dsh-fold" data-toggle="${esc(b.label)}" data-batch="${esc(b.label)}" title="눌러서 펼치기">
@@ -380,7 +394,7 @@
       const cards = b.order.map((p) => this.procCardHtml(b, p)).join('');
       return `<div class="card te-dsh-area" data-batch="${esc(b.label)}">
           <div class="te-dsh-row te-dsh-area-head" data-toggle="${esc(b.label)}" title="눌러서 접기"><span class="te-dsh-caret">▾</span>${this.rowCells(b)}</div>
-          <div class="te-dsh-area-badges">${this.badges(b.counts) || '<span class="te-b te-b-green">이상 없음</span>'}${b.batchId && T.productionPage() ? `<button class="btn btn-secondary btn-sm te-dsh-prodlink" data-prod-batch="${b.batchId}" title="생산지시·실적의 이 배치">생산 기록 ↗</button>` : ''}</div>
+          <div class="te-dsh-area-badges">${this.badges(b.counts) || '<span class="te-b te-b-green">이상 없음</span>'}${b.batchId && T.productionPage() ? `<button class="btn btn-secondary btn-sm te-dsh-prodlink" data-prod-batch="${b.batchId}" title="생산지시·실적의 이 배치">생산 기록 ↗</button>` : ''}${this.prodLogLink(b)}</div>
           <div class="te-dsh-procs">${cards}</div>
           ${this.panelHtml(b)}
           ${this.notesHtml(b)}

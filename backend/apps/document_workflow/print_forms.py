@@ -16,7 +16,15 @@ PRINT_SHEETS = {
     "D10": "weekly",  # 주 묶음(p12-d10-policy.md, DP-12)
     "D12": "weekly",  # 주 묶음 + 요일별 결재(p12-d12-policy.md, DP-13)
     "D11": "monthly",  # 월 묶음(p12-d11-policy.md, DP-17)
+    "PROD-LOG": "prodlog",  # 생산일지 1건 = A4 세로(p15-s7-print.md, D-255)
 }
+# P15 S7 생산일지 점검사항 문구(종이 원본 `forms/*-생산일지.xlsx` 그대로)
+PROD_LOG_PRECHECKS = (
+    ("pre_label", "1. 원료의 적합라벨 확인"),
+    ("pre_clean", "2. 검교정 상태 확인 후 칭량도구의 청결상태 확인"),
+    ("pre_lot", "3. 작업 로트 및 제품명 한 번 더 확인 후 기재할 것"),
+)
+PROD_LOG_CCP = ("CCP-1P", "CCP-2B", "CCP-3P")
 
 TITLES = {
     "CCP-1P": ("CCP-1P 모니터링일지", "쇳가루제거공정"),

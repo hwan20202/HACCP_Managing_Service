@@ -8,6 +8,7 @@
     "CCP-1P": {"owners": ["DEV-001", "DEV-003"], "slots": "owner_leader"},
     "CCP-2B": {"owners": ["DEV-001", "DEV-003"], "slots": "owner_leader"},
     "CCP-3P": {"owners": ["DEV-001", "DEV-003"], "slots": "owner_leader"},
+    "PROD-LOG": {"owners": ["DEV-001", "DEV-003"], "slots": "none"},
     "D10": {"owners": ["DEV-002", "DEV-003"], "slots": "owner_leader", "labels": {"owner": "작성자"}},
     "D11": {"owners": ["DEV-002", "DEV-003"], "slots": "owner_leader"},
     "D12": {"owners": ["DEV-002", "DEV-003"], "slots": "owner_leader"},

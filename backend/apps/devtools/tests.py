@@ -1,6 +1,7 @@
 """개발 콘솔 화면(/dev/) 노출 조건."""
 
 import datetime
+import json
 
 from django.conf import settings
 from django.test import SimpleTestCase, TestCase, override_settings
@@ -459,3 +460,232 @@ class SeedPrintTests(TestCase):
         self.assertEqual([r["week_no"] for r in data["remarks"]], [1, 2])
         self.assertEqual([b["staff_id"] for b in data["boxes"]], [3, 5])  # 3주 승인이 가장 최근
         self.assertFalse(seed_print_monthly("2026-10-15")["created"])
+
+
+class SeedProdLogTests(TestCase):
+    """P15 S5a: 개발 생산일지 시드 — 수불 공개 서비스로 배치·투입·산출, 생산 시작 때 생산일지."""
+
+    def test_scenarios(self):
+        from apps.devtools import prodlog_dev
+        from apps.production_log import logbook
+        from apps.staff import services as staff_services
+
+        staff_services.ensure_dev_staff(range(1, 6))
+        used = prodlog_dev.make("used", 1)
+        self.assertEqual(
+            [d["type_code"] for d in used["documents"]], ["PROD-LOG", "CCP-1P", "CCP-2B", "CCP-3P"]
+        )
+        linked = logbook.linked_data(used["prod_log_id"])["linked"]
+        first = linked["materials"][0]
+        self.assertEqual((first["used_e6"], first["origin"]), (9_000000, "뉴질랜드 → 러시아(대체)"))
+        self.assertEqual(linked["batch"]["output"], "98 kg")
+        cancelled = prodlog_dev.make("cancelled", 1)
+        self.assertEqual(
+            logbook.linked_data(cancelled["prod_log_id"])["linked"]["batch"]["status"], "CANCELLED"
+        )
+
+
+@override_settings(ROOT_URLCONF="apps.devtools.test_urls")
+class ProdLogFixtureTests(TestCase):
+    """P15 S5b: 생산일지 프리셋 사전 조건·연동 오류 스위치·기준정보 스냅샷·콘솔 흐름."""
+
+    def setUp(self):
+        from apps.staff import services as staff_services
+
+        staff_services.ensure_dev_staff(range(1, 6))
+
+    def post(self, path, body):
+        return self.client.post(path, data=json.dumps(body), content_type="application/json")
+
+    def test_fixture_fill_complete_changed(self):
+        r = self.post(
+            "/api/dev/fixtures/prodlog",
+            {
+                "scenario": "partial",
+                "template": "효력환",
+                "fill": True,
+                "complete": True,
+                "output_after_kg": 40,
+            },
+        )
+        self.assertEqual(r.status_code, 201, r.content)
+        log = r.json()["prod_log_id"]
+        linked = self.client.get(f"/api/v1/production-logs/{log}/linked").json()
+        self.assertEqual((linked["status"], linked["changed"]), ("completed", True))
+        self.assertEqual(
+            len(self.client.get(f"/api/v1/documents/{log}").json()["sections"]) > 7, True
+        )
+
+    def test_link_fail_switch(self):
+        from apps.devtools import fixtures_p15
+
+        made = self.post("/api/dev/fixtures/prodlog", {"scenario": "used"}).json()
+        other = self.post("/api/dev/fixtures/prodlog", {"scenario": "started"}).json()
+        log = made["prod_log_id"]
+
+        def linked_of(doc_id):
+            return self.client.get(f"/api/v1/production-logs/{doc_id}/linked").json()
+
+        self.assertEqual(self.post("/api/dev/prodlog/link-fail", {"on": True}).status_code, 400)
+        try:
+            on = self.post(
+                "/api/dev/prodlog/link-fail", {"on": True, "batch_id": made["batch_id"]}
+            ).json()
+            self.assertEqual((on["on"], on["batch_id"]), (True, made["batch_id"]))
+            self.assertGreater(on["seconds_left"], 0)
+            linked = linked_of(log)
+            self.assertEqual((linked["linked"], linked["error"]), (None, "SOURCE_UNAVAILABLE"))
+            # r1 A3: 다른 배치는 정상 연동
+            self.assertIsNotNone(linked_of(other["prod_log_id"])["linked"])
+            # TTL이 지나면 스스로 꺼짐
+            fixtures_p15.set_link_fail(True, made["batch_id"], ttl=0)
+            self.assertIsNotNone(linked_of(log)["linked"])
+            self.assertEqual(self.client.get("/api/dev/prodlog/link-fail").json(), {"on": False})
+        finally:
+            fixtures_p15.set_link_fail(False)
+        self.assertEqual(self.client.get("/api/dev/prodlog/link-fail").json(), {"on": False})
+        self.assertIsNotNone(linked_of(log)["linked"])
+
+    def test_ccp_draft_blocks_completion(self):
+        """S6 r3(D-253 R25): fill은 CCP 일지를 작성완료·값 가져옴 → ccp_draft면 막힘."""
+        ok = self.post(
+            "/api/dev/fixtures/prodlog",
+            {"scenario": "used", "template": "효력환", "fill": True, "complete": True},
+        )
+        self.assertEqual(ok.status_code, 201, ok.content)
+        made = self.post(
+            "/api/dev/fixtures/prodlog",
+            {"scenario": "used", "template": "효력환", "fill": True, "ccp_draft": "CCP-2B"},
+        ).json()
+        r = self.client.post(
+            f"/api/v1/documents/{made['prod_log_id']}/complete",
+            json.dumps({"expected_version": made["version"]}),
+            content_type="application/json",
+            HTTP_X_STAFF_ID="1",
+        )
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertEqual([d["code"] for d in r.json()["details"]], ["ccp_not_completed"])
+
+    def test_excel_scenario_matches_sheet(self):
+        """S6 r3(D-253 R6): 엑셀 효력환261006 — 원료 18줄·비율·지시량 40 kg·모두 투입."""
+        from apps.devtools import prodlog_dev
+
+        r = self.post("/api/dev/fixtures/prodlog", {"scenario": "excel"})
+        self.assertEqual(r.status_code, 201, r.content)
+        linked = self.client.get(f"/api/v1/production-logs/{r.json()['prod_log_id']}/linked").json()
+        mats = linked["linked"]["materials"]
+        self.assertEqual(linked["linked"]["batch"]["planned"], "40 kg")
+        self.assertEqual(len(mats), 18)
+        self.assertEqual(sum(m["ratio_e6"] for m in mats), 1_000_000)
+        for m, (_, ratio) in zip(mats, prodlog_dev.EXCEL_LINES, strict=True):
+            self.assertEqual(m["ratio_e6"], int(float(ratio) * 1_000_000))
+            self.assertEqual(m["used_e6"], m["standard_e6"])
+
+    def test_nobom_drop_ccp_and_master_snapshot(self):
+        r = self.post("/api/dev/fixtures/prodlog", {"scenario": "nobom", "drop_ccp": "CCP-2B"})
+        self.assertEqual(r.status_code, 201, r.content)
+        linked = self.client.get(f"/api/v1/production-logs/{r.json()['prod_log_id']}/linked").json()
+        self.assertEqual(linked["linked"]["materials"], [])
+        self.assertIsNone(linked["linked"]["batch"]["food_type"])
+        self.assertNotIn("CCP-2B", linked["ccp_documents"])
+        from apps.production_log.models import Process
+
+        pid = Process.objects.get(kind="OUTER").pk
+        snap = self.client.get(f"/api/dev/snapshot?process_id={pid}").json()
+        self.assertTrue(snap["exists"])
+        self.assertEqual(
+            set(snap["tables"]), {"process", "process_template_step", "master_change_log"}
+        )
+        flows = self.client.get("/api/dev/flows").json()
+        self.assertIn("PLG-SAV", flows["flows"])
+        self.assertEqual(flows["optional"]["PLG-LNK"], ["PLG-LNK-02"])
+        # 다른 단위 흐름엔 없음
+        self.assertTrue(all(k.startswith("PLG-") for k in flows["optional"]))
+        self.assertNotIn("DOC-BRF", flows["optional"])
+
+    def test_console_flows_match_service_traces(self):
+        """콘솔 흐름(CONSOLE)에서 API 단계를 뺀 것 = 서비스 trace(ROLE-CFG·테스트 준비 조회 뺌)."""
+        from apps.core import trace
+        from apps.production_log import flows
+
+        made = self.post(
+            "/api/dev/fixtures/prodlog", {"scenario": "used", "template": "효력환"}
+        ).json()
+        log = made["prod_log_id"]
+        api_steps = {"DOC-UPD-01", "DOC-UPD-02", "DOC-CMP-01", "DOC-ROP-01"}
+
+        def run(flow, method, path, body=None):
+            state, token = trace.start()
+            try:
+                if method == "get":
+                    self.client.get(path)
+                else:
+                    getattr(self.client, method)(
+                        path,
+                        data=json.dumps(body or {}),
+                        content_type="application/json",
+                        HTTP_X_STAFF_ID="1",
+                    )
+            finally:
+                trace.stop(token)
+            # ROLE-CFG(설정 읽기)·EFF-(신호 안쪽 — 콘솔이 안쪽 단계로 따로 셈)는 비교 밖
+            got = [s.step_id for s in state.steps if not s.step_id.startswith(("ROLE-CFG", "EFF-"))]
+            want = [
+                s
+                for s in flows.CONSOLE[flow]
+                if not s.endswith(("-00", "-00b")) and s not in api_steps
+            ]
+            got = [s for s in got if not s.endswith(("-00", "-00b")) and s not in api_steps]
+            want = [s for s in want if s in got or s not in flows.OPTIONAL.get(flow, ())]  # 조건부
+            self.assertEqual(got, want, flow)
+
+        made = self.post(
+            "/api/dev/fixtures/prodlog", {"scenario": "used", "template": "효력환", "fill": True}
+        ).json()
+        log = made["prod_log_id"]
+        from apps.production_log.models import ProcessTemplate
+
+        tid = ProcessTemplate.objects.get(name="효력환").pk
+        run(
+            "PLG-TPL",
+            "post",
+            f"/api/v1/production-logs/{log}/template-rows",
+            {"template_id": tid, "mode": "append"},
+        )
+        steps = [
+            s["values"]
+            for s in self.client.get(f"/api/v1/documents/{log}").json()["sections"]
+            if s["section_def"] == "steps"
+        ]
+        run(
+            "PLG-TSV",
+            "post",
+            f"/api/v1/production-logs/{log}/save-template",
+            {"name": "콘솔 흐름", "steps": steps},
+        )
+        run(
+            "PLG-REG",
+            "post",
+            f"/api/v1/production-logs/{log}/register-process",
+            {"name": "콘솔 공정", "mode": "QTY"},
+        )
+        version = self.client.get(f"/api/v1/documents/{log}").json()["version"]
+        run("PLG-CMP", "post", f"/api/v1/documents/{log}/complete", {"expected_version": version})
+        version = self.client.get(f"/api/v1/documents/{log}").json()["version"]
+        run("PLG-ROP", "post", f"/api/v1/documents/{log}/reopen", {"expected_version": version})
+        run("PLG-LNK", "get", f"/api/v1/production-logs/{log}/linked")
+        run("PLG-CCP", "get", f"/api/v1/production-logs/{log}/ccp-values?kind=CCP-1P")
+        version = self.client.get(f"/api/v1/documents/{log}").json()["version"]
+        d = self.client.get(f"/api/v1/documents/{log}").json()
+        info = next(s for s in d["sections"] if s["section_def"] == "info")
+        run(
+            "PLG-SAV",
+            "patch",
+            f"/api/v1/documents/{log}",
+            {
+                "expected_version": version,
+                "sections": {
+                    "update": [{"section_id": info["section_id"], "values": {"pre_lot": "적합"}}]
+                },
+            },
+        )

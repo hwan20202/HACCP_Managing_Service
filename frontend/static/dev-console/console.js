@@ -108,6 +108,31 @@
     deviationCheck: { label: 'DOC 개선조치 확인 (F31·A23)', method: 'POST', flow: 'DOC-DVK', uses: ['id', 'body', 'docId'], path: (s) => `deviations/${s.id}/check`, doc: (s) => s.docId },
     // ---- P14 역할 기반 결재 — roles/p14-s2-spec.md 10장
     roles: { label: 'ROLE 역할 보기 (ROLE-A01)', method: 'GET', flow: 'DOC-ROL', uses: [], path: () => 'roles' },
+    // ---- P15 생산일지 — production/p15-s2-spec.md 5장(A01~A08), 흐름 p15-s2-flows.md r4(콘솔 흐름 production_log/flows.py CONSOLE)
+    plgLinked: { label: 'PLG 생산일지 연동 조회 (A01)', method: 'GET', flow: 'PLG-LNK', uses: ['id'], path: (s) => `production-logs/${s.id}/linked`, doc: (s) => s.id },
+    plgSave: { label: 'PLG 생산일지 저장 (DOC PATCH + 확장 검사)', method: 'PATCH', flow: 'PLG-SAV', uses: ['id', 'body'], path: (s) => `documents/${s.id}`, doc: (s) => s.id },
+    plgComplete: { label: 'PLG 생산일지 작성완료', method: 'POST', flow: 'PLG-CMP', uses: ['id', 'body'], path: (s) => `documents/${s.id}/complete`, doc: (s) => s.id },
+    plgReopen: { label: 'PLG 생산일지 작성 재개', method: 'POST', flow: 'PLG-ROP', uses: ['id', 'body'], path: (s) => `documents/${s.id}/reopen`, doc: (s) => s.id },
+    plgTemplateRows: { label: 'PLG 템플릿 행 만들기 (A02)', method: 'POST', flow: 'PLG-TPL', uses: ['id', 'body'], path: (s) => `production-logs/${s.id}/template-rows`, doc: (s) => s.id },
+    plgSaveTemplate: { label: 'PLG 템플릿으로 저장 (A03)', method: 'POST', flow: 'PLG-TSV', uses: ['id', 'body'], path: (s) => `production-logs/${s.id}/save-template`, doc: (s) => s.id },
+    plgCcpValues: { label: 'PLG CCP 값 (A04)', method: 'GET', flow: 'PLG-CCP', uses: ['id', 'query'], path: (s) => `production-logs/${s.id}/ccp-values${s.query ? `?${s.query}` : ''}`, doc: (s) => s.id },
+    plgRegister: { label: 'PLG 일지에서 공정 등록 (A05)', method: 'POST', flow: 'PLG-REG', uses: ['id', 'body'], path: (s) => `production-logs/${s.id}/register-process`, doc: (s) => s.id },
+    processes: { label: 'PLG 공정 목록 (A06)', method: 'GET', flow: 'PRC-LST', uses: ['query'], path: (s) => `processes${s.query ? `?${s.query}` : ''}` },
+    processCreate: { label: 'PLG 공정 추가 (A06)', method: 'POST', flow: 'PRC-NEW', uses: ['body'], path: () => 'processes',
+      scope: (s, r) => (r && r.ok ? `process_id=${r.data.process_id}` : null) },
+    processUpdate: { label: 'PLG 공정 수정 (A06)', method: 'PATCH', flow: 'PRC-UPD', uses: ['id', 'body'], path: (s) => `processes/${s.id}`, scope: (s) => `process_id=${s.id}` },
+    processActive: { label: 'PLG 공정 사용 중지·다시 사용 (A06)', method: 'POST', flow: 'PRC-ACT', uses: ['id', 'body'], path: (s) => `processes/${s.id}/active`, scope: (s) => `process_id=${s.id}` },
+    processDelete: { label: 'PLG 공정 삭제 (A06)', method: 'DELETE', flow: 'PRC-DEL', uses: ['id', 'query'], path: (s) => `processes/${s.id}${s.query ? `?${s.query}` : ''}`, scope: (s) => `process_id=${s.id}` },
+    templatesList: { label: 'PLG 템플릿 목록 (A07)', method: 'GET', flow: 'TPL-LST', uses: ['query'], path: (s) => `process-templates${s.query ? `?${s.query}` : ''}` },
+    templateGet: { label: 'PLG 템플릿 상세 (A07)', method: 'GET', flow: 'TPL-GET', uses: ['id'], path: (s) => `process-templates/${s.id}` },
+    templateCreate: { label: 'PLG 템플릿 만들기 (A07)', method: 'POST', flow: 'TPL-NEW', uses: ['body'], path: () => 'process-templates',
+      scope: (s, r) => (r && r.ok ? `process_template_id=${r.data.process_template_id}` : null) },
+    templateUpdate: { label: 'PLG 템플릿 수정 (A07)', method: 'PATCH', flow: 'TPL-UPD', uses: ['id', 'body'], path: (s) => `process-templates/${s.id}`, scope: (s) => `process_template_id=${s.id}` },
+    templateCopy: { label: 'PLG 템플릿 복제 (A07)', method: 'POST', flow: 'TPL-CPY', uses: ['id'], path: (s) => `process-templates/${s.id}/copy`,
+      scope: (s, r) => (r && r.ok ? `process_template_id=${r.data.process_template_id}` : `process_template_id=${s.id}`) },
+    templateActive: { label: 'PLG 템플릿 사용 중지·다시 사용 (A07)', method: 'POST', flow: 'TPL-ACT', uses: ['id', 'body'], path: (s) => `process-templates/${s.id}/active`, scope: (s) => `process_template_id=${s.id}` },
+    templateDelete: { label: 'PLG 템플릿 삭제 (A07)', method: 'DELETE', flow: 'TPL-DEL', uses: ['id', 'query'], path: (s) => `process-templates/${s.id}${s.query ? `?${s.query}` : ''}`, scope: (s) => `process_template_id=${s.id}` },
+    masterHistory: { label: 'PLG 기준정보 변경 이력 (A08)', method: 'GET', flow: 'MST-HIS', uses: ['query'], path: (s) => `master-history${s.query ? `?${s.query}` : ''}` },
   };
   function periodicScope(spec, fromKey, toKey) {
     try {
@@ -275,7 +300,11 @@
   function compareFlow(flowId, steps) {
     // ROLE-CFG는 설정을 처음 읽을 때만 나오는 내부 단계다. 서버 흐름 비교와 같은 기준으로 뺀다.
     steps = steps.filter((s) => !s.step_id.startsWith('ROLE-CFG'));
-    const expected = state.flows[flowId] || [];
+    // P15 S5b: 조건부 단계(/api/dev/flows optional — 예: CCP 행이 없으면 DOC-BRF-01 없음)는 실행되지 않았으면 도식에서 뺀다
+    // r1 B3: 흐름별 — 그 흐름에 적힌 것만(DOC-BRF 같은 다른 흐름의 필수 단계는 그대로 셈)
+    const optional = new Set((state.optional || {})[flowId] || []);
+    const ran = new Set(steps.map((s) => s.step_id));
+    const expected = (state.flows[flowId] || []).filter((id) => !optional.has(id) || ran.has(id));
     // P5 REQ 흐름은 안에 DOC·APR 단계를 품고 반복(#n 번호·공정)이 있다(s2-flows 9장, D-070 G3):
     // 이 흐름의 단계만 골라 연속 반복을 하나로 줄여 비교하고, 안쪽 단계는 칩 대신 개수로만 보인다.
     // P6: DOC 생명주기 신호(DOC-SIG-01) 안의 받는 쪽 단계(EFF-…와 그 안의 DOC 조회)도 안쪽 단계다
@@ -1726,6 +1755,119 @@
     }
   }
 
+  // ---------------------------------------------------------------- 프리셋 PLG-PS-01~10 (P15 S5b — production/p15-s1-screens.md 10장)
+  // 사전 조건은 불러올 때 개발 API(fixtures/prodlog — 수불 공개 서비스로 새 배치·투입·산출 → 생산 시작 훅이 CCP 일지 3 + 생산일지)로
+  // 만든다(ISS-019 방식). PS-06 연동 오류는 개발 스위치(/api/dev/prodlog/link-fail — D-249 Q3 a)를 그 배치에만 켰다가 끈다(r1 A3 — 5분 뒤 자동 꺼짐).
+  const plg = (preset) => ({ unit: 'PLG', ...preset });
+  async function plgFixture(body) {
+    const made = await devPost('/api/dev/fixtures/prodlog', body);
+    prepared.push({ lot_number: '-', document_id: made.prod_log_id, status: `배치 ${made.batch_number} 생산일지(${made.scenario})` });
+    return made;
+  }
+  async function plgDoc(id) {
+    const d = await quietGet(`documents/${id}`);
+    if (!d) throw new Error(`생산일지 #${id}를 읽지 못했습니다.`);
+    return d;
+  }
+  async function processTemplateIdOf(name) {
+    const list = await quietGet('process-templates');
+    const t = list && list.items.find((x) => x.name === name);
+    if (!t) throw new Error(`템플릿 '${name}'이 없습니다(개발 시드 seed_dev_prodlog).`);
+    return t.process_template_id;
+  }
+  async function builtinOf(kind) {
+    const list = await quietGet('processes?kind=builtin&status=all');
+    const p = list && list.items.find((x) => x.kind === kind);
+    if (!p) throw new Error(`기본 제공 공정 ${kind}가 없습니다(production_log 0002).`);
+    return p.process_id;
+  }
+  PRESETS.push(
+    plg({ id: 'PLG-PS-01', label: '생산 시작 직후 — 공정 없는 일지', expect: '200 · PLG-LNK 도식 일치(01·DOC-SEC·03·REQ-PLS-01·04·05·DOC-LSV·DOC-BRF) · linked.materials 4줄(재고 관리 3줄 사용량 null·첫 투입일 없음), batch.output "0 kg"(산출 전 — 화면은 "산출 전") · ccp_documents CCP-1P·2B·3P · 생산일지 공정 행 0 · ④ 변화 없음',
+      prepare: async () => {
+        const m = await plgFixture({ scenario: 'started' });
+        return { func: 'plgLinked', staff: '1', id: String(m.prod_log_id) };
+      } }),
+    plg({ id: 'PLG-PS-02', label: '투입 완료 + 템플릿 불러옴 — 필수 일부 비어 작성완료 실패', expect: '400 COMPLETION_INCOMPLETE · PLG-CMP 도식에서 DOC-EXT-02 → PLG-CMP-01~03c 뒤 실패(롤백) · details에 작업 전 점검 3칸·점검자·공정별 작업자·결과 칸(sections[steps#n].…) · ④ 상태 draft 그대로, frozen_* 없음',
+      prepare: async () => {
+        const m = await plgFixture({ scenario: 'used', template: '효력환' });
+        return { func: 'plgComplete', staff: '1', id: String(m.prod_log_id), body: J({ expected_version: m.version }) };
+      } }),
+    plg({ id: 'PLG-PS-03', label: '대체 원료(다른 원산지·g 단위) 투입', expect: '200 · PLG-LNK 도식 일치 · materials[0] 녹용(뉴질랜드): used_e6 9000000(6 kg + 녹용(러시아) 3000 g → kg 환산), origin "뉴질랜드 → 러시아(대체)", alternatives ["녹용(러시아)"], ratio_e6 90000(9%) · 정제수(재고 비관리) used null · batch.output "98 kg" · ④ 변화 없음',
+      prepare: async () => {
+        const m = await plgFixture({ scenario: 'used' });
+        return { func: 'plgLinked', staff: '1', id: String(m.prod_log_id) };
+      } }),
+    plg({ id: 'PLG-PS-04', label: '재고 관리 안 하는 원료(정제수) 직접 입력', expect: '1번째 200 → 2번째 400 · 1번째: PLG-SAV 도식 일치(PLG-SAV-05가 BOM 줄로 ③④ 검사) · ④ doc_section materials +1(bom_line_id 정제수 줄, used 88.5) · 2번째: VALIDATION_ERROR details code stock_managed(재고 관리 원료 녹용에 used) · ④ 변화 없음',
+      prepare: async () => {
+        const m = await plgFixture({ scenario: 'used' });
+        const linked = await quietGet(`production-logs/${m.prod_log_id}/linked`);
+        const water = linked.linked.materials.find((x) => x.is_stock_managed === false);
+        const deer = linked.linked.materials.find((x) => x.is_stock_managed);
+        const first = { func: 'plgSave', staff: '1', id: String(m.prod_log_id), body: J({ expected_version: m.version, sections: { add: [{ section_def: 'materials', values: { bom_line_id: water.bom_line_id, used: 88.5, worker: 1 } }] } }) };
+        return { ...first, script: async (exec) => {
+          const ok = await exec(first);
+          if (!ok.record.ok) return;
+          await exec({ func: 'plgSave', staff: '1', id: String(m.prod_log_id), body: J({ expected_version: m.version + 1, sections: { add: [{ section_def: 'materials', values: { bom_line_id: deer.bom_line_id, used: 5 } }] } }) });
+        } };
+      } }),
+    plg({ id: 'PLG-PS-05', label: '품목 정보 없음(유형·보고번호)·BOM 없음', expect: '200 · PLG-LNK 도식 일치 · batch.food_type null·report_no null·product "녹용 원액(개발·정보 없음)"(유형 없음), materials [] (화면: "BOM 없음"·"수불 품목 정보에 없음") · ④ 변화 없음',
+      prepare: async () => {
+        const m = await plgFixture({ scenario: 'nobom' });
+        return { func: 'plgLinked', staff: '1', id: String(m.prod_log_id) };
+      } }),
+    plg({ id: 'PLG-PS-06', label: '연동 오류(개발 스위치) — 작성완료 막힘', expect: '스위치 켬(이 배치만·5분 뒤 자동 꺼짐) → 1번째 200 linked null·error "SOURCE_UNAVAILABLE"(PLG-LNK-03 실패 → 03a 문서 참조) → 2번째 409 PLG_LINKED_UNAVAILABLE(PLG-CMP-02, 롤백) · 스위치 끔 · ④ 상태 draft 그대로',
+      prepare: async () => {
+        const m = await plgFixture({ scenario: 'used', template: '효력환', fill: true });
+        const linked = { func: 'plgLinked', staff: '1', id: String(m.prod_log_id) };
+        return { ...linked, script: async (exec) => {
+          await devPost('/api/dev/prodlog/link-fail', { on: true, batch_id: m.batch_id });  // r1 A3: 이 배치에만, 5분 뒤 자동 꺼짐
+          try {
+            await exec(linked);
+            await exec({ func: 'plgComplete', staff: '1', id: String(m.prod_log_id), body: J({ expected_version: m.version }) });
+          } finally {
+            await devPost('/api/dev/prodlog/link-fail', { on: false });
+          }
+        } };
+      } }),
+    plg({ id: 'PLG-PS-07', label: '작성완료 뒤 산출 정정 — 연동 값이 바뀜', expect: '200 · PLG-LNK 도식 일치(PLG-LNK-02 고정 섹션) · status completed, changed true · frozen.batch.output "0 kg"(작성완료 때 산출 전) ↔ linked.batch.output "40 kg" · ④ 변화 없음',
+      prepare: async () => {
+        const m = await plgFixture({ scenario: 'partial', template: '효력환', fill: true, complete: true, output_after_kg: 40 });
+        return { func: 'plgLinked', staff: '1', id: String(m.prod_log_id) };
+      } }),
+    plg({ id: 'PLG-PS-08', label: '취소된 배치 — 읽기 전용', expect: '409 PLG_BATCH_CANCELLED · PLG-SAV 도식에서 PLG-SAV-01(REQ-PLS-02 배치 상태)에서 실패 · ④ 변화 없음',
+      prepare: async () => {
+        const m = await plgFixture({ scenario: 'cancelled' });
+        const d = await plgDoc(m.prod_log_id);
+        return { func: 'plgSave', staff: '1', id: String(m.prod_log_id), body: J({ expected_version: d.version, sections: { update: [{ section_id: infoOf(d).section_id, values: { pre_label: '적합' } }] } }) };
+      } }),
+    plg({ id: 'PLG-PS-09', label: 'CCP-2B 일지 없음(일지를 지워 만듦 — 품목 예외 아님) — 건조 CCP 빠짐', expect: '1번째 200 → 2번째 400 · 1번째: PLG-TPL 도식 일치 · skipped_ccp ["CCP-2B"](템플릿 7단계 중 6행) · 템플릿 used_count +1 · 2번째: VALIDATION_ERROR details code ccp_doc_missing(CCP-2B 행 넣기) · ④ 일지 변화 없음',
+      prepare: async () => {
+        const m = await plgFixture({ scenario: 'used', drop_ccp: 'CCP-2B' });
+        const tid = await processTemplateIdOf('효력환');
+        const dry = await builtinOf('CCP-2B');
+        const rows = { func: 'plgTemplateRows', staff: '1', id: String(m.prod_log_id), body: J({ template_id: tid, mode: 'replace' }) };
+        return { ...rows, script: async (exec) => {
+          await exec(rows);
+          await exec({ func: 'plgSave', staff: '1', id: String(m.prod_log_id), body: J({ expected_version: m.version, sections: { add: [{ section_def: 'steps', values: { kind: 'CCP-2B', process_id: dry, name: '건조', work_date: seoulToday() } }] } }) });
+        } };
+      } }),
+    plg({ id: 'PLG-PS-10', label: '공정 목록·템플릿 시드', expect: '1번째 200 · PRC-LST 도식 일치 · 기본 제공 5(쇳가루 제거·건조·금속검출기·내포장·외포장, 🔒) + 일반 9 이상 · 2번째 200 · TPL-LST · 효력환·녹용농축분말·EXO-Boost 발효녹용 포함 · ④ 변화 없음',
+      prepare: async () => {
+        await plgFixture({ scenario: 'started' });  // 개발 시드(공정 기준정보)가 없으면 이때 넣음
+        const list = { func: 'processes', staff: '1', query: 'status=all' };
+        return { ...list, script: async (exec) => {
+          await exec(list);
+          await exec({ func: 'templatesList', staff: '1', query: 'status=all' });
+        } };
+      } }),
+    // S6 r3(D-253 R25): CCP 공정 값은 CCP 일지가 작성완료 이후이고 같아야 작성완료
+    plg({ id: 'PLG-PS-11', label: 'CCP 일지 작성중 — 생산일지 작성완료 막힘(R25)', expect: '400 COMPLETION_INCOMPLETE · PLG-CMP 도식에서 PLG-CMP-03c 뒤 실패(롤백) · details code ccp_not_completed(sections[steps#n].kind, "CCP-2B 일지를 먼저 작성완료하세요(지금 작성중 …)") 1건 · ④ 상태 draft 그대로',
+      prepare: async () => {
+        const m = await plgFixture({ scenario: 'used', template: '효력환', fill: true, ccp_draft: 'CCP-2B' });
+        return { func: 'plgComplete', staff: '1', id: String(m.prod_log_id), body: J({ expected_version: m.version }) };
+      } }),
+  );
+
   // ---------------------------------------------------------------- 작성 요구 화면에서 연 trace (?trace=<id>, REQ-SC-04)
   function guessFlow(trace) {
     const path = (trace.path || '').split('?')[0];
@@ -1901,7 +2043,7 @@
     $('#dcStaff').addEventListener('change', (e) => api.setStaff(e.target.value));
     $('#dcFunc').innerHTML = Object.entries(FUNCS).map(([k, f]) => `<option value="${k}">${esc(f.label)}</option>`).join('');
     const group = (unit, label) => `<optgroup label="${label}">${PRESETS.filter((p) => (p.unit || p.id.split('-')[0]) === unit).map((p) => `<option value="${p.id}">${p.id} ${esc(p.label)}</option>`).join('')}</optgroup>`;
-    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)') + group('FILE', '파일 업로드 (스프린트 3)') + group('P8', '점검표·작성 안 함 (P8)') + group('P9', '주기형 작성 요구 (P9)') + group('P10', '문서함·결재함 (P10)') + group('P11', 'CCP 대시보드 (P11)') + group('ROLE', '역할 기반 결재 (P14)') + group('P12', '출력 (P12)');
+    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)') + group('FILE', '파일 업로드 (스프린트 3)') + group('P8', '점검표·작성 안 함 (P8)') + group('P9', '주기형 작성 요구 (P9)') + group('P10', '문서함·결재함 (P10)') + group('P11', 'CCP 대시보드 (P11)') + group('ROLE', '역할 기반 결재 (P14)') + group('P12', '출력 (P12)') + group('PLG', '생산일지 (P15)');
     $('#dcFunc').addEventListener('change', () => { state.preset = null; toggleInputs(); });
     ['#dcId', '#dcQuery', '#dcBody', '#dcDocId'].forEach((sel) => $(sel).addEventListener('input', () => { if (state.preset && state.preset.script) state.preset = null; }));
     $('#dcLoadPreset').addEventListener('click', loadPreset);
@@ -1909,6 +2051,7 @@
     $('#dcOnlyChanged').addEventListener('change', () => { if (!state.active) return; if (state.active.entries) showTotal(state.active); else renderDb(state.active); });
     const flows = await devGet('/api/dev/flows');
     state.flows = flows ? flows.flows : {};
+    state.optional = flows && flows.optional ? flows.optional : {};  // P15 S5b r1 — {흐름: [단계]}
     state.batch = (flows && flows.batch) || {};
     toggleInputs();
     renderHistory();

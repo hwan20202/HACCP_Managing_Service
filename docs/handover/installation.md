@@ -125,6 +125,8 @@ $env:HACCP_ENV_FILE = '.env.production'
 # 검증 결과와 실제 자료를 확인한 뒤 반영
 .\.venv\Scripts\python.exe backend/manage.py seed_master --staff data/import/staff.csv --suppliers data/import/suppliers.csv --items data/import/items.csv --settings=config.settings.production
 .\.venv\Scripts\python.exe backend/manage.py install_document_templates --settings=config.settings.production
+# 생산일지를 쓸 때 한 번(아래 ‘생산일지 설치’)
+.\.venv\Scripts\python.exe backend/manage.py install_document_templates --production-log --settings=config.settings.production
 Remove-Item Env:HACCP_ENV_FILE
 ```
 
@@ -223,12 +225,20 @@ schtasks /Run /TN "HACCP 주기 문서"      # 한 번 실행해 로그 확인
 
 상신하면 결재선이 역할 설정 파일로 자동으로 만들어집니다(HACCP팀장·양식별 담당자·양식별 결재 칸). 기본 파일 `backend/apps/staff/roles.json`에는 가상 개발 직원(DEV-001~005)만 있으므로 운영에서는 실제 직원 코드로 만든 파일을 지정합니다.
 
-1. `backend/apps/staff/roles.json`을 `C:\HACCPData\roles.json`으로 복사해 직원 코드(`staff_code`)를 고칩니다. 형식: `{"version": 1, "haccp_leaders": [코드...], "forms": {"양식유형": {"owners": [코드...], "writers": [코드...], "slots": "owner" | "owner_leader" | "leader", "labels": {"owner": "작성자"}}}}`(`writers`·`labels`는 선택). `writers`(작성 권한자)는 그 양식을 작성·상신할 수 있고, 결재 칸 후보가 아니며 정정 시작·점검자 지정은 하지 않습니다. 역할이 없는 직원은 읽기만 합니다(그 문서의 점검자로 지정되면 그 문서는 작성). 형식 오류일 때 작성 권한은 검사하지 않습니다(현장 기록이 멈추지 않게 — 상신·정정만 409).
+1. `backend/apps/staff/roles.json`을 `C:\HACCPData\roles.json`으로 복사해 직원 코드(`staff_code`)를 고칩니다. 형식: `{"version": 1, "haccp_leaders": [코드...], "forms": {"양식유형": {"owners": [코드...], "writers": [코드...], "slots": "owner" | "owner_leader" | "leader" | "none", "labels": {"owner": "작성자"}}}}`(`writers`·`labels`는 선택, `"none"`은 결재 없는 양식 — 생산일지 `PROD-LOG`). `writers`(작성 권한자)는 그 양식을 작성·상신할 수 있고, 결재 칸 후보가 아니며 정정 시작·점검자 지정은 하지 않습니다. 역할이 없는 직원은 읽기만 합니다(그 문서의 점검자로 지정되면 그 문서는 작성). 형식 오류일 때 작성 권한은 검사하지 않습니다(현장 기록이 멈추지 않게 — 상신·정정만 409).
 2. `.env.production`에 `HACCP_ROLES_FILE=C:/HACCPData/roles.json`을 넣습니다.
 3. 서비스를 다시 시작합니다(설정 파일은 서버 시작 뒤 처음 쓸 때 한 번 읽습니다 — 파일을 바꾸면 재시작해야 반영). 직원 등록·비활성(직원 마스터 가져오기)은 재시작 없이 바로 반영됩니다 — 비활성 직원은 역할에서 빠지고, 칸을 처리할 사람이 0명이 되면 그 양식은 상신이 막힙니다.
 4. `backend\manage.py check --settings=config.settings.production`으로 확인합니다. 형식 오류는 Error(`document_workflow.E002` — 이 상태로는 모든 상신이 409로 막힘), 없는 코드·비활성 직원·처리할 사람이 없는 칸은 Warning(`W002`)입니다. 화면에서는 [역할 보기](`GET /api/v1/roles`)에서 같은 내용을 봅니다.
 5. 역할 파일은 아래 5장 백업 명령에 들어가지 않습니다. 고치기 전에 같은 폴더에 날짜를 붙인 사본(예: `roles.2026-10-20.json`)을 남기고, 별도 백업에 포함합니다. 회차마다 결재 후보·처리한 사람은 DB에 저장되므로 지난 결재 기록은 DB 백업으로 남습니다.
 6. 이 기능의 DB 변경(결재 칸 표 다시 만들기, `approvals` 0003)은 적용 전에 5장 백업을 먼저 합니다. 0003을 되돌리는 마이그레이션은 역할 칸이 있는 DB에서는 실패하므로, 되돌리기는 백업 복구로 합니다.
+
+### 생산일지 설치(생산 기준정보·`PROD-LOG`)
+
+1. 적용 전에 5장 백업을 먼저 합니다. 마이그레이션 순서는 수불 `inventory` 0009(생산일지 계약 뷰) → `production_log` 0001(공정·템플릿·변경 이력 표 4개) → 0002(기본 제공 공정 5종: 쇳가루 제거·건조·금속검출기·내포장·외포장)입니다. `init`·`migrate`가 함께 적용합니다. 운영 DB에 직원이 없어도 들어갑니다(만든 사람 = 시스템).
+2. 생산일지 양식(`PROD-LOG`)은 기본 양식 설치에 들어가지 않습니다. 생산일지를 쓰기 시작할 때 한 번 `install_document_templates --production-log`를 실행합니다(위 ‘최초 업무 설정’). 설치한 뒤 작성 요구(생산 시작)가 실행되는 제조 배치부터 생산일지가 만들어지고, 설치 전에 시작한 배치는 작성 요구를 다시 실행하면 그때 만들어집니다.
+3. 역할 파일에 `"PROD-LOG": {"owners": [...], "slots": "none"}`을 넣습니다(결재 없음). 없으면 HACCP팀장만 작성합니다.
+4. 일반 공정·공정 템플릿은 운영에서 현업이 [생산 기준정보] 화면으로 등록합니다. 개발 시드 `seed_dev_production_master`·`seed_dev_prodlog`는 개발 설정(DEBUG)에서만 실행됩니다.
+5. 0002를 되돌려도 기본 제공 공정은 지우지 않습니다(기준 데이터). 앱 전체를 되돌리면(`migrate production_log zero`) 0001이 표를 지웁니다. 운영에서 되돌리기는 백업 복구로 합니다.
 
 ## 4. 코드 업데이트
 

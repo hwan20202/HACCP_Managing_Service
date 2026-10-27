@@ -400,7 +400,9 @@ class Command(BaseCommand):
             )
         if batch.status == "PLANNED":
             start_batch(batch_id=batch.pk, staff_id=self.staff.pk)
-        assert len(docs_for_batch(batch.pk)["documents"]) == 3
+        # ISS-064(P15): 생산일지 양식을 설치하면 생산일지도 연결 문서 — CCP 일지만 센다
+        linked = docs_for_batch(batch.pk)["documents"]
+        assert len([d for d in linked if str(d["type_code"]).startswith("CCP-")]) == 3
         return batch
 
     def use(self, batch, lot, quantity, label, bom_line_id=None):

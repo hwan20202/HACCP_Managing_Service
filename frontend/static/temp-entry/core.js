@@ -18,7 +18,7 @@
 
   // P10(p10-s1-screens 2장): 문서함·결재함의 화면 id. 예전 temp-doc·temp-approval(북마크·콘솔 링크)도 같은 화면으로
   const PAGE_ALIAS = { 'temp-doc': 'doc-box', 'temp-approval': 'approval-box' };
-  const BOX_PAGES = ['doc-box', 'approval-box', 'ccp-dashboard', 'role-view'];  // P11: CCP 대시보드(p11-s2-spec 4장) · P14: 역할 보기(S1-Q3)
+  const BOX_PAGES = ['doc-box', 'approval-box', 'ccp-dashboard', 'role-view', 'prod-master'];  // P15: 생산 기준정보  // P11: CCP 대시보드(p11-s2-spec 4장) · P14: 역할 보기(S1-Q3)
   const pageOf = (page) => PAGE_ALIAS[page] || page;
 
   const TempEntry = {

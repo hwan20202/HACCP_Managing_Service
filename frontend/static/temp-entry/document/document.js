@@ -564,7 +564,7 @@
               <td>${d.work_date}</td>
               <td>${T.authorHtml(d, { short: true })}</td>
               <td>${T.peopleHtml(T.ownersOf(d.template.type_code))}</td>
-              <td>${statusCell(d.status, d.correcting)}</td>
+              <td>${statusCell(d.status, d.correcting)}${d.template.type_code === 'PROD-LOG' ? ' <span class="badge badge-neutral te-no-approval">결재 없음</span>' : ''}</td>
               <td>${d.requirement ? `<span class="te-req">${REQUIREMENT[d.requirement]}</span>` : '<span class="te-hint">–</span>'}</td>
               <td>${T.fmtDateTime(d.created_at)}</td>
             </tr>`).join('')}</tbody>
@@ -1726,7 +1726,11 @@
 
     // ================================================= DOC-SC-04 상세
     async showDetail(id) {
+      // P15 S5a r2(재검토 B2): 늦게 끝난 이전 상세 요청이 지금 문서 위에 그리지 않게
+      const seq = (this.detailSeq = (this.detailSeq || 0) + 1);
+      const current = () => seq === this.detailSeq;
       const r = await api.get(`documents/${id}`);
+      if (!current()) return;
       if (!r.ok) {
         this.root.innerHTML = `<div class="fade-in">${T.topBar('문서 상세', '')}<div class="card te-empty">${r.status === 404 ? '문서를 찾을 수 없습니다 (삭제되었을 수 있습니다).' : esc(T.errorText(r))}<br><br><button class="btn btn-secondary" id="btnBack">목록</button></div></div>`;
         this.rerenderTopBar(() => this.showDetail(id));
@@ -1735,7 +1739,10 @@
       }
       const d = r.data;
       const t = await api.get(`templates/${d.template.template_id}`);
+      if (!current()) return;
       const schema = t.ok ? t.data.schema : { sections: [] };
+      // P15 S5a: 양식 layout "prodlog"(생산일지)은 전용 본문(PLG-SC-01 — temp-entry/prodlog/prodlog.js, S1 Q1 a)
+      if (schema.layout === 'prodlog' && window.TempEntryProdLog) { await window.TempEntryProdLog.show(this, d, schema, current); return; }
       if (this.devDocument !== d.document_id) { this.devDrafts = []; this.devDocument = d.document_id; }
       const canEdit = EDITABLE.includes(d.status);
       const canComplete = COMPLETABLE.includes(d.status);
@@ -1751,6 +1758,7 @@
       let effective = null;
       if (fixing) {
         const h = await api.get(`documents/${d.document_id}/approval-requests`);
+        if (!current()) return;
         effective = h.ok ? h.data.items.find((x) => x.effective) || null : null;
       }
       const notes = {
@@ -1858,10 +1866,34 @@
       this.applyOpenFocus(d, schema, skipped);
       if (schema.files) this.renderFiles(d, schema);
       this.mountCoaLink(d);  // D-235
+      this.mountProdLogLink(d);  // P15 S5a: CCP 일지 머리 "생산일지 #n ↗"
       if (WEEK_TYPES.includes(d.template.type_code)) this.renderWeekStrip(d);
       // P3 결재 영역 (WF-SC-01) — temp-entry/approval/approval.js
       const area = $('#teApprovalArea');
       if (window.TempEntryApproval && !skipped) window.TempEntryApproval.mountArea(area, d, () => this.showDetail(id));
+    },
+
+    // P15 S5a(화면 8장): CCP 일지 머리 대상 줄 옆에 그 배치 생산일지 링크 + 그 일지의 이 공정 표시명. 없으면 표시 안 함
+    async mountProdLogLink(d) {
+      if (!String(d.template.type_code).startsWith('CCP-')) return;
+      const ref = (d.refs || []).find((r) => r.section_id === null && r.production_batch_id !== null);
+      if (!ref) return;
+      const target = this.root.querySelector('#teTarget');  // B3(S5a r1): 이 화면의 대상 줄 — 다른 문서로 바뀌면 붙이지 않음
+      if (!target) return;
+      const r = await api.get(`batches/${ref.production_batch_id}/documents`);
+      const log = r.ok ? (r.data.documents || []).find((x) => x.type_code === 'PROD-LOG') : null;
+      if (!log || !target.isConnected || this.root.querySelector('#teProdLogLink')) return;
+      const detail = await api.get(`documents/${log.document_id}`);
+      if (!target.isConnected || this.root.querySelector('#teProdLogLink')) return;
+      const step = detail.ok ? detail.data.sections.find((s) => s.section_def === 'steps' && s.values.kind === d.template.type_code) : null;
+      const span = document.createElement('span');
+      span.innerHTML = ` <a href="#" id="teProdLogLink" class="te-lot-link" title="이 배치의 생산일지">생산일지 #${log.document_id} ↗</a>${step && step.values.name ? ` <span class="te-hint">(${esc(step.values.name)})</span>` : ''}`;
+      target.after(span);
+      span.querySelector('a').addEventListener('click', (e) => {
+        e.preventDefault();
+        this.detailBack = { doc: d.document_id, prev: this.detailBack };
+        this.showDetail(log.document_id);
+      });
     },
 
     // 문서 내용(섹션) 읽기 전용 표시. 결재 요청 상세(WF-SC-04)도 스냅샷을 이 함수로 그린다.

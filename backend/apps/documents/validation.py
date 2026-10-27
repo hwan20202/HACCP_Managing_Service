@@ -111,6 +111,15 @@ def check_template_schema(schema):
             or elapsed.get("verdict_field") not in keys
         ):
             problems.append(f"{where}.elapsed는 시작·종료 시각과 계산 필드가 필요합니다.")
+    # P15(p15-s2-spec 3.1): 결재 없는 양식·화면 본문·시스템 섹션
+    if "approval" in schema and not isinstance(schema["approval"], bool):
+        problems.append("approval은 true/false여야 합니다.")
+    if "layout" in schema and not (isinstance(schema["layout"], str) and schema["layout"]):
+        problems.append("layout은 글자여야 합니다.")
+    for i, section in enumerate(sections):
+        if isinstance(section, dict) and "system" in section:
+            if not isinstance(section["system"], bool):
+                problems.append(f"sections[{i}].system은 true/false여야 합니다.")
     if "requirement_only" in schema and not isinstance(schema["requirement_only"], bool):
         problems.append("requirement_only는 true/false여야 합니다.")
     if "skippable" in schema and not isinstance(schema["skippable"], bool):
@@ -508,6 +517,8 @@ def completion_problems(schema, rows, *, deviation_count, file_count):
             by_section[key].append((row_no, values))
     nonconforming = False
     for key, section in sections.items():
+        if section.get("system"):
+            continue  # P15: 시스템 섹션은 작성완료 신호 뒤 시스템이 씀(N13)
         label = section.get("label", key)
         items = sorted(by_section[key], key=lambda item: item[0])
         if not section["repeat"] and len(items) != 1:
@@ -657,3 +668,8 @@ def check_counts(schema, values_by_key):
             value = values.get(field["key"])
             counts[value if value in ("O", "X", NA) else "blank"] += 1
     return counts if found else None
+
+
+def is_system_section(section):
+    """P15: 양식 섹션 `system: true` — 사용자 쓰기 금지(N13으로만 씀)."""
+    return bool(section and section.get("system"))

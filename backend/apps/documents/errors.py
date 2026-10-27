@@ -150,3 +150,13 @@ class AlreadyChecked(DocumentError):
 class NotChecker(DocumentError):
     # P11 F31: 현재 사용자가 이 개선조치의 확인자가 아님 · P14 R05: 팀장도 아님
     status, code, message = 403, "NOT_CHECKER", "확인자나 HACCP팀장만 확인할 수 있습니다."
+
+
+class SystemSection(DocumentError):
+    """P15 DOC 스키마 `system: true` 섹션은 시스템만 쓴다(p15-s2-spec 3.1)."""
+
+    status, code, message = (
+        400,
+        "SYSTEM_SECTION",
+        "이 영역은 시스템이 채웁니다. 직접 쓸 수 없습니다.",
+    )

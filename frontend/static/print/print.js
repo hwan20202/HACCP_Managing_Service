@@ -1,7 +1,7 @@
 // P12 인쇄용 페이지 (PRT-SC-01~03) — GET /api/v1/print/sheet 를 종이 칸 배치로 그린다.
 // ?document_id= (CCP 단건, D03 문서면 그 입고일 장, D10 문서면 그 주) · ?kind=receiving&type=D03&date= (D03 입고일 묶음)
 // · ?kind=weekly&type=D10|D12&date= (D10·D12 주 — 그 주 아무 날) · ?kind=monthly&type=D11&month=YYYY-MM (D11 월)
-// 정책: dev-notes/print/p12-ccp-policy.md (DP-01~03), p12-d03-policy.md (DP-10·11). 출력 기록 없음, 사용자 헤더 없이 읽기만.
+// 정책: dev-notes/print/p12-ccp-policy.md (DP-01~03), p12-d03-policy.md (DP-10·11), P15 생산일지 p15-s7-print.md. 출력 기록 없음, 사용자 헤더 없이 읽기만.
 (function () {
   'use strict';
 
@@ -43,6 +43,78 @@
   function message(text, detail) {
     $('#prtRoot').innerHTML = `<div class="prt-msg">${esc(text)}${detail ? `<small>${esc(detail)}</small>` : ''}</div>`;
     $('#prtPrint').disabled = true;
+  }
+
+  // ---------------------------------------------------------------- P15 생산일지(prodlog) — p15-s7-print.md(D-255)
+  // A4 세로, 결재 칸 없음. 기본정보·원료 = 작성완료 고정 값, 점검·원료 입력·공정 = 문서 값. 넘치면 표 머리 반복.
+  const PL_CCP = ['CCP-1P', 'CCP-2B', 'CCP-3P'];
+  const plDate = (iso) => (iso ? `${iso.slice(0, 4)}. ${iso.slice(5, 7)}. ${iso.slice(8, 10)}` : '　　.　　.　　');
+  const plE6 = (v) => (v === null || v === undefined ? '' : String(Number((v / 1e6).toFixed(6))));
+  const plNum = (v) => (v === null || v === undefined || v === '' ? '' : String(Number(v)));
+  const plOx = (v) => `<span class="pl-ox${v === '적합' ? ' on' : ''}">적합</span> / <span class="pl-ox${v === '부적합' ? ' on' : ''}">부적합</span>`;
+  const plChk = (v) => `<span class="pl-chk${v === '적합' ? ' on' : ''}">적합</span>&nbsp;&nbsp; <span class="pl-chk${v === '부적합' ? ' on' : ''}">부적합</span>`;
+
+  function plStepHtml(n, v) {
+    const ccp = PL_CCP.includes(v.kind);
+    const dur = v.dur_on && v.dur_value !== null && v.dur_value !== undefined ? `&nbsp;&nbsp; 소요기간 ${esc(plNum(v.dur_value))}${esc(v.dur_unit || '')}` : '';
+    const head = `<tr><td class="l pl-sec" colspan="6"><b>${n}. ${esc(v.name)}</b>&nbsp; ( 작업일 : ${plDate(v.work_date)} )${ccp ? '&nbsp;&nbsp; <b>* 모니터링 작성</b>' : ''}${dur}</td></tr>`;
+    if (v.kind === 'OUTER') {
+      return `${head}
+        <tr><th>포장재질</th><td class="l" colspan="2">${esc(v.material)}</td><th>작업자</th><th colspan="2">특 이 사 항</th></tr>
+        <tr><th>소비기한</th><td class="l" colspan="2">${plDate(v.expiry)}</td><td rowspan="2">${sign(v.worker)}</td><td class="l pre" colspan="2" rowspan="2">${esc(v.remark)}</td></tr>
+        <tr><th>완제품수량</th><td class="l" colspan="2">${esc(plNum(v.fg_qty))} ${esc(v.fg_unit || '')}</td></tr>`;
+    }
+    let result;
+    if (v.kind === 'CCP-2B' || (v.kind === 'GEN' && v.mode === 'TEMP_TIME')) {
+      const t = v.time_min;
+      result = `온도 : ${esc(plNum(v.temp))} ℃&nbsp;&nbsp; 시간 : ${t === null || t === undefined || t === '' ? '' : minutesHm(t)}`;
+    } else if (v.kind === 'INNER' || (v.kind === 'GEN' && v.mode === 'QTY')) {
+      result = `${v.kind === 'INNER' ? '작업 ' : ''}수량 : ${esc(plNum(v.qty))} ${esc(v.qty_unit || '')}${v.spec ? `&nbsp; (${esc(v.spec)})` : ''}`;
+    } else {
+      result = plOx(v.verdict);
+    }
+    return `${head}<tr><td class="l pl-desc" colspan="3">${esc(v.desc)}</td><th>작업자</th><td>${sign(v.worker)}</td><td>${result}</td></tr>`;
+  }
+
+  function prodlogHtml(data) {
+    const d = data.document;
+    const b = d.batch || {};
+    const info = d.info || {};
+    const mats = d.materials || [];
+    const units = [...new Set(mats.map((m) => m.unit))];
+    const one = units.length === 1 ? units[0] : null;
+    const withUnit = (v, m) => (v === '' ? '' : (one ? v : `${v} ${esc(m.unit || '')}`));
+    const sum = (key) => (one ? plE6(mats.reduce((a, m) => a + (m[key] || 0), 0)) : '');
+    const first = mats.map((m) => m.first_date).filter(Boolean).sort()[0];
+    const ratio = mats.reduce((a, m) => a + (m.ratio_e6 || 0), 0) / 1e4;
+    const matRows = mats.map((m) => `<tr>
+        <td>${esc(m.item_code)}</td>
+        <td class="l">${esc(m.item_name)}${m.alternatives ? `<div class="sm muted">대체: ${esc(m.alternatives)}</div>` : ''}</td>
+        <td>${esc(m.origin)}</td>
+        <td>${m.ratio_e6 === null || m.ratio_e6 === undefined ? '' : `${(m.ratio_e6 / 1e4).toFixed(2)}%`}</td>
+        <td class="r">${withUnit(plE6(m.standard_e6), m)}</td>
+        <td class="r">${m.used_e6 === null || m.used_e6 === undefined ? '' : withUnit(plE6(m.used_e6), m)}</td>
+        <td>${sign(m.worker)}</td><td class="l sm">${esc(m.note)}</td></tr>`).join('');
+    const pre = (data.prechecks || []).map(([key, text], i) => `<tr>${i === 0 ? `<th rowspan="${data.prechecks.length}">* 점검사항</th>` : ''}
+        <td class="l">${esc(text)}</td><td>${plChk(info[key])}</td>
+        ${i === 0 ? '<th>점 검 자</th>' : i === 1 ? `<td rowspan="${data.prechecks.length - 1}">${sign(info.inspector)}</td>` : ''}</tr>`).join('');
+    const ccp = (d.ccp_line || []).map(esc).join(' → ') || '없음';
+    return `<div class="prt-sheet pl" data-type="PROD-LOG" data-kind="prodlog">
+      <div class="pl-title">${esc(data.title)}</div>
+      <div class="pl-sub"><span><b>LOT NO :</b> ${esc(b.lot_numbers || '')}</span>
+        <span class="pl-right"><b>제 조 일 :</b> ${plDate(b.manufactured_date)}<br><b>CCP :</b> <span id="plPrintCcp">${ccp}</span></span></div>
+      <table class="prt"><colgroup><col style="width:30mm"><col><col style="width:34mm"><col style="width:34mm"></colgroup>
+        <tr><th>유형 및 제품명</th><td>${esc(b.product)}</td><th>생산지시량</th><td>${esc(b.planned)}</td></tr>
+        <tr><th>품목제조보고</th><td>${esc(b.report_no)}</td><th>실생산량</th><td>${esc(b.output)}</td></tr></table>
+      <table class="prt"><colgroup><col style="width:30mm"><col><col style="width:34mm"><col style="width:34mm"></colgroup>${pre}</table>
+      <table class="prt pl-mats"><colgroup><col style="width:17mm"><col><col style="width:15mm"><col style="width:17mm"><col style="width:19mm"><col style="width:19mm"><col style="width:22mm"><col style="width:20mm"></colgroup>
+        <thead><tr><td class="l pl-sec" colspan="8"><b>1. 원료칭량</b>&nbsp; ( 작업일 : ${plDate(first)} )</td></tr>
+        <tr><th>원료코드</th><th>원료명</th><th>원산지</th><th>비율</th><th>투입량${one ? `(${esc(one)})` : ''}</th><th>사용량${one ? `(${esc(one)})` : ''}</th><th>작업자</th><th>비 고</th></tr></thead>
+        <tbody>${matRows || '<tr><td colspan="8" class="muted">원료 없음(BOM 없음)</td></tr>'}
+        <tr><th colspan="3">합 계</th><th>${mats.length ? `${ratio.toFixed(2)}%` : ''}</th><th class="r">${sum('standard_e6')}</th><th class="r">${sum('used_e6')}</th><th colspan="2"></th></tr></tbody></table>
+      <table class="prt pl-steps"><colgroup><col style="width:30mm"><col><col style="width:16mm"><col style="width:16mm"><col style="width:24mm"><col style="width:52mm"></colgroup>
+        ${(d.steps || []).map((v, i) => plStepHtml(i + 2, v)).join('') || '<tr><td colspan="6" class="muted">공정 없음</td></tr>'}</table>
+    </div>`;
   }
 
   // ---------------------------------------------------------------- 머리(제목·결재 칸)·작성일자 줄
@@ -701,6 +773,13 @@
         return message('출력할 문서가 없습니다.', `${data.week_start} 주 · ${data.type_code} ${days.filter((d) => d.document_id).length}건${days.some((d) => d.document_id) ? ' — 모두 작성완료 전' : ''}`);
       }
       $('#prtRoot').innerHTML = weeklyHtml(data);
+      $('#prtPrint').disabled = false;
+      return undefined;
+    }
+    if (data.kind === 'prodlog') {
+      document.title = `${data.title} #${data.document.document_id}`;
+      $('#prtTitle').textContent = `${data.title} · 문서 #${data.document.document_id}`;
+      $('#prtRoot').innerHTML = prodlogHtml(data);
       $('#prtPrint').disabled = false;
       return undefined;
     }
