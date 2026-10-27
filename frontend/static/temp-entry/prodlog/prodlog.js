@@ -411,7 +411,8 @@
       return `<div class="te-pl-menu" role="menu" id="plMenu"><div class="te-pl-menu-grp">기본 제공</div>${builtins.map(btn).join('')}
         ${missing.length ? '<div class="te-pl-menu-note">CCP 공정은 이 배치에 CCP 일지가 있을 때만 넣을 수 있습니다.</div>' : ''}
         <div class="te-pl-menu-grp">일반 공정 (공정 목록)</div>${general.map((p) => `<button type="button" data-add-proc="${p.process_id}"><span>${esc(p.name)}</span><span class="te-hint">${esc(MODES[p.mode] || '')}</span></button>`).join('') || '<div class="te-pl-menu-note">사용 중인 일반 공정이 없습니다</div>'}
-        <button type="button" data-add-custom><span>직접 입력</span><span class="te-hint">이름·입력 방식 직접</span></button></div>`;
+        <button type="button" data-add-custom><span>직접 입력</span><span class="te-hint">이름·입력 방식 직접</span></button>
+        <button type="button" data-manage="process"><span>공정 목록 관리 ↗</span><span class="te-hint">생산 기준정보</span></button></div>`;
     },
 
     // ------------------------------------------------------------ 이벤트
@@ -478,6 +479,7 @@
       }));
       all('[data-add-proc]').forEach((b) => b.addEventListener('click', () => this.addProcess(Number(b.dataset.addProc))));
       all('[data-add-custom]').forEach((b) => b.addEventListener('click', () => this.addRow({ kind: 'GEN', process_id: null, name: '', mode: 'JUDGE' })));
+      all('[data-manage]').forEach((b) => b.addEventListener('click', () => this.manage(b.dataset.manage)));
       all('[data-register]').forEach((b) => b.addEventListener('click', () => this.registerProcess(Number(b.dataset.register))));
       all('[data-pull]').forEach((b) => b.addEventListener('click', () => this.pullCcp(Number(b.dataset.pull))));
       all('[data-open-ccp]').forEach((b) => b.addEventListener('click', async () => {
@@ -622,6 +624,12 @@
       T.toast(r.data.linked_existing ? `공정 목록의 "${p.name}"에 연결했습니다. [저장]을 눌러 반영하세요.` : `공정 목록에 "${p.name}"을(를) 등록했습니다. [저장]을 눌러 반영하세요.`);
       this.markDirty();
       this.render();
+    },
+
+    // S5b: 생산 기준정보로(저장 안 한 변경은 화면 이동 확인이 받음), [뒤로]는 사이드바·문서함으로
+    manage(tab) {
+      this.menu = false;
+      T.open('prod-master', { tab });
     },
 
     async pullCcp(i) {
@@ -801,8 +809,8 @@
         }).join('') : '';
         wrap.querySelector('#plLoadBody').innerHTML = `<div class="te-pl-load">
           <div class="te-pl-load-list"><input class="form-control" id="plLoadQ" placeholder="이름 검색" value="${esc(st.q)}">
-            <div class="te-pl-load-items">${list.map((t) => `<button type="button" class="te-pl-load-item${t.process_template_id === st.sel ? ' on' : ''}" data-tpl="${t.process_template_id}"><b>${esc(t.name)}</b>${last && last.process_template_id === t.process_template_id ? ' <span class="te-pl-chip-info">지난 배치</span>' : ''}<br><span class="te-hint">공정 ${t.step_count}개${t.ccp && t.ccp.length ? ` · ${esc(t.ccp.join('·'))}` : ''} · 최근 ${esc(T.fmtDateTime(t.last_used_at))}</span></button>`).join('') || '<div class="te-empty">템플릿이 없습니다</div>'}</div>
-            <div class="te-hint">템플릿은 [생산 기준정보]에서 관리합니다(S5b).</div></div>
+            <div class="te-pl-load-items">${list.map((t) => `<button type="button" class="te-pl-load-item${t.process_template_id === st.sel ? ' on' : ''}" data-tpl="${t.process_template_id}"><b>${esc(t.name)}</b>${last && last.process_template_id === t.process_template_id ? ' <span class="te-pl-chip-info">지난 배치</span>' : ''}<br><span class="te-hint">공정 ${t.step_count}개${t.ccp_kinds && t.ccp_kinds.length ? ` · ${esc(t.ccp_kinds.join('·'))}` : ''} · 최근 ${esc(T.fmtDateTime(t.last_used_at))}</span></button>`).join('') || '<div class="te-empty">템플릿이 없습니다</div>'}</div>
+            <a href="#" class="te-hint" data-manage="template">템플릿 관리 ↗</a></div>
           <div class="te-pl-load-preview"><div class="te-section-title">${st.detail ? esc(st.detail.name) : '미리보기'}</div><ol class="te-pl-preview">${preview}</ol></div></div>
           ${this.steps.length ? `<div class="te-pl-load-mode"><label class="te-check"><input type="radio" name="plMode" value="replace"${st.mode === 'replace' ? ' checked' : ''}> 바꾸기${filled ? ` <span class="te-pl-miss">입력값 있는 공정 ${filled}개가 사라집니다</span>` : ''}</label>
             <label class="te-check"><input type="radio" name="plMode" value="append"${st.mode === 'append' ? ' checked' : ''}> 덧붙이기(외포장 앞, 이미 있는 기본 제공 건너뜀)</label></div>` : ''}
@@ -811,6 +819,7 @@
         wrap.querySelectorAll('[data-tpl]').forEach((b) => b.addEventListener('click', () => { st.sel = Number(b.dataset.tpl); draw(); }));
         wrap.querySelectorAll('[name="plMode"]').forEach((b) => b.addEventListener('change', () => { st.mode = b.value; }));
         wrap.querySelector('[data-close]').addEventListener('click', () => wrap.remove());
+        wrap.querySelector('[data-manage]').addEventListener('click', (e) => { e.preventDefault(); wrap.remove(); this.manage('template'); });
         wrap.querySelector('#plLoadGo').addEventListener('click', async () => {
           wrap.remove();
           await this.applyTemplate(st.sel, this.steps.length ? st.mode : 'replace');

@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import fixtures, fixtures_p11, fixtures_s3, req_api, views
+from . import fixtures, fixtures_p11, fixtures_p15, fixtures_s3, req_api, views
 
 urlpatterns = [
     path("snapshot", views.snapshot, name="dev-snapshot"),
@@ -24,4 +24,7 @@ urlpatterns = [
     path("fixtures/periodic", fixtures_s3.periodic_fixture, name="dev-fixture-periodic"),
     # 스프린트 4 P11: CCP 대시보드(DSH-PS-*) 사전 조건
     path("fixtures/ccp", fixtures_p11.ccp_fixture, name="dev-fixture-ccp"),
+    # P15 S5b: 생산일지(PLG-PS-*) 사전 조건·연동 오류 스위치(PS-06)
+    path("fixtures/prodlog", fixtures_p15.prodlog_fixture, name="dev-fixture-prodlog"),
+    path("prodlog/link-fail", fixtures_p15.link_fail, name="dev-prodlog-link-fail"),
 ]

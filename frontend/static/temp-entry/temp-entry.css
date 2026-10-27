@@ -439,3 +439,13 @@
 .te-pl-mat th, .te-pl-mat td:nth-child(1), .te-pl-mat td:nth-child(2), .te-pl-mat td:nth-child(3) { white-space: nowrap; }
 .te-pl-mat tfoot td { font-weight: 700; background: #f8f9fa; }
 .te-pl-inspector .form-control { height: auto; }
+
+/* ---------- P15 S5b 생산 기준정보(PLG-SC-04·05) ---------- */
+.te-ms-tabs { display: flex; gap: 0.25rem; margin-bottom: 0.75rem; }
+.te-ms-tab { border: 1px solid #ced4da; background: #fff; padding: 0.4rem 1rem; border-radius: var(--radius-md); cursor: pointer; font-weight: 600; }
+.te-ms-tab.on { background: #1d4ed8; border-color: #1d4ed8; color: #fff; }
+.te-ms-acts { white-space: nowrap; }
+.te-ms-acts .btn + .btn { margin-left: 0.2rem; }
+.te-ms-ov { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.3rem 0.8rem; background: #f8f9fa; padding: 0.5rem; border-radius: var(--radius-md); }
+.te-ms-add { margin: 0.6rem 0; }
+.te-ms-add .form-control { max-width: 22rem; }

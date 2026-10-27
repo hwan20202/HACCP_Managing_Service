@@ -24,10 +24,19 @@ from apps.documents.models import (
     DocumentTemplate,
     File,
 )
+from apps.production_log.flows import CONSOLE as PLG_FLOWS
+from apps.production_log.flows import OPTIONAL as PLG_OPTIONAL
 
 from .middleware import recall
 
-FLOWS = {**DOC_FLOWS, **APR_FLOWS, **WF_FLOWS, **REQ_FLOWS, **EFF_FLOWS}
+FLOWS = {
+    **DOC_FLOWS,
+    **APR_FLOWS,
+    **WF_FLOWS,
+    **REQ_FLOWS,
+    **EFF_FLOWS,
+    **PLG_FLOWS,
+}  # P15 S5b: PLG
 BATCH = {**DOC_BATCH, **WF_BATCH}
 
 
@@ -155,6 +164,19 @@ def snapshot(request):
                     {"code": "INVALID_REQUEST", "message": f"{key}는 YYYY-MM-DD입니다."}, 400
                 )
             return _scope_snapshot(kind, _ids_on(kind, value), {key: value})
+    # P15 S5b: 기준정보(공정·템플릿) — ④ 표
+    for key in ("process_id", "process_template_id"):
+        if key in request.GET:
+            value = request.GET[key]
+            if not value.isdigit():
+                return _json({"code": "INVALID_REQUEST", "message": f"{key}는 숫자입니다."}, 400)
+            from .fixtures_p15 import master_tables
+
+            ids = {"process_id": None, "template_id": None}
+            ids["process_id" if key == "process_id" else "template_id"] = int(value)
+            tables = master_tables(**ids)
+            exists = bool(tables.get("process") or tables.get("process_template"))
+            return _json({"scope": {key: int(value)}, "exists": exists, "tables": tables})
     raw = request.GET.get("document_id", "")
     if not raw.isdigit():
         return _json({"code": "INVALID_REQUEST", "message": "document_id가 필요합니다."}, 400)
@@ -263,7 +285,9 @@ def snapshot(request):
 def flows(request, flow_id=None):
     if flow_id is None:
         # batch: P7 일괄 흐름의 머리·항목 묶음·꼬리(콘솔 항목별 비교, NFR-05)
-        return _json({"flows": FLOWS, "batch": BATCH})
+        # optional: {흐름: 조건부 단계}(도식에 있어도 없을 수 있음 —
+        # 콘솔이 그 흐름에서만 누락으로 세지 않음, P15 S5b r1)
+        return _json({"flows": FLOWS, "batch": BATCH, "optional": PLG_OPTIONAL})
     if flow_id not in FLOWS:
         return _json({"code": "NOT_FOUND", "message": "알 수 없는 흐름입니다."}, 404)
     return _json({"flow_id": flow_id, "steps": FLOWS[flow_id]})

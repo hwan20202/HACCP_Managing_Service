@@ -47,7 +47,9 @@ BOM_LINES = [
 ]
 SUPPLIER = "개발 생산일지 공급처"
 INSPECTION = {"appearance": "양호", "packaging": "양호", "labeling": "양호", "verdict": "PASS"}
-SCENARIOS = ("started", "used", "partial", "cancelled")
+SCENARIOS = ("started", "used", "partial", "cancelled", "nobom")
+# 품목 정보(유형·보고번호)·BOM 없는 반제품(PLG-PS-05)
+BARE = ("3915002", None, "SEMI", "녹용 원액(개발·정보 없음)", "kg", None, True)
 
 
 def _item(entry, extra=None):
@@ -120,10 +122,26 @@ def make(scenario, staff_id, day=None):
     used      녹용 6 kg + 녹용(러시아) 3000 g(대체·g 환산)·벌꿀·홍국균 투입, 산출 98 kg
     partial   녹용 9 kg만(나머지 미투입)
     cancelled 생산 시작 뒤 취소(투입 없음)
+    nobom     품목 정보(유형·보고번호)·BOM 없는 배치 — 수불 생산 시작은 BOM이 필요해 개발 전용 배치
+              (inventory_dev.make_batch, 직접 INSERT) + 작성 요구(REQ-F02)
     """
     if scenario not in SCENARIOS:
         raise ValueError(f"scenario: {SCENARIOS}")
     day = day or datetime.date.today()
+    if scenario == "nobom":
+        with transaction.atomic():
+            ensure_master(staff_id)
+            bare = _item(BARE)
+            batch_id = inventory_dev.make_batch(
+                item_id=bare.pk,
+                process_type="MANUFACTURE",
+                manufactured_date=day,
+                quantity_kg=50,
+                staff_id=staff_id,
+                notes=f"DEV_PRODLOG nobom {uuid.uuid4().hex[:6]}",
+            )
+            req.require_for_batch(staff_id, batch_id)
+        return _result(scenario, batch_id)
     with transaction.atomic():
         master = ensure_master(staff_id)
         items, bom, product = master["items"], master["bom"], master["product"]
@@ -176,9 +194,13 @@ def make(scenario, staff_id, day=None):
             )
     if scenario == "cancelled":
         cancel_batch(batch_id=batch.pk, staff_id=staff_id, reason="개발: 취소 배치")
-    docs = req.docs_for_batch(batch.pk)["documents"]
+    return _result(scenario, batch.pk)
+
+
+def _result(scenario, batch_id):
+    docs = req.docs_for_batch(batch_id)["documents"]
     prod_log = next((d["document_id"] for d in docs if d["type_code"] == "PROD-LOG"), None)
-    batch = ProductionBatch.objects.get(pk=batch.pk)
+    batch = ProductionBatch.objects.get(pk=batch_id)
     return {
         "scenario": scenario,
         "batch_id": batch.pk,
