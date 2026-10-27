@@ -16,7 +16,9 @@ from apps.production_log import logbook
 from .prodlog_base import TODAY, ProdLogTestCase, full_step, sql
 
 
-class CcpMatchTests(ProdLogTestCase):
+class CcpFixtures:
+    """CCP 일지 측정·상태 준비(R25·출력 테스트가 같이 씀)."""
+
     def ccp_rows(self, kind, rows, status="completed"):
         """CCP 일지에 측정 행을 넣고 상태를 바꾼다(테스트 준비 — 양식 검사는 P4 테스트 몫)."""
         document_id = self.ccp_id(kind)
@@ -63,6 +65,8 @@ class CcpMatchTests(ProdLogTestCase):
             full_step("CCP-3P", self.builtin("CCP-3P"), **override.get("CCP-3P", {})),
         ]
 
+
+class CcpMatchTests(CcpFixtures, ProdLogTestCase):
     def codes(self, error):
         return {(e["path"].split(".")[-1], e["code"]) for e in error.details}
 

@@ -81,6 +81,8 @@ FLOWS.update(
         "WF-PRT": ["WF-PRT-00", "WF-PRT-01", "WF-PRT-02", "DOC-PRT-01"]
         + ["APR-PRT-01", "APR-PRT-02", "WF-PRT-03", "WF-PRT-04"],
         "WF-PRT-NOT-PRINTABLE": ["WF-PRT-00", "WF-PRT-01", "WF-PRT-02", "DOC-PRT-01"],
+        # P15 S7 생산일지(D-255): 결재 칸 없음 — APR을 읽지 않음
+        "WF-PRT-PLG": ["WF-PRT-00", "WF-PRT-01", "WF-PRT-02", "DOC-PRT-01", "WF-PRT-08"],
         # P12 D03 입고일 묶음(p12-d03-policy.md): 조건 → [DOC N7] → [DOC N9 → APR A12] → 줄 조립.
         # 문서로 열기(-DOC)는 그 문서 상태·작업일을 먼저 본다. 문서 0건(-EMPTY)은 N9·A12 없음
         "WF-PRT-RCV": ["WF-PRT-00", *_RCV],

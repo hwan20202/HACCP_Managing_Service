@@ -143,9 +143,11 @@
       const keep = window.scrollY;
       const ro = this.ro;
       const writeOff = !api.staffId ? 'disabled title="현재 사용자를 선택하세요"' : (this.mayWrite ? '' : `disabled title="${esc(T.WRITE_WHY)}"`);
-      const buttons = this.cancelled ? '' : (d.status === 'draft'
+      // P15 S7(D-255): [출력] — 작성완료만(결재 없음), 새 탭 인쇄 페이지(P12와 같음)
+      const printBtn = `<button class="btn btn-secondary btn-sm" id="plPrint" ${this.completed ? 'title="생산일지 종이(A4 세로) — 작성완료 때 고정한 값"' : 'disabled title="작성완료 뒤 출력할 수 있습니다"'}>출력</button>`;
+      const buttons = printBtn + (this.cancelled ? '' : (d.status === 'draft'
         ? `<button class="btn btn-secondary btn-sm" id="plSave" ${writeOff}>저장</button><button class="btn btn-primary te-btn-complete btn-sm" id="plComplete" ${writeOff}>작성완료</button>`
-        : (this.completed ? `<button class="btn btn-secondary btn-sm" id="plReopen" ${writeOff}>작성 재개</button>` : ''));
+        : (this.completed ? `<button class="btn btn-secondary btn-sm" id="plReopen" ${writeOff}>작성 재개</button>` : '')));
       const savedText = d.status === 'draft' ? (this.dirty ? '저장 안 된 변경 있음' : `저장됨 ${T.fmtDateTime(d.updated_at)}`)
         : (this.completed ? `작성완료 ${T.fmtDateTime(d.completed_at)} (${T.person(d.completed_by)})` : '');
       const notes = [];
@@ -269,6 +271,18 @@
       return (this.linked && this.linked.linked && this.linked.linked.materials) || [];
     },
 
+    // 사용량 합(e6): 작성중 직접 입력 줄(재고 관리 안 하는 원료)은 입력 값을 더함 — 작성완료 고정 값과 같은 기준
+    matUsedSum() {
+      const frozen = !!this.frozenMaterials;
+      return this.matRows().reduce((a, m) => {
+        if (!frozen && m.is_stock_managed === false) {
+          const v = this.mats[m.bom_line_id] ? num(this.mats[m.bom_line_id].values.used) : null;
+          return a + (v === null || v === undefined || Number.isNaN(v) ? 0 : Math.round(v * 1e6));
+        }
+        return a + (m.used_e6 || 0);
+      }, 0);
+    },
+
     materialsHtml(ro) {
       const L = this.linked;
       const frozen = !!this.frozenMaterials;
@@ -313,9 +327,10 @@
       // 합계 줄(화면 3.4): 단위가 모두 같을 때만 투입량·사용량 합
       const units = new Set(rows.map((m) => m.unit));
       const sum = (key) => rows.reduce((a, m) => a + (m[key] || 0), 0);
+      this.matSumSame = units.size === 1;
       const foot = `<tfoot><tr id="plMatSum"><td colspan="3">합계</td><td class="te-r">${pct(sum('ratio_e6'))}</td>
         <td class="te-r">${units.size === 1 ? esc(q6(sum('standard_e6'))) : '<span class="te-hint">단위 다름</span>'}</td>
-        <td class="te-r">${units.size === 1 ? esc(q6(sum('used_e6'))) : '<span class="te-hint">—</span>'}</td><td colspan="4"></td></tr></tfoot>`;
+        <td class="te-r" data-sum-used>${units.size === 1 ? esc(q6(this.matUsedSum())) : '<span class="te-hint">—</span>'}</td><td colspan="4"></td></tr></tfoot>`;
       const allSame = ro || frozen ? '' : '<button class="btn btn-secondary btn-sm" id="plMatSame" title="첫 줄 작업자를 모든 원료에">모두 같은 사람</button>';
       return `<section class="te-pl-sec" id="plMat"><div class="te-pl-sec-head"><span class="te-pl-no">1</span><span class="te-section-title">원료칭량</span><span class="te-pl-chip-link">원료 투입에서 연동</span>${chip}<span class="te-pl-grow"></span>${allSame}</div>
         <div class="te-hint">작업일 ${dates.length ? esc(dates[0]) : '투입 전'} · 원료 투입 기록을 그대로 보여 줍니다(여기서는 고칠 수 없음). 투입 LOT 번호는 표시하지 않습니다.</div>${unlinked}
@@ -431,6 +446,7 @@
       $('#plSave')?.addEventListener('click', () => this.save());
       $('#plComplete')?.addEventListener('click', () => this.complete());
       $('#plReopen')?.addEventListener('click', () => this.reopen());
+      $('#plPrint')?.addEventListener('click', () => window.open(`/print/?document_id=${this.id}`, '_blank'));
       $('#plLoad')?.addEventListener('click', () => this.openLoad());
       $('#plPick')?.addEventListener('click', () => this.openLoad());
       $('#plQuick')?.addEventListener('click', (e) => this.applyTemplate(Number(e.currentTarget.dataset.tid), 'replace'));
@@ -460,6 +476,10 @@
         const key = el.dataset.key;
         const row = this.mats[line] || (this.mats[line] = { sid: null, values: { bom_line_id: line }, orig: {} });
         row.values[key] = key === 'worker' ? (el.value ? Number(el.value) : null) : (key === 'used' ? num(el.value) : (el.value || null));
+        if (key === 'used' && this.matSumSame) {
+          const cell = this.root.querySelector('#plMatSum [data-sum-used]');
+          if (cell) cell.textContent = q6(this.matUsedSum());
+        }
         this.markDirty();
       }));
       all('[data-step]').forEach((el) => {

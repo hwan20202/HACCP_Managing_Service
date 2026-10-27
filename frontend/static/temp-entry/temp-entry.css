@@ -437,7 +437,9 @@
 .te-pl-struck { text-decoration: line-through; color: var(--text-muted); }
 @media (max-width: 900px) { .te-pl-layout { grid-template-columns: 1fr; } .te-pl-toc { position: static; flex-direction: row; flex-wrap: wrap; } .te-pl-load { grid-template-columns: 1fr; } }
 .te-pl-mat th, .te-pl-mat td:nth-child(1), .te-pl-mat td:nth-child(2), .te-pl-mat td:nth-child(3) { white-space: nowrap; }
-.te-pl-mat tfoot td { font-weight: 700; background: #f8f9fa; }
+.te-pl-mat tfoot td { font-weight: 700; background: #f0f2f5; padding: 0.65rem 1rem; border-top: 2px solid var(--border-strong); border-right: 1px solid var(--border-subtle); vertical-align: middle; white-space: nowrap; }
+.te-pl-mat tfoot td:last-child { border-right: none; }
+.te-pl-mat thead th.te-r { text-align: right; }
 .te-pl-inspector .form-control { height: auto; }
 
 /* ---------- P15 S5b 생산 기준정보(PLG-SC-04·05) ---------- */
