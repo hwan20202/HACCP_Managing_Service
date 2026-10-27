@@ -7,7 +7,7 @@
 종료 코드: 0 실패 줄 없음 / 1 실패 줄 있음(나머지는 만들어짐)
           / 2 입력·사용자·규칙 오류 또는 예기치 못한 오류(DB 등 — 전체 롤백)
             — 아무것도 안 만듦(D-144 A1).
-운영에서는 하루 한 번(작업 시작 전) 스케줄러로 부른다 — docs/deployment.md.
+운영에서는 하루 한 번(작업 시작 전) 스케줄러로 부른다 — docs/handover/installation.md.
 """
 
 from django.core.management.base import BaseCommand, CommandError

@@ -1,7 +1,8 @@
 """Inventory -> document app hooks (document_bridge) against the real document services.
 
-Contract: docs/document-inventory-interface.md. The document app's functions run inside the
-inventory transaction: their errors roll the inventory change back.
+Contract: docs/reference/document-inventory-interface.md.
+The document app's functions run inside the inventory transaction:
+their errors roll the inventory change back.
 """
 
 import datetime

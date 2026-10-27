@@ -1,9 +1,9 @@
 # HACCP Managing Service
 
-사내 HACCP 관리 시스템입니다. 입고 → 제조 생산 → 벌크 반제품 산출 → 재고·수불 조회를 서버 API와 연결했습니다. 개인별 로그인·역할 권한과 판매 포장·출하 흐름은 이번 MVP에 포함하지 않습니다.
+사내 HACCP 관리 시스템입니다. 입고 → 제조 생산 → 벌크 반제품 산출 → 재고·수불 조회를 서버 API와 연결했습니다. 문서 작성·결재에는 역할별 권한을 적용하며, 개인별 로그인과 판매 포장·출하 흐름은 이번 MVP에 포함하지 않습니다.
 
-- [현재 구현과 QA 배포 인계](docs/inventory-production-handoff-20261019.md): 작업 브랜치에서 구현한 기능, 로컬 패키지 전송 방식, 배포 자동화와 후속 작업
-- [주요 기능 사용 안내](docs/pm-user-qa-guide-20261019.md): 조회·입고·생산의 간단한 사용 예시
+- [최종 전달 자료](docs/handover/README.md): 이사님 안내·사용법·설치·운영·개발 인수인계
+- [전체 문서 목차](docs/README.md): 전달본·참고 명세·개발 기록 구분
 
 ## 1. 기술 스택
 
@@ -114,7 +114,7 @@ python scripts/project.py run                   # 개발 서버 (Ctrl+C로 종�
 | DB 셸 (`sqlite3` 프로그램 필요) | `python backend/manage.py dbshell` |
 | 정적 파일 수집 (실제 운영 환경) | `python scripts/project.py --env-file .env.production --production collectstatic` |
 
-마이그레이션 명령은 `init`으로 초기화한 뒤 사용합니다. 운영 명령은 [배포 안내](docs/deployment.md)에 따라 `.env.production`을 준비한 상태를 전제로 합니다.
+마이그레이션 명령은 `init`으로 초기화한 뒤 사용합니다. 운영 명령은 [배포 안내](docs/handover/installation.md)에 따라 `.env.production`을 준비한 상태를 전제로 합니다.
 
 ### 모델을 바꿀 때
 
@@ -166,7 +166,7 @@ python scripts/project.py run                   # 개발 서버 (Ctrl+C로 종�
 - 값의 우선순위: 프로세스 환경변수 → 선택한 환경 파일 → 코드 기본값
 - `project.py`는 기본적으로 `.env`를 읽습니다. `--production`만으로 `.env.production`을 선택하지 않으므로, 실제 운영에서는 명령 앞에 `--env-file .env.production --production`을 붙입니다. `manage.py`에서 환경 파일을 바꾸려면 `HACCP_ENV_FILE` 환경변수를 지정합니다.
 - 환경 파일 경로와 `HACCP_DATA_DIR`의 상대 경로는 프로젝트 최상위 폴더 기준입니다.
-- 운영 구성(Caddy·Waitress·Windows 서비스)은 [배포 안내](docs/deployment.md)를 따릅니다.
+- 운영 구성(Caddy·Waitress·Windows 서비스)은 [배포 안내](docs/handover/installation.md)를 따릅니다.
 
 ## 7. 자주 겪는 문제
 
@@ -185,14 +185,14 @@ python scripts/project.py run                   # 개발 서버 (Ctrl+C로 종�
 
 | 문제 | 영향 | 보완 단계 |
 |---|---|---|
-| 로그인·권한 없음 | 사내망 누구나 데이터 열람 | 2 |
+| 개인별 로그인 없음 | 사용자 선택과 문서 역할 검사는 있으나 본인 인증은 없음. 접속 범위 관리 필요 | 2 |
 | 일부 시제품 메뉴는 실제 업무 데이터와 미연결 | 입고·생산·재고의 서버 저장 범위와 다른 메뉴를 구분해야 함 | 3 |
 | 실제 자료 `data.js`가 Git에 포함 | 저장소 접근자가 열람 가능. 나중에 파일을 삭제해도 이전 커밋에는 남음 | 1 (비공개 확인), 3 (DB로 대체) |
 | SQLite 기반 운영 확장 검토 | WAL·IMMEDIATE 트랜잭션은 적용됨. 단일 서버 로컬 디스크 전제를 운영 환경에서 확인 | 4 |
 | HTTPS 운영 시 직접 헬스체크 301, 실제 접속자 IP 미전달 | Waitress의 HTTP 주소를 감시하면 리다이렉트됨. Django는 프록시 IP를 받음 | 1 |
-| 정적 파일 버전 관리 없음 | 배포 후 이전 JS·CSS가 남을 수 있음 | 4 |
-| 배포·백업 자동화 후속 필요 | QA 재배포의 백업·복원 스크립트는 있으나 CI 서버 배포·정기 백업·복구 실습은 별도 | 4 |
-| macOS CI의 서버 시작 확인 실패 | DNS 지연을 주입해 동일 증상 재현 후 자동검사 서버 수정. 로컬 검증 통과, 수정본의 GitHub CI 재실행 필요 | 1 |
+| 정적 파일 갱신 확인 | QA 자동 배포는 버전별 정적 파일을 사용. 다른 설치 환경은 collectstatic과 갱신 확인 필요 | 4 |
+| 운영 환경별 배포·백업 설정 필요 | QA 코드 자동 배포는 구현됨. 실제 운영의 정기 백업·복구 실습·DB 변경 배포는 별도 확인 | 4 |
+| 초기 macOS CI 시작 지연 기록 | DNS 지연을 피하는 자동검사 서버 수정이 있음. 현재 CI 결과는 대상 커밋에서 확인 | 1 |
 
 | 단계 | 작업 |
 |---|---|
@@ -201,12 +201,15 @@ python scripts/project.py run                   # 개발 서버 (Ctrl+C로 종�
 | 3. 업무 기능 | 업무 앱별 모델, 엑셀 이관, `data.js`를 DB 데이터로 대체 |
 | 4. 운영 | Windows 서비스 검증, 정적 파일 버전 관리, 자동 백업·복구 훈련 |
 
-초기 CI 문제의 확인 범위와 실행 링크는 [검증 기록](docs/verification.md)에 있습니다. 현재는 업무 앱별 마이그레이션을 사용합니다. 인증 앱을 추가할 때 사용자 모델과 의존 관계를 먼저 설계합니다.
+초기 CI 문제의 확인 범위와 실행 링크는 [검증 기록](docs/history/qa/verification.md)에 있습니다. 현재는 업무 앱별 마이그레이션을 사용합니다. 인증 앱을 추가할 때 사용자 모델과 의존 관계를 먼저 설계합니다.
 
 ## 9. 관련 문서
 
-- [배포 안내](docs/deployment.md): 운영 서버·Windows 서비스·HTTPS·백업
-- [구조 안내](docs/architecture.md): 구조와 확장 기준
+- [이사님 전달 안내](docs/handover/overview.md): 사용 기능·업무 규칙·현장 확인사항 (2026-10-27)
+- [기술 인수인계 자료](docs/handover/developer-guide.md): 개발·운영 담당자용 상세 근거와 확인사항
+- [문서 목차](docs/README.md): 목적별 문서와 최신 변경 근거
+- [배포 안내](docs/handover/installation.md): 운영 서버·Windows 서비스·HTTPS·백업
+- [구조 안내](docs/reference/architecture.md): 구조와 확장 기준
 - [협업 안내](CONTRIBUTING.md): 브랜치·PR·DB 변경 규칙
-- [검증 기록](docs/verification.md): 검증 환경과 결과
+- [검증 기록](docs/history/qa/verification.md): 검증 환경과 결과
 - [자료 안내](data/README.md): `data/` 폴더 구성
