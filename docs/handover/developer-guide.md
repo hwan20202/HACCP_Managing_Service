@@ -35,6 +35,8 @@
 | 출력 | 생산지시서·수불·현재고의 선택 인쇄/PDF, HACCP 문서 출력, 증빙 원본 미리보기·인쇄 | [선택 인쇄](../history/qa/qa-bulk-print-20261024.md), [문서 출력 P12](../reference/document-decisions.md) |
 | 생산일지 데이터 제공 | 식품유형·품목제조보고번호, BOM 구성·계획 기준량, 실제 투입·정정량 조회 뷰 | [생산일지 조회 데이터](../history/qa/qa-production-journal-sources-20261023.md), [추가 계약·M8a 후속](../reference/inventory-document-interface.md#생산일지-추가-계약-2026-10-23-0009) |
 
+문서·결재 기능의 화면 흐름은 [문서 기능 안내](guide/document-guide.md), 요청·응답은 [문서 API](api/document.md), 저장 구조는 [문서 ERD](erd/document.md)를 봅니다.
+
 생산일지는 **수불 쪽 조회 데이터 제공**과 **문서 쪽 화면·서류 완성**을 구분합니다. 문서 쪽(앱 `production_log` — 생산일지 화면·생산 기준정보·작성완료 고정·출력)은 P15로 구현했고, 결정·화면 설명은 [문서 결정사항](../reference/document-decisions.md) 10장·[문서 상세 사용설명서](../reference/document-user-guide.md) 10장에 있습니다.
 
 기술 경계: 문서 쪽은 수불 표를 직접 읽지 않고 `v_doc_*` 뷰 4개로 읽습니다. 입고 등록·취소와 생산 시작은 수불 쪽이 문서 작성 요구를 같은 트랜잭션에서 호출하고, D03 작성완료는 문서 쪽이 수불 판정 함수를 호출합니다. 상신·결재는 `document_workflow`가 `documents`와 `approvals`를 한 트랜잭션으로 묶습니다([연동 뷰](erd/views.md) · [문서·수불 인터페이스](../reference/document-inventory-interface.md)).
