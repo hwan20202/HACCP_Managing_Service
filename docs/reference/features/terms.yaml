@@ -1,0 +1,91 @@
+# 용어 데이터 — 사람용: docs/handover/guide/document-guide.md 9장
+# kind: role | document | state | approval | haccp | inventory
+# scope: 그 말이 붙는 대상 (system | form | document | deviation_action | approval_request | slot)
+# screens: role-view·ccp-dashboard는 메뉴 data-page, 나머지(approval-line 등)는 화면 안 영역 — 화면 ID는 H1 screens.yaml에서 확정
+# 기준: main 2234f02 (2026-10-27)
+
+- id: T-ROLE-LEADER
+  label: HACCP팀장
+  kind: role
+  scope: system
+  set_by: roles_file
+  code:
+    config_key: haccp_leaders
+    slot_role: leader
+    label_default: backend/apps/staff/roles.py::DEFAULT_LABELS
+  can: [write_any, submit_any, start_correction, assign_inspector, check_any_deviation, cancel_others_submission]
+  approves: leader_slot
+  screens: [role-view, approval-line, deviation-row]
+  features: [F-WF-02, F-WF-04, F-WF-05, F-ROLE-01]
+  decisions: [D-182]
+  confusable: []
+
+- id: T-ROLE-OWNER
+  label: 담당자
+  kind: role
+  scope: form            # 문서가 아니라 양식에 붙는다. "문서의 담당자" = 그 양식의 담당자
+  set_by: roles_file
+  code:
+    config_key: forms.<type_code>.owners
+    slot_role: owner
+    label_override: forms.<type_code>.labels.owner   # 예: D10 "작성자"
+  can: [write, submit, start_correction, assign_inspector]
+  approves: owner_slot
+  screens: [role-view, approval-line, current-user]
+  features: [F-WF-01, F-WF-02, F-WF-05, F-ROLE-01]
+  decisions: [D-182]
+  confusable: [T-ROLE-WRITER, T-ROLE-INSPECTOR, T-WORD-AUTHOR]
+
+- id: T-ROLE-WRITER
+  label: 작성 권한자
+  kind: role
+  scope: form
+  set_by: roles_file
+  optional: true
+  code:
+    config_key: forms.<type_code>.writers
+  can: [write, submit, resubmit]
+  approves: null         # 결재 칸 후보가 아님
+  screens: [role-view]
+  features: [F-WF-01, F-WF-03, F-ROLE-01]
+  decisions: [D-198, D-201]
+  confusable: [T-ROLE-OWNER]
+
+- id: T-ROLE-INSPECTOR
+  label: 점검자
+  kind: role
+  scope: document
+  set_by: [T-ROLE-OWNER, T-ROLE-LEADER]
+  code:
+    stored: document 기본정보(inspector)   # 확인 필요: 필드 이름·위치(H5)
+    ui: frontend/static/temp-entry/document/document.js
+  can: [write_this_document]   # 상신은 역할이 있을 때만
+  required_on: [D03, D10, D11, D12]
+  screens: [document-header, batch-inspector]
+  features: [F-DOC-05, F-WF-06]
+  decisions: [D-201]
+  confusable: [T-ROLE-CHECKER, T-ROLE-OWNER]
+
+- id: T-ROLE-CHECKER
+  label: 확인자
+  kind: role
+  scope: deviation_action
+  set_by: system         # 개선조치 저장 때 그 양식 담당자 + HACCP팀장, 최대 10명(담당자 먼저)
+  code:
+    table: deviation_checker   # backend/apps/documents/models.py
+  can: [check_deviation, edit_deviation]
+  approves: null         # 결재와 별개, 결재를 막지 않음
+  empty_case: 저장 + 경고 checker_warning, HACCP팀장이 확인
+  screens: [deviation-row, ccp-dashboard]
+  features: [F-CCP-03]
+  decisions: [D-199, D-202, D-205]
+  confusable: [T-ROLE-INSPECTOR]
+
+- id: T-WORD-AUTHOR
+  label: 작성자
+  kind: confusable_word  # 한 글자에 뜻이 여러 개 — 새 화면에서 쓰기 전에 확인
+  meanings:
+    - {ref: T-ROLE-OWNER, where: D10 결재 칸 이름(labels.owner)}
+    - {ref: null, where: 문서를 실제로 쓴 사람(목록·기본정보)}
+    - {ref: null, where: 작성 요구로 만든 문서 — "작성 요구(자동)" + "실행 ○○"}
+  issue: null            # 용어 정리 이슈로 올릴지 결정 필요

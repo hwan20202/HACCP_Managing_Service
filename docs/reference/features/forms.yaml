@@ -1,0 +1,42 @@
+# 양식 데이터 — 사람용: docs/handover/guide/document-guide.md 8장
+# 기준: main 2234f02 (2026-10-27)
+
+- type_code: D03
+  name: 원료/부자재 육안검사일지
+  status: done
+  guide: docs/handover/guide/document-guide.md#83-원료부자재-육안검사일지-d03
+  schema:
+    current: backend/apps/documents/seed_forms.py::D03_V2
+    previous: [D03]                      # v1 (LOT 묶음 문서, P6a 전)
+  created_by:
+    trigger: incoming_receipt            # 입고 LOT 등록
+    function: backend/apps/doc_requirements/services.py::require_for_lot
+    unit: lot                            # record_key "D03|lot:<id>" (rules.lot_key)
+    manual_create: false                 # requirement_only
+    with: [D01, D02]
+    auto_fill:
+      inspector: receiving_actor         # D-233 Q1 b, 점검자 지정 권한 예외
+      on_pass: {appearance: 양호, packaging: 양호, labeling: 양호, verdict: PASS}   # D-231
+      auto_complete: on_pass             # _complete_pass, 막히면 작성중 유지 (auto_completed·completion_error)
+  fields:
+    required: [inspector, appearance, packaging, labeling, verdict]
+    readonly: [입고 정보 7개]
+    system: [has_coa]                    # D-234 r1, 상신 잠금 때 덮어씀 (DOC-LCK-01c)
+  nonconforming: {verdict: FAIL}         # 개선조치 1건 이상
+  effects:
+    on_complete: 수불 apply_incoming_judgment (EFF)   # 거부 시 INVENTORY_REJECTED
+  approval:
+    slots: owner_leader                  # roles.json 기본값
+    batch: true                          # HACCP_BATCH_TYPES
+    print_box_labels: {group: 기록확인, leader: 팀장}   # print_forms.BOX_LABELS·BOX_GROUPS
+  views:
+    - {screen: doc-box}
+    - {screen: receiving-bundle, id: DOC-SC-10, design: D-232 r1~r5}
+    - {screen: lot-documents, id: REQ-SC-05, from: D-236}
+  print:
+    sheet: receiving                     # print_forms.PRINT_SHEETS
+    tests: backend/apps/document_workflow/tests/test_p12_d03_print.py
+  features: [F-REQ-01, F-WF-01, F-WF-06, F-PRT-01]
+  decisions: [D-084, D-231, D-232, D-233, D-234, D-235, D-236]
+  on_cancel: 입고 취소 시 D01·D02·D03 연쇄 소프트 딜리트 (D-178) — backend/apps/doc_requirements/services.py::delete_lot_documents, tests/test_lot_cancel.py
+  open: []
