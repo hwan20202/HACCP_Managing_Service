@@ -164,9 +164,17 @@ Remove-Item Env:HACCP_ENV_FILE
 
 `init`은 폴더 생성과 DB 마이그레이션을 수행합니다. 실제 직원·품목·재고나 기본 문서 양식을 모두 채워주는 명령은 아닙니다.
 
-**전달 초기 DB를 쓰는 경우에는 품목·공급처·BOM과 기본 양식이 이미 있습니다.** 아래 전체 기준정보 CSV 적재를 반복하지 말고, 실제 직원 CSV를 준비해 `seed_master --staff data/import/staff.csv --dry-run`으로 확인한 뒤 `--dry-run`을 빼고 반영합니다. 이때도 아래 예시와 같은 환경 파일·운영 설정을 지정합니다. 직원 CSV의 `staff_code`는 역할 파일에서 참조하는 코드와 맞춰야 합니다.
+**전달 초기 DB를 쓰는 경우에는 품목·공급처·BOM과 기본 양식이 이미 있고, 실제 직원·역할은 없습니다.** 전체 기준정보 CSV와 기본 양식 설치를 반복하지 말고, 실제 직원 CSV를 준비해 아래처럼 미리 확인한 뒤 반영합니다. 경로는 준비한 파일에 맞게 바꿉니다. 직원 CSV의 `staff_code`는 역할 파일에서 참조하는 코드와 맞춰야 합니다.
 
-아래 전체 CSV 예시는 초기 DB 없이 새로 구성하거나 현업이 승인한 기준정보를 갱신할 때 사용합니다. 기존 정보를 덮어쓰는 코드가 없는지 먼저 확인합니다.
+```powershell
+$env:HACCP_ENV_FILE = '.env.production'
+.\.venv\Scripts\python.exe backend/manage.py seed_master --staff data/import/staff.csv --dry-run --settings=config.settings.production
+# 검증 결과와 실제 직원 자료를 확인한 뒤 반영
+.\.venv\Scripts\python.exe backend/manage.py seed_master --staff data/import/staff.csv --settings=config.settings.production
+Remove-Item Env:HACCP_ENV_FILE
+```
+
+아래 전체 CSV와 기본 양식 설치 예시는 **초기 DB 없이 새로 구성할 때** 사용합니다. 전달 초기 DB의 기준정보를 갱신해야 한다면 바뀌는 자료와 기존 정보를 먼저 대조합니다.
 
 1. 실제 직원·공급처·품목 CSV를 준비합니다. 헤더 양식은 `backend/apps/inventory/seed/templates/`에 있습니다. 아래 경로는 준비할 파일의 예시입니다. 같은 코드의 기존 정보는 갱신되므로 먼저 `--dry-run`으로 확인합니다.
 
@@ -176,14 +184,12 @@ $env:HACCP_ENV_FILE = '.env.production'
 # 검증 결과와 실제 자료를 확인한 뒤 반영
 .\.venv\Scripts\python.exe backend/manage.py seed_master --staff data/import/staff.csv --suppliers data/import/suppliers.csv --items data/import/items.csv --settings=config.settings.production
 .\.venv\Scripts\python.exe backend/manage.py install_document_templates --settings=config.settings.production
-# 생산일지를 쓸 때 한 번(아래 ‘생산일지 설치’)
-.\.venv\Scripts\python.exe backend/manage.py install_document_templates --production-log --settings=config.settings.production
 Remove-Item Env:HACCP_ENV_FILE
 ```
 
 2. 아래 ‘역할 설정’에 따라 실제 직원 코드로 역할 파일을 준비합니다. 기본 문서 양식은 참고 양식이므로 현업 기준과 대조합니다. 필요한 양식이 없거나 비활성이면 입고·생산 시작이 실패할 수 있습니다.
 3. `.env.production`에 `HACCP_DOC_MENU=haccp`를 추가하면 문서함·결재함·CCP 대시보드를 HACCP 관리 메뉴에서 사용할 수 있습니다. 개발 콘솔 노출과는 별도 설정입니다.
-4. 슬랙 공유 최종 BOM의 파일과 최종본 여부를 바이오닷과 확인하고 생산 화면의 BOM 관리에서 등록합니다. 일괄 변환·적재가 필요하면 설치 담당자가 입력 형식 검증과 별도 가져오기 절차를 준비합니다. `init`·`migrate`와 위 CSV 명령은 실제 BOM·기초재고를 자동으로 가져오지 않습니다.
+4. 전달 초기 DB를 쓴다면 이미 등록된 BOM 85개·322행을 원본·등록 목록과 대조합니다. **초기 DB 없이 시작하거나 승인된 변경분이 있을 때만** 생산 화면의 BOM 관리에서 등록·수정합니다. 일괄 변환·적재가 필요하면 설치 담당자가 입력 형식 검증과 별도 가져오기 절차를 준비합니다. `init`·`migrate`와 위 CSV 명령은 빈 DB에 BOM·기초재고를 자동으로 넣지 않습니다.
 5. 바이오닷이 운영 시작일·기초재고 기준일을 정한 뒤 실제 재고의 수량·단위·LOT·소비기한을 확인해 등록합니다. QA DB의 잔량·거래를 실제 재고로 복사하지 않습니다.
 6. `seed_master --sample`, `seed_dev_*`, `seed_qa_*`는 테스트 자료용입니다. 실제 업무 설치의 필수 단계가 아닙니다.
 
@@ -287,7 +293,14 @@ schtasks /Run /TN "HACCP 주기 문서"      # 한 번 실행해 로그 확인
 ### 생산일지 설치(생산 기준정보·`PROD-LOG`)
 
 1. 적용 전에 5장 백업을 먼저 합니다. 마이그레이션 순서는 수불 `inventory` 0009(생산일지 계약 뷰) → `production_log` 0001(공정·템플릿·변경 이력 표 4개) → 0002(기본 제공 공정 5종: 쇳가루 제거·건조·금속검출기·내포장·외포장)입니다. `init`·`migrate`가 함께 적용합니다. 운영 DB에 직원이 없어도 들어갑니다(만든 사람 = 시스템).
-2. 생산일지 양식(`PROD-LOG`)은 기본 양식 설치에 들어가지 않습니다. 생산일지를 쓰기 시작할 때 한 번 `install_document_templates --production-log`를 실행합니다(위 ‘최초 업무 설정’). 설치한 뒤 작성 요구(생산 시작)가 실행되는 제조 배치부터 생산일지가 만들어지고, 설치 전에 시작한 배치는 작성 요구를 다시 실행하면 그때 만들어집니다.
+2. 생산일지 양식(`PROD-LOG`)은 기본 양식 설치와 전달 초기 DB에 들어가지 않습니다. 생산일지를 쓰기 시작할 때 아래 명령을 한 번 실행합니다. 설치한 뒤 작성 요구(생산 시작)가 실행되는 제조 배치부터 생산일지가 만들어지고, 설치 전에 시작한 배치는 작성 요구를 다시 실행하면 그때 만들어집니다.
+
+```powershell
+$env:HACCP_ENV_FILE = '.env.production'
+.\.venv\Scripts\python.exe backend/manage.py install_document_templates --production-log --settings=config.settings.production
+Remove-Item Env:HACCP_ENV_FILE
+```
+
 3. 역할 파일에 `"PROD-LOG": {"owners": [...], "slots": "none"}`을 넣습니다(결재 없음). 없으면 HACCP팀장만 작성합니다.
 4. 일반 공정·공정 템플릿은 운영에서 현업이 [생산 기준정보] 화면으로 등록합니다. 개발 시드 `seed_dev_production_master`·`seed_dev_prodlog`는 개발 설정(DEBUG)에서만 실행됩니다.
 5. 0002를 되돌려도 기본 제공 공정은 지우지 않습니다(기준 데이터). 앱 전체를 되돌리면(`migrate production_log zero`) 0001이 표를 지웁니다. 운영에서 되돌리기는 백업 복구로 합니다.
