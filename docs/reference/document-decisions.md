@@ -137,7 +137,7 @@
 
 | 항목 | 현재 동작 | 바꿀 곳 |
 |---|---|---|
-| CCP 공정 목록 | 제조 = 1P·2B·3P, 포장 = 없음, 품목별 예외 없음(생산일지 CCP 공정도 이 기준 — 그 CCP 일지가 있을 때만) | `doc_requirements/rules.py` `CCP_PROCESSES`·`CCP_BY_ITEM` |
+| CCP 공정 목록 | 기본 제조 = 1P·2B·3P, 포장 = 없음, 품목별 예외는 관리 설정 화면에서(P16). 배치마다 처음 생산 시작 때 정한 공정을 기록하고 [다시 호출]은 기록대로(생산일지 CCP 공정도 그 CCP 일지가 있을 때만) | `admin_settings` `ccp_default`·`item_ccp`·`batch_ccp_applied`(ERD v7.4) |
 | 취소 배치 상태 이름 | `CANCELLED` | `doc_requirements/rules.py` |
 | 수불 뷰 읽기 | 구분 RAW → 원료·PACKAGING → 부자재, 수량 `quantity_e6` ÷ 10⁶ + `base_unit`, 원산지 `origin_country`, CCP 수량 = 계획 수량 kg. 입고 기록 없는 LOT은 `LOT_NOT_FOUND` | `doc_requirements/sources.py`·`services.py` |
 | 판정 함수 | 기본값 수불 `apps.inventory.judgment.apply_incoming_judgment`(설정 `HACCP_INVENTORY_JUDGMENT`) | `config/settings/base.py` |

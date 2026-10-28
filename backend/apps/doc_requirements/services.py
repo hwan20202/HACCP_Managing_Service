@@ -9,6 +9,7 @@
 from django.db import transaction
 from django.utils import timezone
 
+from apps.admin_settings import store as adm_store
 from apps.approvals import services as apr
 from apps.core.http import ApiError
 from apps.core.trace import step
@@ -217,8 +218,10 @@ def require_for_batch(actor_id, batch_id):
         batch = _batch(batch_id)
         if batch["status"] == rules.CANCELLED:
             raise errors.BatchCancelled()
-    with step("REQ-BAT-02", "REQ", "CCP 공정 목록(코드 상수)") as s:
-        processes = rules.processes_for(batch["item_id"], batch["process_type"])
+    with step("REQ-BAT-02", "REQ", "CCP 공정 목록(ADM 적용 기록 — 처음이면 결정·기록)") as s:
+        # P16 ADM-F01: 기록 있으면 그대로(R06 — [다시 호출]도 설정을 다시 읽지 않음),
+        # 없으면 품목 설정 → 공정 구분 기본으로 정해 기록(R05). 이 트랜잭션 안에서 기록.
+        processes = adm_store.ccp_for_batch(batch_id, batch["item_id"], batch["process_type"])
         s.note(",".join(processes) or "없음")
     day = _text(batch["manufactured_date"]) or timezone.localdate().isoformat()
     info = _drop_empty({"item_name": batch["item_name"], "batch_qty_kg": batch["quantity_kg"]})

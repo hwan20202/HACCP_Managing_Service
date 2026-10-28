@@ -26,6 +26,7 @@ urlpatterns += [
     path("api/v1/", include("apps.document_workflow.urls")),
     path("api/v1/", include("apps.doc_requirements.urls")),
     path("api/v1/", include("apps.production_log.urls")),  # P15 생산 기준정보
+    path("api/v1/", include("apps.admin_settings.urls")),  # P16 관리 설정
 ]
 
 # 개발 콘솔 API는 개발 설정에서 켰을 때만 등록한다. 운영 설정에서는 경로 자체가 없다.

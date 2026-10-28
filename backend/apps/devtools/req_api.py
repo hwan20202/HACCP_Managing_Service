@@ -17,6 +17,7 @@ from django.db import transaction
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
+from apps.admin_settings import store as adm_store
 from apps.core.http import (
     ApiError,
     error_response,
@@ -186,9 +187,18 @@ def lot_list(request):
 def batch_list(request):
     """REQ-D02: 개발 생산 배치 목록 + 연결 문서 요약(F04)."""
     items = []
-    for batch in sources.batches_made_on(_query_date(request)):
+    batches = sources.batches_made_on(_query_date(request))
+    # P16 ADM-R08: 배치 CCP 적용 기록(목록 · [] = CCP 없음 · None = 생산 시작 전) — SQL 1
+    applied = adm_store.batch_ccp(b["production_batch_id"] for b in batches)
+    for batch in batches:
         found = req.docs_for_batch(batch["production_batch_id"])
-        items.append({**batch, "documents": _doc_summary(found["documents"], "process_code")})
+        items.append(
+            {
+                **batch,
+                "ccp_processes": applied.get(batch["production_batch_id"]),
+                "documents": _doc_summary(found["documents"], "process_code"),
+            }
+        )
     return json_response({"items": items})
 
 

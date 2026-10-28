@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     "apps.doc_requirements",
     "apps.doc_effects",  # P6 EFF 문서 후속 처리(D-079)
     "apps.production_log",  # P15 생산일지·생산 기준정보(ERD v7.3)
+    "apps.admin_settings",  # P16 관리 설정(ERD v7.4)
 ]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",

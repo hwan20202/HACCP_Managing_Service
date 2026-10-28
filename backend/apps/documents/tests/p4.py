@@ -78,7 +78,8 @@ def stub(table, **values):
 
 
 # 수불 0006(MVP 벌크 범위): 새 포장배치는 트리거가 막고, 0006 전에 만든 포장배치만 남는다.
-# 포장배치 = CCP 문서 없음(rules.CCP_PROCESSES)을 시험하려고 그 "예전 행"을 흉내 낸다 — 테스트 전용.
+# 포장배치 = CCP 문서 없음(관리 설정 기본 CCP PACKAGING)을 시험하려고 그 "예전 행"을 흉내 낸다
+# — 테스트 전용.
 LEGACY_PACKAGING_TRIGGER = "trg_batches_no_packaging"
 
 

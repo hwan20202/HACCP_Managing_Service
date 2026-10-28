@@ -14,9 +14,9 @@ D03_INSPECTION_REQUIRED = ("appearance", "packaging", "labeling", "verdict")
 # P8 REQ-F06: 주 묶음 조회 대상(하루 문서를 월~금으로 모아 보는 양식, DOC BUNDLE_UNITS week와 같음)
 WEEK_BUNDLE_TYPES = ("D10", "D12")
 
-# 공정 유형 → CCP 공정 목록, 품목 id → 예외 목록
-CCP_PROCESSES = {"MANUFACTURE": ["1P", "2B", "3P"], "PACKAGING": []}
-CCP_BY_ITEM = {}
+# CCP 공정 목록은 P16부터 관리 설정 DB(apps.admin_settings — 기본 CCP·품목 CCP·
+# 배치 적용 기록, ADM-R04~R06).
+# 예전 상수 CCP_PROCESSES·CCP_BY_ITEM·processes_for는 없앰(p16-s2-spec 3.3).
 
 
 def lot_key(type_code, lot_id):
@@ -29,12 +29,6 @@ def ccp_type(process):
 
 def ccp_key(process, batch_id):
     return f"{ccp_type(process)}|batch:{batch_id}"
-
-
-def processes_for(item_id, process_type):
-    if item_id in CCP_BY_ITEM:
-        return list(CCP_BY_ITEM[item_id])
-    return list(CCP_PROCESSES.get(process_type, []))
 
 
 def process_of(type_code):

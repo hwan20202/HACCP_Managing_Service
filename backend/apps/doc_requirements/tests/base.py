@@ -7,6 +7,7 @@ LOT 88·89(입고, 입고일 DAY), 90(제품), 91(입고 기록 없음).
 
 from django.db import connection, transaction
 
+from apps.admin_settings.testing import ensure_ccp_defaults
 from apps.documents import services as doc
 from apps.documents.models import Document, DocumentRef, DocumentTemplate
 from apps.documents.seed import ensure_p4_templates, ensure_staff
@@ -16,6 +17,7 @@ DAY = "2026-10-11"
 
 
 def setup_req():
+    ensure_ccp_defaults()  # P16: TransactionTestCase가 비운 기본 CCP 다시 넣기
     ensure_staff(5)
     ensure_p4_templates()
     stub("items", id=1, name="유자")

@@ -228,7 +228,7 @@ class CcpBatchAreaTests(P11ReqTestCase):
 
 
 class CcpProcessOrderTests(P11ReqTestCase):
-    """P11 S5 r1(D-168): 배치마다 적용 CCP 공정과 순서 — 규칙 상수(품목 예외 → 공정 유형 기본)."""
+    """P11 S5 r1(D-168) → P16 ADM-R07: 배치 공정 순서 = 그 배치에 있는 CCP 일지, 1P→2B→3P."""
 
     def test_tc035_default_order(self):
         for code in ("CCP-3P", "CCP-1P", "CCP-2B"):
@@ -237,14 +237,13 @@ class CcpProcessOrderTests(P11ReqTestCase):
         self.assertEqual((b["label"], b["batch_id"], b["item_id"]), ("PB-12", 12, 2))
         self.assertEqual(b["processes"], ["CCP-1P", "CCP-2B", "CCP-3P"])
 
-    def test_tc035_item_exception_order(self):
-        from unittest import mock
-
-        ccp_doc("CCP-1P", 15)
+    def test_tc035_order_from_documents(self):
+        # ADM-TC-05: 설정·기록이 아니라 실제 일지 — 일부 공정만 있는 배치는 그 공정만
         ccp_doc("CCP-2B", 15)
-        with mock.patch.dict(ccp.rules.CCP_BY_ITEM, {2: ["2B", "1P"]}):
-            (b,) = ccp.ccp_dashboard(3, TODAY)["batches"]
-        self.assertEqual(b["processes"], ["CCP-2B", "CCP-1P"])
+        ccp_doc("CCP-1P", 15)
+        ccp_doc("CCP-3P", 12)
+        out = {b["batch_id"]: b["processes"] for b in ccp.ccp_dashboard(3, TODAY)["batches"]}
+        self.assertEqual(out, {15: ["CCP-1P", "CCP-2B"], 12: ["CCP-3P"]})
 
 
 class CcpBatchStatusTests(P11ReqTestCase):
