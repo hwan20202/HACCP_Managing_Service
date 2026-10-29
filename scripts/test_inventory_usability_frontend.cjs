@@ -1,0 +1,74 @@
+// User flows: unchanged saves, metadata edits, overwrite cancellation, dates and sorting.
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const nodes=new Map(),node=id=>{if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',disabled:false});return nodes.get(id);};
+let confirmResult=true,confirmCount=0,requests=[];
+const context=vm.createContext({console,URLSearchParams,setTimeout:()=>{},clearTimeout:()=>{},
+  confirm:()=>{confirmCount++;return confirmResult;},
+  FormData:class {constructor(form){return Object.entries(form.fields);}},
+  document:{getElementById:node},App:{showToast:()=>{}},ProductionApiPage:{s:{staffId:1}}});
+for(const name of ['mass-units','inventory-api','bom-api'])vm.runInContext(fs.readFileSync(`frontend/static/prototype/js/modules/${name}.js`,'utf8')+`\nthis.${name==='bom-api'?'bom':name==='inventory-api'?'inventory':'mass'}=${name==='bom-api'?'BomApiPage':name==='inventory-api'?'InventoryApiPage':'MassUnits'};`,context);
+const {bom,inventory}=context;
+inventory.rerender=()=>{};
+inventory.today=()=>'2024-05-31';
+inventory.setPeriod('3month');
+assert.equal(inventory.state().from,'2024-02-29');
+node('invFrom').value='2024-06-01';node('invTo').value='2024-05-31';
+inventory.applyPeriod();assert.equal(inventory.state().from,'2024-02-29');
+assert.match(node('invPeriodError').textContent,/시작일/);
+node('invFrom').value='2023-01-01';inventory.applyPeriod();
+assert.equal(inventory.state().from,'2024-02-29','Invalid periods must not change applied filters.');
+node('invFrom').value='2024-05-01';inventory.applyPeriod();
+assert.equal(inventory.state().from,'2024-05-01');assert.equal(inventory.state().period,'');
+inventory.toggleSort('item_name');assert.equal(inventory.state().ledgerSortOrder,'asc');
+inventory.toggleSort('item_name');assert.equal(inventory.state().ledgerSortOrder,'desc');
+inventory.set('receiptVisibility','hide');
+assert.match(inventory.renderFilters(),/상세 조건 · 2/);
+assert.match(inventory.renderFilters(),/적용 중:.*취소 입고: 제외/);
+inventory.resetFilters();assert.equal(inventory.state().receiptVisibility,'all');
+assert.doesNotMatch(inventory.renderFilters(),/적용 중:/);
+bom.items=[{id:1,base_unit:'kg'},{id:2,base_unit:'kg'}];
+bom.boms=[{id:10,version:3,item_id:1,base_quantity:'1',effective_from:'2026-10-01',is_active:true,notes:null,used:false,
+  lines:[{item:{id:2},quantity:'0.5',unit:'kg',alternatives:[]}]}];
+bom.draft={id:10,item_id:1,lines:[{item_id:2,quantity:'500.00',unit:'g',alternatives:[]}]};
+bom.runningBatches=[{bom_id:10,batch_number:'TEST-<PLAN>'},{bom_id:10,batch_number:'TEST-PLAN-2'}];
+assert.equal(bom.connectionNote(bom.boms[0]),'','Current active versions need no transition note.');
+assert.match(bom.connectionNote({...bom.boms[0],is_active:false}),/TEST-&lt;PLAN&gt; 외 1건/);
+assert.match(bom.connectionNote({...bom.boms[0],is_active:false}),/완료까지 기존 배합 유지/);
+bom.runningBatches=[];
+assert.equal(bom.connectionNote({...bom.boms[0],is_active:false}),'','The note disappears when production finishes.');
+bom.readLines=()=>{};bom.open=async()=>{};
+bom.chooseActivation=async()=>confirmResult;
+bom.request=async(path,method,payload)=>{requests.push({path,method,payload});return {id:payload.new_version?11:10,item_id:1,version:payload.new_version?4:3,is_active:payload.is_active};};
+node('bomForm').fields={base_quantity:'1000',base_unit:'g',effective_from:'2026-10-01',is_active:'1',notes:'',staff_id:'1',save_mode:'new'};
+(async()=>{
+  await bom.save();assert.equal(requests.length,0);assert.match(node('bomError').textContent,/변경된 내용이 없습니다/);
+  assert.equal(node('bomSave').disabled,false);
+  node('bomForm').fields.is_active='0';await bom.save();
+  assert.equal(requests.length,1);assert.equal(requests[0].payload.is_active,false);
+  assert.equal(requests[0].payload.lines,undefined,'State-only saves must use metadata updates.');
+  node('bomForm').fields.is_active='1';node('bomForm').fields.save_mode='existing';
+  bom.draft.lines[0].quantity='600';confirmResult=false;
+  await bom.save();assert.equal(requests.length,1);assert.equal(confirmCount,1);
+  confirmResult=true;await bom.save();assert.equal(requests.length,2);
+  assert.equal(requests[1].payload.new_version,false);
+  const count=requests.length;
+  confirmResult=false;await bom.activate(10,node('stateButton'));
+  assert.equal(requests.length,count,'Cancelling deactivation must keep the active version.');
+  confirmResult=true;await bom.activate(10,node('stateButton'));
+  assert.equal(requests.length,count+1);
+  assert.equal(requests.at(-1).payload.is_active,false,'Clicking the active button must allow deactivation.');
+  bom.boms[0].is_active=false;confirmResult=false;await bom.activate(10,node('stateButton'));
+  assert.equal(requests.length,count+1,'Cancelling activation must keep the existing selection.');
+  confirmResult=true;await bom.activate(10,node('stateButton'));
+  assert.equal(requests.at(-1).payload.is_active,true);
+  node('bomForm').fields.is_active='0';node('bomForm').fields.save_mode='new';confirmResult=false;
+  await bom.save();assert.equal(requests.at(-1).payload.new_version,true);
+  assert.equal(requests.at(-1).payload.is_active,false,'Saving without activation must preserve the current default.');
+  confirmResult=true;await bom.save();assert.equal(requests.at(-1).payload.is_active,true);
+  const beforeCancel=requests.length;confirmResult=null;await bom.save();
+  assert.equal(requests.length,beforeCancel,'Cancelling the activation dialog must cancel saving.');
+  const beforeUsed=requests.length;bom.boms[0].used=true;node('bomForm').fields.save_mode='existing';
+  await bom.save();assert.equal(requests.length,beforeUsed,'Used versions cannot be overwritten.');
+  assert.match(node('bomError').textContent,/덮어쓸 수 없습니다/);
+  console.log('PASS: unchanged saves, metadata edits, overwrite cancellation/restriction, activation confirmation/cancel, new-version activation choice, dates and filters.');
+})().catch(error=>{console.error(error);process.exitCode=1;});

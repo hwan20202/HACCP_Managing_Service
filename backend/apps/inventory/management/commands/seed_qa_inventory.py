@@ -256,6 +256,8 @@ class Command(BaseCommand):
                     "effective_from": self.day - datetime.timedelta(days=7),
                     "created_by": self.staff,
                     "notes": "QA_REFERENCE: 양쪽 참고본 공통 배합, 질량 기준 시험용",
+                    # 품목당 활성 BOM 은 하나 (0011): 이미 쓰는 버전이 있으면 비활성으로 둔다.
+                    "is_active": not Bom.objects.filter(item=item, is_active=True).exists(),
                 },
             )
             if not made and not (bom.notes or "").startswith("QA_REFERENCE:"):

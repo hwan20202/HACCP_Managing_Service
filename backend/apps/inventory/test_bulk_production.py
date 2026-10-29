@@ -161,6 +161,7 @@ class BulkProductionTests(ProductionTestCase):
         self.assertEqual(response.status_code, 201, response.content)
 
     def test_eighteen_ingredients_keep_three_existing_and_save_remaining_fifteen(self):
+        Bom.objects.filter(item=self.semi).update(is_active=False)  # one active version per item
         bom = Bom.objects.create(
             item=self.semi, version=2, base_quantity_e6=to_e6(1), effective_from=self.today
         )

@@ -310,6 +310,11 @@ def bom(obj, lines):
         "is_active": obj.is_active,
         "notes": obj.notes,
         "used": obj.production_batches.exists(),
+        # Plans/runs still on this version. An inactive version with open batches is shown as
+        # "이전 버전 · 진행 중 N건": those batches finish on it; new plans use the active one.
+        "open_batch_count": obj.production_batches.filter(
+            status__in=("PLANNED", "IN_PROGRESS")
+        ).count(),
         "lines": [
             {
                 "id": line.pk,

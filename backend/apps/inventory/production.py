@@ -144,12 +144,44 @@ def batch_output_lot(batch):
     return Lot.objects.get(pk=lot_ids[0]) if lot_ids else None
 
 
-def _default_bom(item, on_date):
-    return (
-        Bom.objects.filter(item=item, is_active=True, effective_from__lte=on_date)
-        .order_by("-effective_from", "-version")
-        .first()
-    )
+def _active_bom(item):
+    """The one version new plans use (the DB allows at most one active version per item)."""
+    return Bom.objects.filter(item=item, is_active=True).first()
+
+
+def _plan_bom(item, on_date, bom_id=None):
+    """BOM for a new plan. A plan without a BOM cannot be started, so refuse it up front.
+
+    ``bom_id`` is the version the planner saw on screen; if the active version changed in the
+    meantime the plan is refused instead of silently switching recipes.
+    """
+    active = _active_bom(item)
+    if bom_id:
+        bom = Bom.objects.filter(pk=bom_id).first()
+        if bom is None or bom.item_id != item.pk:
+            raise InventoryError("이 품목의 BOM이 아닙니다.")
+        if not bom.is_active:
+            if active is None:
+                raise InventoryError(
+                    f"{item.name}의 활성 BOM이 없습니다. BOM 관리에서 사용할 버전을 활성화하세요."
+                )
+            raise InventoryError(
+                f"{item.name}의 BOM이 v{bom.version}에서 v{active.version}(으)로 변경되었습니다. "
+                "화면을 새로고침해 적용 BOM을 다시 확인하세요."
+            )
+    else:
+        bom = active
+    if bom is None:
+        raise InventoryError(
+            f"{item.name}의 활성 BOM이 없습니다. BOM 관리에서 사용할 버전을 활성화하세요."
+        )
+    # A BOM chosen explicitly (e.g. back-entering past records) is not date-checked, as before.
+    if not bom_id and bom.effective_from > on_date:
+        raise InventoryError(
+            f"{item.name} BOM v{bom.version}의 적용 시작일({bom.effective_from})이 "
+            f"생산 기준일({on_date})보다 늦습니다. BOM 적용 시작일을 확인하세요."
+        )
+    return bom
 
 
 def _net(model, batch):
@@ -185,6 +217,7 @@ def create_batch(
     manufactured_date=None,
     bom_id=None,
     notes=None,
+    audit_reason=None,
 ):
     """New PLANNED manufacturing batch for a 반제품 (bulk). The BOM defaults to the item's active
     one. Packaging batches are out of scope (10/15)."""
@@ -210,12 +243,7 @@ def create_batch(
             )
         staff = _staff(staff_id)
         base_date = manufactured_date or planned_date or today
-        if bom_id:
-            bom = Bom.objects.filter(pk=bom_id).first()
-            if bom is None or bom.item_id != item.pk:
-                raise InventoryError("이 품목의 BOM이 아닙니다.")
-        else:
-            bom = _default_bom(item, base_date)
+        bom = _plan_bom(item, base_date, bom_id)
         batch = ProductionBatch.objects.create(
             batch_number=_next_batch_number(item, base_date),
             process_type=process_type,
@@ -228,8 +256,61 @@ def create_batch(
             staff=staff,
             notes=(notes or "").strip() or None,
         )
-        _audit(batch, "INSERT", staff)
+        _audit(batch, "INSERT", staff, reason=audit_reason)
     return batch
+
+
+def switch_batch_bom(*, batch_id, staff_id):
+    """Cancel a not-yet-started plan on an old BOM version and re-plan it on the active one.
+
+    One transaction: either the old plan is cancelled AND the new one exists, or nothing changes.
+    Plan date, quantity, manufacturing date and notes carry over; the batch number is new and
+    material allocations are not copied (the new recipe may differ).
+    """
+    with transaction.atomic():
+        old = ProductionBatch.objects.select_for_update().select_related("item", "bom")
+        old = old.filter(pk=batch_id).first()
+        if old is None:
+            raise NotFound(f"생산 배치를 찾을 수 없습니다. (id={batch_id})")
+        if old.status != BatchStatus.PLANNED:
+            raise InventoryError(
+                f"배치 {old.batch_number}은(는) {old.get_status_display()} 상태입니다. "
+                "BOM 전환 재지시는 시작 전 계획만 가능합니다."
+            )
+        active = _active_bom(old.item)
+        if active is None:
+            raise InventoryError(
+                f"{old.item.name}의 활성 BOM이 없습니다. BOM 관리에서 사용할 버전을 활성화하세요."
+            )
+        if old.bom_id == active.pk:
+            raise InventoryError(f"이미 활성 BOM v{active.version} 기준 계획입니다.")
+        old_version = f"v{old.bom.version}" if old.bom_id else "BOM 없음"
+        new = create_batch(
+            item_id=old.item_id,
+            staff_id=staff_id,
+            process_type=old.process_type,
+            planned_date=old.planned_date,
+            planned_quantity=(
+                str(from_e6(old.planned_quantity_e6))
+                if old.planned_quantity_e6 is not None
+                else None
+            ),
+            manufactured_date=old.manufactured_date,
+            bom_id=active.pk,
+            notes=old.notes,
+            audit_reason=(
+                f"BOM {old_version} → v{active.version} 전환 재지시 (원 배치 {old.batch_number})"
+            ),
+        )
+        cancel_batch(
+            batch_id=old.pk,
+            staff_id=staff_id,
+            reason=(
+                f"BOM {old_version} → v{active.version} 전환으로 재지시 "
+                f"(새 배치 {new.batch_number})"
+            ),
+        )
+    return new
 
 
 def start_batch(*, batch_id, staff_id, started_at=None, manufactured_date=None):
@@ -636,9 +717,21 @@ def preview_plan(*, item_id, quantity, on_date=None):
     item = Item.objects.get(pk=item_id)
     if item.item_type_id not in PRODUCIBLE_ITEM_TYPES:
         raise InventoryError("제조할 반제품을 선택하세요.")
-    bom = _default_bom(item, on_date or kst_now().date())
-    batch = ProductionBatch(item=item, bom=bom, planned_quantity_e6=_quantity_e6(quantity))
-    return material_readiness(batch)
+    try:
+        bom, problem = _plan_bom(item, on_date or kst_now().date()), None
+    except InventoryError as error:
+        bom, problem = None, str(error)
+    batch = ProductionBatch(
+        item=item,
+        bom=bom,
+        planned_quantity_e6=_quantity_e6(quantity) if quantity not in (None, "") else None,
+    )
+    readiness = material_readiness(batch)
+    if problem:
+        # Same rule as create_batch: tell the planner why it cannot be saved yet.
+        readiness["message"] = problem
+        readiness["bom_problem"] = problem
+    return readiness
 
 
 def propose_line_allocation(*, batch_id, line_id, quantity, item_id=None, reserved=None):
@@ -816,8 +909,14 @@ def material_readiness(batch):
     Max-flow allocates shared substitutes across BOM lines in a common mass unit.
     This is a snapshot, not a stock reservation.
     """
+    bom_info = {
+        "bom_id": batch.bom_id,
+        "bom_version": batch.bom.version if batch.bom_id else None,
+        "bom_effective_from": str(batch.bom.effective_from) if batch.bom_id else None,
+    }
     if not batch.bom_id or not batch.planned_quantity_e6:
         return {
+            **bom_info,
             "ready": False,
             "message": "생산 시작에는 BOM과 계획 수량이 필요합니다.",
             "lines": [],
@@ -898,6 +997,7 @@ def material_readiness(batch):
         row["shortfall"] = str(from_e6((residual + divisor - 1) // divisor))
     missing = [r for r in rows if float(r["shortfall"]) > 0]
     return {
+        **bom_info,
         "ready": bool(rows) and not missing,
         "lines": rows,
         "message": "가용재고 부족: "
