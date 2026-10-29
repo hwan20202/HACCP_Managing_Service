@@ -1,11 +1,12 @@
 """CCP 현황 REQ-F11 (dev-notes/dashboard/p11-s2-spec.md 2.1).
 
-- 쓰기·트랜잭션 없음. 어떤 양식이 CCP인지는 REQ 상수(rules.CCP_PROCESSES·CCP_BY_ITEM)만 안다.
+- 쓰기·트랜잭션 없음. CCP 양식은 고정 3종(ADM-R09 — `adm_store.CCP_TYPES`).
   DOC N8(measurement_summary)에 양식 목록을 넘겨 측정 요약·이탈 행·개선조치를 받는다.
 - 결과는 사용자에 따라 달라지지 않는다(X-Staff-Id 선택 — B2).
 - 계층(NFR-03): DOC 서비스만 부른다.
 """
 
+from apps.admin_settings import store as adm_store
 from apps.core.trace import step
 from apps.documents import services as doc
 
@@ -29,14 +30,8 @@ def _bad(path, message):
 
 
 def ccp_types():
-    """CCP 양식 코드(CCP_PROCESSES 값 전체 + 품목 예외, 처음 나온 순서)."""
-    seen = []
-    for processes in [*rules.CCP_PROCESSES.values(), *rules.CCP_BY_ITEM.values()]:
-        for process in processes:
-            code = rules.ccp_type(process)
-            if code not in seen:
-                seen.append(code)
-    return seen
+    """CCP 양식 코드 — 고정 CCP-1P·2B·3P(ADM-R09, P16에서 상수 목록 대신)."""
+    return list(adm_store.CCP_TYPES)
 
 
 def _deviation_state(items):
@@ -221,7 +216,12 @@ def ccp_dashboard(actor_id=None, base_date=None):
             key=lambda x: (x["at"] is None, x["at"] or "", x["document_id"], x["row_no"])
         )
         others.sort(key=lambda x: (x["document_id"], x["deviation"]["deviation_id"]))
-        # P11 S5 r1: 배치마다 적용 CCP 공정과 순서(품목 예외 → 공정 유형 기본, 규칙 상수 순서)
+        # P11 S5 r1 → P16 ADM-R07: 배치마다 공정 순서 = 그 배치에 있는 CCP 일지의 공정, 1P→2B→3P
+        # (설정·적용 기록을 읽지 않음, SQL 추가 없음 — 과거 배치도 실제 일지대로)
+        present = {}
+        for d in found["documents"]:
+            if d.get("batch_id") is not None:
+                present.setdefault(d["batch_id"], set()).add(d["type_code"])
         made = {
             b["production_batch_id"]: b
             for b in sources.batches_by_ids(
@@ -233,11 +233,8 @@ def ccp_dashboard(actor_id=None, base_date=None):
             if d["label"] in batches:
                 continue
             b = made.get(d.get("batch_id"))
-            order = (
-                [rules.ccp_type(p) for p in rules.processes_for(b["item_id"], b["process_type"])]
-                if b
-                else []
-            )
+            have = present.get(d.get("batch_id"), set())
+            order = [code for code in codes if code in have]
             batches[d["label"]] = {
                 "label": d["label"],
                 "batch_id": d.get("batch_id"),

@@ -140,10 +140,10 @@ def decide(actor_id, approval_id, result, comment=None):
 def cancel_submission(actor_id, request_id):
     """WF-F05: [회차 취소(APR A7) → 문서 되돌림(DOC F23)] 한 트랜잭션. 사유 없음(S1a-Q9 a).
 
-    P14(ROLE-R02): 상신자 또는 HACCP팀장. 설정 오류면 팀장 예외는 쓸 수 없음(ROLE-C07).
+    P14(ROLE-R02): 상신자 또는 HACCP팀장.
     """
     with step("WF-CAN-01b", "WF", "HACCP팀장인가(상신자가 아니어도 취소)") as s:
-        allow_any = roles.config_error() is None and roles.is_leader(actor_id)
+        allow_any = roles.is_leader(actor_id)
         s.note("팀장" if allow_any else "상신자 본인만")
     with step("WF-CAN-02", "WF", "트랜잭션") as tx:
         try:

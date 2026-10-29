@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import fixtures, fixtures_p11, fixtures_p15, fixtures_s3, req_api, views
+from . import fixtures, fixtures_p11, fixtures_p15, fixtures_p16, fixtures_s3, req_api, views
 
 urlpatterns = [
     path("snapshot", views.snapshot, name="dev-snapshot"),
@@ -27,4 +27,8 @@ urlpatterns = [
     # P15 S5b: 생산일지(PLG-PS-*) 사전 조건·연동 오류 스위치(PS-06)
     path("fixtures/prodlog", fixtures_p15.prodlog_fixture, name="dev-fixture-prodlog"),
     path("prodlog/link-fail", fixtures_p15.link_fail, name="dev-prodlog-link-fail"),
+    # P16 S6: 관리 설정(ADM-PS-07) — 문서 권한 가져오기 결과를 보고 되돌림
+    path(
+        "fixtures/admin-import", fixtures_p16.admin_import_fixture, name="dev-fixture-admin-import"
+    ),
 ]

@@ -78,12 +78,21 @@ def all_people():
 
 
 def ensure_dev_staff(ids):
-    """개발·테스트용 가상 직원(코드 DEV-001…). 이미 있으면 그대로 둔다."""
+    """개발·테스트용 가상 직원(코드 DEV-001…). 이미 있으면 그대로 둔다.
+
+    P16: 가상 직원의 기본 문서 권한(roles.json)도 DB에 넣는다(dev_roles — 운영 경로 아님).
+    """
+    from .dev_roles import ensure_dev_roles
+
+    created = []
     for staff_id in ids:
-        Staff.objects.get_or_create(
+        _, new = Staff.objects.get_or_create(
             id=staff_id,
             defaults={"staff_code": f"DEV-{staff_id:03d}", "name": f"개발직원{staff_id}"},
         )
+        if new:
+            created.append(staff_id)
+    ensure_dev_roles(created)
 
 
 def names_of(ids):

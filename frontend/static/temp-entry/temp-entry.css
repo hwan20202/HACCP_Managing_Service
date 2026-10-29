@@ -451,3 +451,63 @@
 .te-ms-ov { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.3rem 0.8rem; background: #f8f9fa; padding: 0.5rem; border-radius: var(--radius-md); }
 .te-ms-add { margin: 0.6rem 0; }
 .te-ms-add .form-control { max-width: 22rem; }
+
+/* ---------- P16 ADM-SC-01 품목별 CCP (admin-settings/item-ccp.js — p16-s1-screens.md 3장) ---------- */
+.te-ic-default { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; align-items: center; background: #f1f3f5; border-radius: var(--radius-md); padding: 0.5rem 0.75rem; margin-bottom: 0.6rem; }
+.te-ic-check { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.85rem; align-self: flex-end; padding-bottom: 0.4rem; }
+.te-ic-title { font-weight: 600; margin: 0.4rem 0; }
+.te-ic-cell { text-align: center; }
+.te-ic-def, .te-ic-own { display: inline-block; min-width: 2.2rem; padding: 0.1rem 0.4rem; border-radius: 6px; font-size: 0.75rem; font-weight: 700; }
+.te-ic-def { background: #ede7fb; color: #6d28d9; }
+.te-ic-own { background: #6d28d9; color: #fff; }
+.te-ic-off { display: inline-block; min-width: 2.2rem; border: 1px dashed #ced4da; border-radius: 6px; color: #adb5bd; font-size: 0.75rem; }
+.te-ic-inactive td { color: #868e96; }
+.te-ic-edit-row > td { background: #faf8ff; }
+.te-ic-editor { display: grid; gap: 0.6rem; padding: 0.4rem 0.2rem; }
+.te-ic-seg { display: inline-flex; border: 1px solid #ced4da; border-radius: var(--radius-md); overflow: hidden; width: max-content; }
+.te-ic-seg button { border: 0; background: #fff; padding: 0.35rem 0.9rem; cursor: pointer; font-weight: 600; }
+.te-ic-seg button.on { background: #1d4ed8; color: #fff; }
+.te-ic-procs { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.4rem; }
+.te-ic-proc { display: flex; justify-content: space-between; gap: 0.5rem; border: 1px dashed #ced4da; background: #fff; border-radius: var(--radius-md); padding: 0.45rem 0.6rem; cursor: pointer; text-align: left; font-size: 0.8rem; }
+.te-ic-proc.on { border: 1px solid #6d28d9; background: #f1ebff; }
+.te-ic-proc:disabled { cursor: default; opacity: 0.75; }
+.te-ic-warn { background: #fff4d6; color: #8a5a00; border-radius: var(--radius-md); padding: 0.4rem 0.6rem; font-size: 0.85rem; }
+.te-ic-info { background: #e7f0ff; color: #1d4ed8; border-radius: var(--radius-md); padding: 0.4rem 0.6rem; font-size: 0.85rem; }
+.te-ic-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.te-req-ccp { font-size: 0.75rem; }
+
+/* ---------- P16 묶음 ③ 직원 관리(ADM-SC-02·05)·문서 권한(ADM-SC-03) — admin-settings/staff-admin.js · role/role.js ---------- */
+.te-ad-head { display: flex; flex-wrap: wrap; gap: 0.4rem 0.75rem; align-items: center; margin-bottom: 0.6rem; }
+.te-ad-search { max-width: 12rem; }
+.te-ad-add { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: flex-end; background: #f8f9fa; border-radius: var(--radius-md); padding: 0.6rem 0.75rem; margin-bottom: 0.6rem; }
+.te-ad-add .form-group { margin: 0; }
+.te-ad-msgs { flex-basis: 100%; }
+.te-ad-bad { border-color: #dc3545 !important; background: #fff5f5; }
+.te-ad-err { color: #b42318; font-size: 0.82rem; margin-top: 0.25rem; }
+.te-ad-warn { background: #fff4d6; color: #8a5a00; border-radius: var(--radius-md); padding: 0.35rem 0.6rem; font-size: 0.82rem; margin-top: 0.3rem; }
+.te-ad-ok { background: #e3f4ea; color: #1e7b45; border-radius: var(--radius-md); padding: 0.4rem 0.6rem; font-size: 0.85rem; }
+.te-ad-danger { background: #fdecea; color: #842029; border: 1px solid #f5c2c7; border-radius: var(--radius-md); padding: 0.5rem 0.75rem; font-size: 0.85rem; margin: 0.4rem 0; }
+.te-ad-danger ul, .te-ad-steps, .te-ad-list { margin: 0.25rem 0 0; padding-left: 1.2rem; }
+.te-ad-rename { max-width: 14rem; }
+.te-ad-impact { display: grid; gap: 0.45rem; padding: 0.3rem 0.2rem; }
+.te-ad-impact-title { font-weight: 700; }
+.te-ad-chip-line { display: inline-block; font-size: 0.72rem; padding: 0.05rem 0.5rem; border-radius: 999px; border: 1px solid #ced4da; color: var(--text-secondary); white-space: nowrap; }
+.te-ad-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+.te-ad-chip { display: inline-flex; align-items: center; gap: 0.2rem; border: 1px solid #ced4da; background: #fff; border-radius: 999px; padding: 0.08rem 0.5rem; font-size: 0.8rem; white-space: nowrap; }
+.te-ad-chip-off { border-style: dashed; color: #868e96; text-decoration: line-through; }
+.te-ad-chip-new { border: 2px solid #2f9e44; }
+.te-ad-x { border: 0; background: none; cursor: pointer; color: #868e96; font-size: 0.95rem; line-height: 1; padding: 0 0.1rem; text-decoration: none; }
+.te-ad-x:hover { color: #b42318; }
+.te-ad-pick { width: auto; min-width: 7rem; padding: 0.15rem 0.4rem; font-size: 0.78rem; height: auto; }
+.te-ad-changed td:first-child { box-shadow: inset 4px 0 0 #f59f00; }
+.te-ad-changed-card { box-shadow: inset 4px 0 0 #f59f00; }
+.te-ad-bar { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; background: #fff8e1; border: 1px solid #ffe08a; border-radius: var(--radius-md); padding: 0.55rem 0.8rem; margin-top: 0.75rem; box-shadow: 0 -2px 8px rgba(0,0,0,0.06); }
+.te-ad-confirm { background: #f1f5ff; border: 1px solid #b6c8f5; border-radius: var(--radius-md); padding: 0.6rem 0.8rem; margin-bottom: 0.75rem; }
+.te-ad-confirm ul { margin: 0.3rem 0; padding-left: 1.2rem; }
+.te-ad-plus { color: #1e7b45; font-weight: 600; }
+.te-ad-minus { color: #b42318; font-weight: 600; }
+#roLeaderCard { margin-bottom: 0.75rem; }
+@media (max-width: 600px) {
+  .te-ad-search { max-width: none; flex: 1 1 100%; }
+  .te-ad-bar { position: static; }
+}

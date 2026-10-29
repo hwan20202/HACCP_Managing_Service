@@ -21,6 +21,7 @@ class DevConsolePageTests(SimpleTestCase):
         self.assertContains(response, "dev-console/console.js")
         self.assertContains(response, "temp-entry/api-client.js")
         self.assertNotContains(response, "fonts.googleapis.com")
+        self.assertIn("csrftoken", response.cookies)  # P16 S5 검토 B3: /dev/로 바로 열어도 쿠키
 
 
 class SeedWorkflowTests(TestCase):
@@ -599,8 +600,9 @@ class ProdLogFixtureTests(TestCase):
         flows = self.client.get("/api/dev/flows").json()
         self.assertIn("PLG-SAV", flows["flows"])
         self.assertEqual(flows["optional"]["PLG-LNK"], ["PLG-LNK-02"])
-        # 다른 단위 흐름엔 없음
-        self.assertTrue(all(k.startswith("PLG-") for k in flows["optional"]))
+        # 다른 단위 흐름엔 없음(P16: 관리 설정 ADM 흐름도 조건부 단계를 가짐)
+        self.assertTrue(all(k.startswith(("PLG-", "ADM-")) for k in flows["optional"]))
+        self.assertEqual(flows["optional"]["ADM-CCP-SAV"], ["ADM-CCP-SAV-03", "ADM-CCP-SAV-04"])
         self.assertNotIn("DOC-BRF", flows["optional"])
 
     def test_console_flows_match_service_traces(self):
@@ -689,3 +691,35 @@ class ProdLogFixtureTests(TestCase):
                 },
             },
         )
+
+
+@override_settings(ROOT_URLCONF="apps.devtools.test_urls")
+class AdminImportFixtureTests(TestCase):
+    """P16 S6 ADM-PS-07: 가져오기 결과를 보고 되돌림(DB 변화 없음)."""
+
+    def test_import_rolled_back(self):
+        from apps.admin_settings import store
+        from apps.admin_settings.models import AdminChangeLog
+        from apps.documents.seed import ensure_p4_templates
+        from apps.staff import services as staff_services
+
+        staff_services.ensure_dev_staff(range(1, 6))
+        ensure_p4_templates()
+        before = store.role_rows()
+        r = self.client.post(
+            "/api/dev/fixtures/admin-import", data="{}", content_type="application/json"
+        )
+        self.assertEqual(r.status_code, 200, r.content)
+        out = r.json()
+        self.assertEqual(out["emptied"]["leaders"] + out["emptied"]["members"], 0)
+        self.assertEqual(out["report"]["leaders"], 2)
+        self.assertIn("D03", out["report"]["forms"])
+        self.assertTrue(out["rolled_back"])
+        after = store.role_rows()
+        self.assertEqual(after["version"], before["version"])
+        self.assertEqual(after["leaders"], before["leaders"])
+        self.assertFalse(AdminChangeLog.objects.filter(target="roles_import").exists())
+        bad = self.client.post(
+            "/api/dev/fixtures/admin-import", data='{"x": 1}', content_type="application/json"
+        )
+        self.assertEqual(bad.status_code, 400)

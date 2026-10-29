@@ -9,12 +9,14 @@ from django.http import FileResponse, Http404, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.clickjacking import xframe_options_sameorigin
+from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_safe
 
 logger = logging.getLogger(__name__)
 
 
 @require_safe
+@ensure_csrf_cookie  # P16 R71: 관리 설정 쓰기(CSRF 검사 유지)용 쿠키를 첫 화면에서 늘 발급
 def home(request):
     if not settings.PROTOTYPE_DATA_FILE.is_file():
         return render(request, "prototype-missing.html")

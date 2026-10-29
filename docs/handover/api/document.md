@@ -1,14 +1,15 @@
 # API 명세 — 문서 쪽
 
-문서·결재·작성 요구·출력·생산일지 화면이 서버에 보내는 API입니다. 공통 규칙(사용자 헤더·오류 형식·버전 확인)과 오류 코드 전체는 [API 안내](README.md)를 먼저 봅니다. 화면에서 어떻게 쓰는지는 [문서·결재 기능 안내](../guide/document-guide.md)에 있습니다.
+문서·결재·작성 요구·출력·생산일지·관리 설정 화면이 서버에 보내는 API입니다. 공통 규칙(사용자 헤더·오류 형식·버전 확인)과 오류 코드 전체는 [API 안내](README.md)를 먼저 봅니다. 화면에서 어떻게 쓰는지는 [문서·결재 기능 안내](../guide/document-guide.md)에 있습니다.
 
-> 현재 기준 2026-10-28 · 코드 기준 `2234f02` · 확인한 `origin/main` `c011126`(문서만 변경) · 경로는 모두 `/api/v1` 아래(표에는 뒷부분만) · 목록 65개(메서드 기준)는 `urls.py`와 1:1로 맞춤
+> 현재 기준 2026-10-29 · 코드 기준 `feature/p16-admin-settings` `61d4b9f` · 경로는 모두 `/api/v1` 아래(표에는 뒷부분만) · 목록 64경로 · 76개(메서드 기준 — P16 관리 설정 9경로 · 11개 추가)는 `urls.py`와 1:1로 맞춤
 
 ## 읽는 법
 
 - **사용자** 칸: `X-Staff-Id` 헤더가 필수 / 선택 / 필요 없음. 쓰기 요청은 모두 필수입니다.
 - **본문**은 JSON 객체입니다. 적힌 키 말고 다른 키를 보내면 400 `INVALID_REQUEST`입니다.
-- **오류** 칸에는 그 API에서 나는 주요 오류만 적습니다. 모든 쓰기 요청에서 날 수 있는 400 `INVALID_REQUEST` · 400 `STAFF_HEADER_MISSING` · 403 `INVALID_STAFF`와 역할 설정 오류 409 `ROLE_CONFIG_INVALID`는 반복하지 않습니다.
+- **오류** 칸에는 그 API에서 나는 주요 오류만 적습니다. 모든 쓰기 요청에서 날 수 있는 400 `INVALID_REQUEST` · 400 `STAFF_HEADER_MISSING` · 403 `INVALID_STAFF`는 반복하지 않습니다. (P16부터 역할은 DB 문서 권한이라 역할 설정 오류 409 `ROLE_CONFIG_INVALID`는 없어졌습니다.)
+- **관리 설정(ADM)** API는 규칙이 조금 다릅니다: 쓰기에 CSRF 헤더 `X-CSRFToken`이 필요하고, 입력 오류는 400 `VALIDATION_ERROR` + `details[].code`로 옵니다([9. 관리 설정](#9-관리-설정adm)).
 - **일괄 결과**는 `{action, total, succeeded, failed, results: [{ok, ...}]}` 모양이고, 일부가 실패해도 200입니다.
 - API ID가 `—`인 것은 설계 때 번호가 없던 것입니다.
 
@@ -19,7 +20,7 @@
 | API ID | 메서드 | 경로 | 하는 일 | 기능 ID | 구현 | 상세 |
 |---|---|---|---|---|---|---|
 | `DOC-A01` | GET | `/staff` | 직원 목록(현재 사용자 고르기) | — | `documents/api.py::staff_list` | [보기](#doc-a01) |
-| `ROLE-A01` | GET | `/roles` | 역할 보기(읽기 전용, 헤더가 있으면 내 역할 포함) | `F-ROLE-01` | `documents/api.py::roles_view` | [보기](#role-a01) |
+| `ROLE-A01` | GET | `/roles` | 문서 권한 읽기(읽기 전용, 헤더가 있으면 내 역할 포함) | `F-ROLE-01` | `documents/api.py::roles_view` | [보기](#role-a01) |
 | `DOC-A02` | GET | `/templates` | 양식 목록 | — | `documents/api.py::template_list` | [보기](#doc-a02) |
 | `DOC-A03` | GET | `/templates/{template_id}` | 양식 한 개(칸 정의) | — | `documents/api.py::template_detail` | [보기](#doc-a03) |
 
@@ -119,6 +120,22 @@
 | `—` | POST | `/process-templates/{template_id}/active` | 사용 중지·다시 사용 | — | `production_log/api.py::template_active` | [보기](#plg-a07-active) |
 | `PLG-A08` | GET | `/master-history` | 변경 이력(?target=process\|template&id=) | — | `production_log/api.py::master_history` | [보기](#plg-a08) |
 
+**9. 관리 설정(ADM)**
+
+| API ID | 메서드 | 경로 | 하는 일 | 기능 ID | 구현 | 상세 |
+|---|---|---|---|---|---|---|
+| `ADM-A01` | GET | `/admin/item-ccp` | 반제품 품목별 CCP 목록(?q=&include_inactive=&only_own=) | `F-ADM-04` | `admin_settings/api.py::item_ccp_list` | [보기](#adm-a01) |
+| `ADM-A02` | PUT | `/admin/item-ccp/{item_id}` | 품목 CCP 저장 | `F-ADM-04` | `admin_settings/api.py::item_ccp_item` | [보기](#adm-a02) |
+| `ADM-A03` | GET | `/admin/staff` | 직원 목록 + 역할 요약(?q=&state=) | `F-ADM-01` `F-ADM-02` | `admin_settings/api.py::staff_collection` | [보기](#adm-a03) |
+| `ADM-A05` | POST | `/admin/staff` | 직원 등록(처음 설정 포함) | `F-ADM-01` `F-ADM-02` | `admin_settings/api.py::staff_collection` | [보기](#adm-a05) |
+| `ADM-A04` | GET | `/admin/staff/next-code` | 직원 코드 제안 | `F-ADM-01` `F-ADM-02` | `admin_settings/api.py::staff_next_code` | [보기](#adm-a04) |
+| `ADM-A06` | PATCH | `/admin/staff/{staff_id}` | 직원 이름 수정 | `F-ADM-02` | `admin_settings/api.py::staff_item` | [보기](#adm-a06) |
+| `ADM-A08` | POST | `/admin/staff/{staff_id}/active` | 비활성·다시 활성(처음 설정은 다시 활성만) | `F-ADM-01` `F-ADM-02` | `admin_settings/api.py::staff_active` | [보기](#adm-a08) |
+| `ADM-A07` | GET | `/admin/staff/{staff_id}/impact` | 비활성 영향(읽기) | `F-ADM-01` `F-ADM-02` | `admin_settings/api.py::staff_impact` | [보기](#adm-a07) |
+| `ADM-A09` | GET | `/admin/roles` | 문서 권한 편집용 읽기(비활성 사람 포함) | `F-ADM-03` | `admin_settings/api.py::roles_view` | [보기](#adm-a09) |
+| `ADM-A10` | PUT | `/admin/roles` | 문서 권한 저장(팀장·담당자·작성 권한자) | `F-ADM-03` | `admin_settings/api.py::roles_view` | [보기](#adm-a10) |
+| `ADM-A11` | GET | `/admin/history` | 관리 설정 변경 이력(?target=item_ccp\|staff\|roles&target_id=&limit=) | `F-ADM-02` `F-ADM-03` `F-ADM-04` | `admin_settings/api.py::history` | [보기](#adm-a11) |
+
 
 ## 상세
 
@@ -136,13 +153,13 @@
 | 화면 | 화면 오른쪽 위 **현재 사용자** 고르기 · 점검자 고르기 |
 
 <a id="role-a01"></a>
-#### ROLE-A01 · GET `/roles` — 역할 보기
+#### ROLE-A01 · GET `/roles` — 문서 권한 읽기
 
 | | |
 |---|---|
-| 사용자 | 선택 — 보내면 응답에 내 역할(`me`)이 붙음 |
-| 응답 | 200 HACCP팀장 목록 · 양식별 담당자·작성 권한자·결재 칸 구성 |
-| 화면·기능 | **[역할 보기]** · `F-ROLE-01` · 읽기 전용(역할은 설정 파일에서만 바꿈) |
+| 사용자 | 선택 — 보내면 응답에 내 역할(`me`: `is_leader`·`owner_of`·`writer_of`)이 붙음 |
+| 응답 | 200 `{leaders, forms, warnings, version, setup, reload}` · `forms[]` = 활성 양식마다 `{type_code, name, slots[{slot_no, role, label}], owners, writers, submittable, block_reason}` · `version` = 문서 권한 전체 버전 · `setup` = `{empty: 사람 0명, leaders: 활성 팀장 수, blocked_forms: [상신 불가 양식]}` · `reload` = `"immediate"`(저장 즉시 다음 요청부터). P16에서 `config_error`는 없어짐 |
+| 화면·기능 | **[문서 권한]** 화면 머리·결재 영역 미리 보기·현재 사용자 역할 요약 · `F-ROLE-01` · 읽기 전용. 고치기는 [`ADM-A09`](#adm-a09)·[`ADM-A10`](#adm-a10)(원본은 DB 표 `role_*` — [ERD](../erd/document.md#관리-설정)) |
 
 <a id="doc-a02"></a>
 #### DOC-A02 · GET `/templates` — 양식 목록
@@ -415,12 +432,12 @@
 
 ### 5. 결재
 
-결재선은 본문으로 받지 않고 역할 설정의 결재 칸 구성으로 서버가 만듭니다. 칸마다 후보 중 1명이 처리하면 되고 칸 사이 순서는 없습니다. 모든 칸이 승인하면 문서가 `approved`, 한 칸이라도 반려하면 `rejected`가 됩니다.
+결재선은 본문으로 받지 않고 문서 권한의 결재 칸 구성으로 서버가 만듭니다. 칸마다 후보 중 1명이 처리하면 되고 칸 사이 순서는 없습니다. 모든 칸이 승인하면 문서가 `approved`, 한 칸이라도 반려하면 `rejected`가 됩니다.
 
 <a id="wf-a01"></a>
 #### WF-A01 · POST `/documents/{document_id}/submit` — 상신·재상신
 
-작성완료된 문서를 결재에 올립니다. 결재선은 받지 않고 역할 설정의 결재 칸 구성으로 서버가 만듭니다. 반려된 문서를 다시 올릴 때도 같은 API입니다.
+작성완료된 문서를 결재에 올립니다. 결재선은 받지 않고 문서 권한의 결재 칸 구성으로 서버가 만듭니다. 반려된 문서를 다시 올릴 때도 같은 API입니다.
 
 | | |
 |---|---|
@@ -428,7 +445,7 @@
 | **화면** | 문서함 → 문서 상세 결재 영역 **[결재 상신]** → 확인 창 **[상신]** (`frontend/static/temp-entry/approval/approval.js`) |
 | **구현** | `document_workflow/api.py::submit` → `document_workflow/services.py::submit` (권한·결재선 → 트랜잭션[문서 잠금 → 스냅샷 → 회차 생성]) |
 | **테스트** | `document_workflow/tests/test_api.py::SubmitApiTests`(응답·요청·오류) · `test_p14_roles.py`(역할·결재선) |
-| **결정** | D-055(작성완료에서만 상신) · D-058(상신된 문서의 파일 보존) · D-182, D-198(역할 설정 결재선) |
+| **결정** | D-055(작성완료에서만 상신) · D-058(상신된 문서의 파일 보존) · D-182, D-198(문서 권한 결재선) |
 
 ##### 요청
 
@@ -481,13 +498,12 @@
 | 403 | `INVALID_STAFF` | 숫자가 아니거나 비활성 직원 | — |
 | 404 | `DOCUMENT_NOT_FOUND` | 문서가 없거나 삭제됨 | — |
 | 409 | `NO_APPROVAL_FORM` | 결재 없는 양식(생산일지 등) | "결재 없는 양식은 상신할 수 없습니다." |
-| 409 | `ROLE_CONFIG_INVALID` | 역할 설정 파일 형식 오류 — 모든 상신이 멈춤 | "역할 설정 파일 오류로 이 작업을 할 수 없습니다." |
 | 403 | `ROLE_REQUIRED` | 그 양식의 담당자·작성 권한자·HACCP팀장이 아님 | "이 양식의 담당자·작성 권한자나 HACCP팀장만 상신할 수 있습니다." |
 | 409 | `NO_APPROVAL_LINE` | 처리할 사람이 0명인 결재 칸이 있음 | "결재 칸을 처리할 사람이 없습니다(역할 보유자 0명)." |
 | 409 | `DOCUMENT_LOCKED` | 작성완료·재상신 가능 상태가 아님 | — |
 | 409 | `VERSION_CONFLICT` | `expected_version`이 현재 버전과 다름 | "다른 사용자가 먼저 수정했습니다. 최신 내용을 다시 불러오세요." |
 
-본문과 사용자 헤더를 확인한 뒤 `services.py::_line_for`에서 문서 존재·결재 양식·역할 설정과 권한·결재선을 순서대로 판정합니다. 마지막으로 `documents/services.py::_lock_failure`가 상태·버전을 판정합니다.
+본문과 사용자 헤더를 확인한 뒤 `services.py::_line_for`에서 문서 존재·결재 양식·문서 권한·결재선을 순서대로 판정합니다. 마지막으로 `documents/services.py::_lock_failure`가 상태·버전을 판정합니다.
 
 ##### 부수 효과
 
@@ -499,7 +515,7 @@
 
 ##### 알아둘 점
 
-- 결재선을 본문으로 받지 않습니다(P14). 재상신도 그때의 역할 설정으로 새로 만듭니다.
+- 결재선을 본문으로 받지 않습니다(P14). 재상신도 그때의 문서 권한으로 새로 만듭니다.
 - 여러 건은 `WF-A04`(일괄 상신)를 씁니다.
 - **[테스트 버전]** `X-Staff-Id`는 화면의 "현재 사용자" 선택이며 인증이 아닙니다.
 
@@ -820,3 +836,151 @@
 | 사용자 | 필요 없음 |
 | 쿼리 | `target` = `process` / `template` · `id` |
 | 응답 | 200 누가·언제·전→후·관련 생산일지 문서 번호 |
+
+### 9. 관리 설정(ADM)
+
+P16에서 생긴 `backend/apps/admin_settings` 앱의 API입니다. 경로는 모두 `/api/v1/admin/…`이고, `doc_entry_enabled`와 관계없이 늘 등록됩니다. 화면은 [문서·결재 기능 안내 11장](../guide/document-guide.md#11-관리-설정직원문서-권한품목별-ccp)을 봅니다.
+
+| 항목 | 규칙 |
+|---|---|
+| 현재 사용자 | 읽기(GET)는 헤더 없이 됨. 쓰기는 `X-Staff-Id` 필수 — **권한 검사는 없고**(누구나) 이력의 "누가"로만 씀. 예외: 활성 직원 0명일 때 `ADM-A05`(등록)·`ADM-A08`(다시 활성)은 헤더 없이 됨(처음 설정 — 아래) |
+| CSRF | 문서 쪽 API와 달리 **Django CSRF 검사를 그대로 함**. 쓰기 요청은 `csrftoken` 쿠키(첫 화면 `home`이 발급) 값을 `X-CSRFToken` 헤더에 실어 보냄. 없거나 맞지 않으면 Django 403(JSON 아님) — 화면 문구 "보안 토큰이 만료됐습니다 — 새로고침 후 다시 시도하세요" |
+| 입력 오류 | 400 `VALIDATION_ERROR` 하나로, 이유는 `details[].code`(`path`·`code`·`message`). 본문이 JSON 객체가 아니면 기존 400 `INVALID_REQUEST` |
+| 버전 확인 | 품목 CCP는 품목 설정 행의 `version`(행 없음 = 0), 문서 권한은 전체 `version` 하나. 다르면 409 `VERSION_CONFLICT`("다른 사람이 먼저 저장했습니다. 새로고침한 뒤 다시 저장하세요.") |
+| 같은 값 저장 | 저장·버전·이력 없이 200(`changed: false` 또는 `changes: []`) |
+| 트랜잭션 | 쓰기 = 한 트랜잭션(본문 검사 → 대상 읽기 → 조건부 저장 → 이력 `admin_change_log`) |
+| 처음 설정 | 헤더가 없거나 활성이 아닌 직원이면 서버가 **같은 트랜잭션에서 활성 직원 0명인지 다시 확인**. 0명이면 허용(이력 `bootstrap_create`·`bootstrap_activate`, 누가 = 그 직원), 아니면 400 `details[].code = setup_finished` |
+| 직원 쓰기 | 수불 `staff` 표는 수불 쪽 `backend/apps/inventory/staff_admin.py`(스스로 커밋 안 함)를 거쳐서만 씀 |
+
+`details[].code` 값: `invalid` · `required` · `unknown_key` · `too_long` · `invalid_process` · `not_producible` · `duplicate_code` · `confirm_required` · `last_active_staff` · `setup_finished` · `duplicate` · `unknown_staff` · `inactive_staff` · `unknown_form`. 없는 대상은 404 `ADM_ITEM_NOT_FOUND`(품목) · `ADM_STAFF_NOT_FOUND`(직원)입니다.
+
+<a id="adm-a01"></a>
+#### ADM-A01 · GET `/admin/item-ccp` — 품목별 CCP 목록
+
+| | |
+|---|---|
+| 사용자 | 필요 없음 |
+| 쿼리 | `q`(이름·품목코드 일부) · `include_inactive` = `0`(기본) / `1`(사용 중지 품목 포함) · `only_own` = `0` / `1`(품목 설정만) |
+| 응답 | 200 `{default: {MANUFACTURE: ["1P","2B","3P"], PACKAGING: []}, items: [{item_id, item_code, name, is_active, mode, processes, version, effective, planned_batches, running_batches}]}` · 반제품(`item_type = SEMI`)만, 품목코드 순 · 설정 행 없음 = `mode: "default"`·`version: 0` · `effective` = 실제로 쓸 공정 · 배치 수는 생산 전·생산 중 제조 배치(`v_doc_batch`) |
+| 오류 | 400 `VALIDATION_ERROR`(`include_inactive`·`only_own`이 0·1 아님 — `invalid`) |
+| 화면·기능 | **[생산 기준정보] › [품목별 CCP]** 목록 · [`F-ADM-04`](../guide/document-guide.md#114-품목별-ccp-정하기) |
+
+<a id="adm-a02"></a>
+#### ADM-A02 · PUT `/admin/item-ccp/{item_id}` — 품목 CCP 저장
+
+| | |
+|---|---|
+| 사용자 | 필수 · `X-CSRFToken` 필수 |
+| 본문 | `mode`(필수, `default` 기본 따름 / `own` 품목 설정) · `processes`(`own`일 때 `1P`·`2B`·`3P` 중 0~3개, 0개 = CCP 없음. `default`면 비우거나 생략) · `reason`(선택, 앞뒤 공백 정리 뒤 100자 이하) · `expected_version`(필수, 설정 없음 = 0) |
+| 응답 | 200 `{item, changed}` — `item`은 A01 한 줄 모양. 같은 값이면 `changed: false`(저장·이력 없음) |
+| 오류 | 400 `VALIDATION_ERROR`(`unknown_key` · `invalid`(mode) · `invalid_process`(없는 공정·중복·default인데 공정 있음) · `too_long`(사유) · `required`(expected_version) · `not_producible`(반제품 아님)) · 404 `ADM_ITEM_NOT_FOUND` · 409 `VERSION_CONFLICT` |
+| 부수 효과 | `item_ccp` 행 저장(기본 따름으로 되돌려도 행은 남기고 `mode = default`, 버전 +1) · 이력 1행(`set`·`default`, 사유 포함). **다음 생산 시작부터** 적용 — 이미 적용 기록(`batch_ccp_applied`)이 있는 배치는 그대로 |
+| 화면·기능 | **[품목별 CCP]** [편집] → [저장] · [`F-ADM-04`](../guide/document-guide.md#114-품목별-ccp-정하기) |
+
+<a id="adm-a03"></a>
+#### ADM-A03 · GET `/admin/staff` — 직원 목록(관리용)
+
+| | |
+|---|---|
+| 사용자 | 필요 없음(처음 설정 화면에서도 읽음) |
+| 쿼리 | `q`(이름·코드 일부) · `state` = `all`(기본) / `active` / `inactive` |
+| 응답 | 200 `{setup: {no_active_staff}, items: [{id, staff_code, name, is_active, created_at, roles: {is_leader, owner_of, writer_of}}]}` — 직원 번호 순, 비활성 포함 역할 요약 |
+| 오류 | 400 `VALIDATION_ERROR`(`state` 값 — `invalid`) |
+| 화면·기능 | **[시스템] › [설정]** 직원 카드 · 처음 설정의 비활성 직원 목록 · [`F-ADM-02`](../guide/document-guide.md#112-직원-관리) · [`F-ADM-01`](../guide/document-guide.md#111-처음-설정) |
+
+활성 직원 0명 판정 자체는 문서 쪽 [`DOC-A01`](#doc-a01)(활성만, 빈 목록 = 0명)으로 합니다.
+
+<a id="adm-a04"></a>
+#### ADM-A04 · GET `/admin/staff/next-code` — 직원 코드 제안
+
+| | |
+|---|---|
+| 사용자 | 필요 없음 |
+| 응답 | 200 `{code}` — `영문-숫자` 형식이 가장 많은 접두어의 최대 번호 + 1(자릿수 유지, 예 `DEV-006`). 없으면 `S-001` |
+| 화면·기능 | 직원 등록 창의 코드 기본값 · `F-ADM-01` `F-ADM-02` |
+
+<a id="adm-a05"></a>
+#### ADM-A05 · POST `/admin/staff` — 직원 등록
+
+| | |
+|---|---|
+| 사용자 | 필수 · `X-CSRFToken` 필수. **활성 직원 0명이면 헤더 없이 됨**(처음 설정) |
+| 본문 | `name`(필수, 앞뒤 공백 정리 뒤 1~40자) · `staff_code`(필수, 1~20자, 비활성 포함 유일 — 등록 뒤 바꿀 수 없음) |
+| 응답 | 201 `{staff}`(A03 한 줄 모양, 역할 없음) |
+| 오류 | 400 `VALIDATION_ERROR`(`unknown_key` · `invalid`(빈 값·길이) · `duplicate_code` · `setup_finished`(헤더 없이 보냈는데 활성 직원이 이미 있음)) |
+| 부수 효과 | 수불 `staff` 표에 활성 직원 1행(`staff_admin.create`) · 이력 `create`(처음 설정이면 `bootstrap_create`, 누가 = 등록된 직원) |
+| 화면·기능 | 직원 카드 [+ 직원] · 처음 설정 화면 [등록] · `F-ADM-01` `F-ADM-02` |
+
+<a id="adm-a06"></a>
+#### ADM-A06 · PATCH `/admin/staff/{staff_id}` — 직원 이름 수정
+
+| | |
+|---|---|
+| 사용자 | 필수 · `X-CSRFToken` 필수 |
+| 본문 | `name`만(필수, 1~40자). `staff_code` 등 다른 키는 `unknown_key` |
+| 응답 | 200 `{staff, changed}` — 같은 이름이면 `changed: false`(이력 없음) |
+| 오류 | 400 `VALIDATION_ERROR`(`required` · `invalid` · `unknown_key`) · 404 `ADM_STAFF_NOT_FOUND` |
+| 부수 효과 | 수불 `staff.name` 변경(`staff_admin.rename`) · 이력 `rename` |
+| 화면·기능 | 직원 줄 [이름 수정] · [`F-ADM-02`](../guide/document-guide.md#112-직원-관리) |
+
+<a id="adm-a07"></a>
+#### ADM-A07 · GET `/admin/staff/{staff_id}/impact` — 비활성 영향
+
+| | |
+|---|---|
+| 사용자 | 필요 없음 — 보내면 `is_current_user`를 판정 |
+| 응답 | 200 `{staff, roles, pending_approvals, sole_approvals: [{approval_id, request_id, document_id, type_code, subject, slot_label, role, requested_by, requester_active}], pending_checks, inspector_docs, orphaned: [{type_code, name, role, effect, forms?}](팀장 0명 줄은 type_code null + forms), active_leaders, last_active, is_current_user}` · `orphaned` = 이 사람을 빼면 활성 보유자가 0명이 되는 곳, `effect` = `submit_blocked` / `write_leader_only`(팀장 0명은 `type_code: null` 한 줄 + 영향 양식 `forms`) · `last_active` = 마지막 활성 직원 |
+| 오류 | 404 `ADM_STAFF_NOT_FOUND` |
+| 화면·기능 | [비활성…] 확인 창 · 처음 설정에서 다시 활성 행을 펼칠 때 · `F-ADM-01` `F-ADM-02` |
+
+읽기만 합니다. 결재(APR)·개선조치·점검자(DOC) 읽기 함수를 함께 부릅니다.
+
+<a id="adm-a08"></a>
+#### ADM-A08 · POST `/admin/staff/{staff_id}/active` — 비활성·다시 활성
+
+| | |
+|---|---|
+| 사용자 | 필수 · `X-CSRFToken` 필수. **활성 직원 0명이면 `active: true`만 헤더 없이 됨**(처음 설정) |
+| 본문 | `active`(필수, true/false) · `confirm_impact`(비활성할 때 `true` 필수 — 화면이 A07 확인을 건너뛰지 않게) |
+| 응답 | 200 `{staff, changed}` — 같은 값이면 `changed: false`(이력 없음) |
+| 오류 | 400 `VALIDATION_ERROR`(`required` · `invalid` · `unknown_key` · `confirm_required` · `last_active_staff`(마지막 활성 직원) · `setup_finished`) · 400 `STAFF_HEADER_MISSING`(헤더 없이 비활성) · 404 `ADM_STAFF_NOT_FOUND` |
+| 부수 효과 | 이력 `deactivate`·`activate`(처음 설정이면 `bootstrap_activate`). 비활성 직원의 문서 권한 행은 남고 효과만 빠짐. 영향이 있어도 막지 않음 |
+| 화면·기능 | 직원 줄 [비활성…]·[다시 활성] · 처음 설정 · `F-ADM-01` `F-ADM-02` |
+
+수불 CSV 가져오기·수불 `/staff/` API로 바꾼 것은 이력에 남지 않고, 마지막 직원 막기도 없습니다(0명이 되면 다음 접속 때 처음 설정).
+
+<a id="adm-a09"></a>
+#### ADM-A09 · GET `/admin/roles` — 문서 권한(편집용)
+
+| | |
+|---|---|
+| 사용자 | 필요 없음 |
+| 응답 | 200 `{version, setup, leaders: [{id, staff_code, name, is_active}], forms: [{type_code, name, slots, labels, owners, writers, warnings}], warnings}` · 활성 양식 순서(DOC 양식 목록) · **비활성 사람도 포함**(화면이 점선으로 표시) · `slots` = `owner` / `owner_leader` / `leader` / `none`, 양식 행이 없으면 `null` · `setup`은 `ROLE-A01`과 같음 |
+| 화면·기능 | **[문서 권한]** 편집 화면 · [`F-ADM-03`](../guide/document-guide.md#113-문서-권한-정하기) |
+
+<a id="adm-a10"></a>
+#### ADM-A10 · PUT `/admin/roles` — 문서 권한 저장
+
+| | |
+|---|---|
+| 사용자 | 필수 · `X-CSRFToken` 필수 |
+| 본문 | `expected_version`(필수, 1 이상 — A09의 `version`) · `leaders`(선택, 직원 id 목록 — 보내면 팀장 전체를 이것으로) · `forms`(선택, `{type_code: {owners?, writers?}}` — 보낸 양식·역할만 이 목록으로, 안 보낸 것은 그대로). `slots`·`labels`는 바꾸지 않음(`unknown_key`) |
+| 응답 | 200 `{version, changes: [{role, type_code, before, after}], warnings}` — 바뀐 곳이 없으면 `changes: []`, 버전 그대로 |
+| 오류 | 400 `VALIDATION_ERROR`(`unknown_key` · `required` · `invalid` · `duplicate`(목록 안 같은 직원) · `unknown_form` · `unknown_staff` · `inactive_staff`(새로 넣는 비활성 직원)) · 409 `VERSION_CONFLICT` |
+| 부수 효과 | 바뀐 팀장·양식×역할만 다시 씀(`role_leader`·`role_form_member`) · 전체 버전 +1(조건부) · 바뀐 곳마다 이력 `change` 1행. **재시작 없이 다음 작성·상신·결재부터 적용**, 이미 상신된 결재 후보는 그대로. 0명이 되는 역할도 저장되고 `warnings`로만 알림 |
+| 화면·기능 | **[문서 권한]** [저장…] → [저장] · [`F-ADM-03`](../guide/document-guide.md#113-문서-권한-정하기) |
+
+이미 들어 있던 비활성 직원은 목록에 그대로 둘 수 있습니다(`inactive_staff`는 저장 전 행에 없던 사람만). 담당자·작성 권한자·팀장 겹침은 허용합니다.
+
+<a id="adm-a11"></a>
+#### ADM-A11 · GET `/admin/history` — 관리 설정 변경 이력
+
+| | |
+|---|---|
+| 사용자 | 필요 없음 |
+| 쿼리 | `target`(필수) = `item_ccp` / `staff` / `roles`(팀장·양식·가져오기 묶음) · `target_id`(선택, 품목 id·직원 id·양식 행 id, 팀장 = 0) · `limit`(1~200, 기본 200) |
+| 응답 | 200 `{items: [{log_id, label, at, actor: {id, name}, target, target_id, action, before, after, reason}]}` — 최신순, `at`은 한국 시각, `label` = 대상 이름(품목·직원 "이름(코드)", 양식 코드, "HACCP팀장", "문서 권한 가져오기") |
+| 오류 | 400 `VALIDATION_ERROR`(`target`·`target_id`·`limit` — `invalid`) |
+| 화면·기능 | 세 화면의 [이력] · `F-ADM-02` `F-ADM-03` `F-ADM-04` |
+
+`action` 값은 [ERD — `admin_change_log`](../erd/document.md#admin_change_log)에 있습니다. 관리 명령 `import_roles`도 이 표에 `roles_import` 1행을 남깁니다.

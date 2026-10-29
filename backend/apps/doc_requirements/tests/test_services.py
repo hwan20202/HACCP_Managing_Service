@@ -2,12 +2,13 @@
 
 import ast
 from pathlib import Path
-from unittest import mock
 
 from django.db import connection, transaction
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 
+from apps.admin_settings.models import ItemCcp
 from apps.approvals import services as apr
 from apps.approvals.models import ApprovalRequest
 from apps.core import trace as tracing
@@ -251,8 +252,9 @@ class RequireForBatchTests(TestCase):
         batch(12)
         self.assertEqual([d["result"] for d in batch(12)["documents"]], ["existing"] * 3)
         self.assertEqual(batch(13)["documents"], [])
-        with mock.patch.dict(rules.CCP_BY_ITEM, {3: ["1P"]}):
-            self.assertEqual([d["type_code"] for d in batch(15)["documents"]], ["CCP-1P"])
+        # P16: 품목 예외 = 관리 설정 품목 CCP(ADM-R05 — 예전 rules.CCP_BY_ITEM)
+        ItemCcp.objects.create(item_id=3, mode="own", ccp_1p=True, updated_at=timezone.now())
+        self.assertEqual([d["type_code"] for d in batch(15)["documents"]], ["CCP-1P"])
         self.assertEqual(Document.objects.count(), 4)
 
     def test_tc012_errors(self):
@@ -432,6 +434,7 @@ class BoundaryTests(TestCase):
         "apps.approvals.services",
         "apps.staff.services",
         "apps.staff.roles",  # P14 공용 역할 모듈(테이블 없음, ROLE-NFR-01·D-181)
+        "apps.admin_settings.store",  # P16 ADM-F01·F03(다른 단위가 부르는 저장소 — S2 1장)
         "apps.core.",
         "django",
         # P9 periodic.py(규칙 파일 읽기·날짜 계산): 표준 라이브러리는 계층과 무관(S4 G1)

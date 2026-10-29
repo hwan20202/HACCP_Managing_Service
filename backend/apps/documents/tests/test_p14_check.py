@@ -6,7 +6,7 @@ P11 확인(F30·F31)이 main에 들어온 뒤 붙인다. 개발 역할: HACCP팀
 from apps.documents import errors, services
 from apps.documents.models import DeviationAction
 from apps.documents.tests.p11 import ccp_doc, deviation
-from apps.staff.tests.base import RolesFileMixin
+from apps.staff.tests.base import EMPTY, RolesFileMixin
 
 from .test_p11 import P11TestCase
 
@@ -33,9 +33,9 @@ class LeaderCheckTests(RolesFileMixin, P11TestCase):
         self.assertIn("HACCP팀장", ctx.exception.message)
         self.assertIsNone(DeviationAction.objects.get(pk=self.x["deviation_id"]).checked_at)
 
-    def test_tc30_config_invalid_no_leader_exception(self):
-        """ROLE-C07: 설정 파일 오류면 팀장 예외는 쓸 수 없고, 지정 확인자는 그대로 확인."""
-        self.use_roles(raw="{")
+    def test_tc30_leader_removed_no_exception(self):
+        """P16(ROLE-C07 대체): 팀장을 빼면 팀장 예외도 없고, 지정 확인자는 그대로 확인."""
+        self.use_roles(EMPTY)
         with self.assertRaises(errors.NotChecker):
             services.check_deviation(LEADER, self.x["deviation_id"], 1)
         out = services.check_deviation(3, self.x["deviation_id"], 1)

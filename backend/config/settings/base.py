@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     "apps.doc_requirements",
     "apps.doc_effects",  # P6 EFF 문서 후속 처리(D-079)
     "apps.production_log",  # P15 생산일지·생산 기준정보(ERD v7.3)
+    "apps.admin_settings",  # P16 관리 설정(ERD v7.4)
 ]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -125,15 +126,7 @@ HACCP_INVENTORY_ERRORS = env_list("HACCP_INVENTORY_ERRORS", "apps.inventory.erro
 HACCP_BATCH_TYPES = env_list("HACCP_BATCH_TYPES", "D03,D10,D11,D12")  # P8 4.3
 # P9 주기 작성 요구 규칙 파일(비우면 apps/doc_requirements/periodic_rules.json). 호출마다 읽음
 HACCP_PERIODIC_RULES = os.environ.get("HACCP_PERIODIC_RULES") or None
-# P14 역할 설정 파일(비우면 apps/staff/roles.json — 가상 개발 직원만).
-# 서버 시작 뒤 한 번 읽음(바꾸면 재시작)
-_roles_file = os.environ.get("HACCP_ROLES_FILE")
-HACCP_ROLES_FILE = (
-    None
-    if not _roles_file
-    else str(Path(_roles_file) if Path(_roles_file).is_absolute() else ROOT_DIR / _roles_file)
-)  # 상대 경로는 저장소 루트 기준(HACCP_DATA_DIR과 같게)
-HACCP_ROLES_RELOAD = False
+# P16(ADM-R45): 역할(문서 권한)은 DB — HACCP_ROLES_FILE 없앰. roles.json은 import_roles 입력용
 # [임시 진입점 T5] 시제품 사이드바의 "개발 검증 (임시)" 탭. 운영(사용 테스트)에서도 켤 수 있다.
 HACCP_TEMP_ENTRY = env_bool("HACCP_TEMP_ENTRY", False)
 # [P10] 문서함·결재함 메뉴 자리: dev = 개발 검증 섹션(지금), haccp = HACCP 관리 섹션 맨 위

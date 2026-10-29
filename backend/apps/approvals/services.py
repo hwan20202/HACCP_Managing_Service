@@ -886,6 +886,56 @@ def slot_refs(approval_ids):
         }
 
 
+def pending_slots_of(staff_id):
+    """P16 ADM-F16(비활성 영향): 진행 중 회차의 대기 칸 중 이 사람이 처리할 수 있는 칸(SQL 2).
+
+    반환 {count, sole:[{approval_id, request_id, document_id, type_code, subject, slot_label,
+    requested_by, requester_active}]}. sole = 이 사람 말고 **활성** 후보가 없는 칸(직접 지정 칸은
+    지정 결재자가 이 사람이면 늘 sole) — 이 사람을 비활성하면 처리할 사람이 없어진다(R4 a·R67).
+    역할 설정은 모른다(후보는 상신 때 고정 — ROLE-R03). 쓰기 없음.
+    """
+    mine = Approval.objects.filter(
+        _eligible(staff_id), state="pending", request__status="in_progress"
+    )
+    with step("APR-IMP-01", "APR", "내가 처리할 수 있는 대기 칸 수"):
+        count = mine.count()
+    with step("APR-IMP-02", "APR", "다른 활성 후보가 없는 칸") as s:
+        others = ApprovalCandidate.objects.filter(
+            approval_id=OuterRef("pk"), staff__is_active=True
+        ).exclude(staff_id=staff_id)
+        rows = (
+            mine.filter(Q(role__isnull=True) | ~Q(Exists(others)))
+            .order_by("request__requested_at", "approval_id")
+            .values(
+                "approval_id",
+                "request_id",
+                "request__document_id",
+                "request__template__type_code",
+                "request__subject",
+                "label",
+                "role",
+                "request__requested_by_id",
+                "request__requested_by__is_active",
+            )
+        )
+        sole = [
+            {
+                "approval_id": r["approval_id"],
+                "request_id": r["request_id"],
+                "document_id": r["request__document_id"],
+                "type_code": r["request__template__type_code"],
+                "subject": r["request__subject"],
+                "slot_label": r["label"],
+                "role": r["role"],
+                "requested_by": r["request__requested_by_id"],
+                "requester_active": r["request__requested_by__is_active"],
+            }
+            for r in rows
+        ]
+        s.note(f"대기 {count}, 유일 {len(sole)}")
+    return {"count": count, "sole": sole}
+
+
 def document_progress(document_ids, actor_id):
     """A10: 문서마다 가장 큰 attempt 회차의 진행·내 대기 칸(SQL 1).
 

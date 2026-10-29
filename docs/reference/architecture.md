@@ -28,12 +28,13 @@ HTTP 자동 검사는 `scripts/smoke_process.py`가 `scripts/smoke_server.py`를
 - `backend/apps/staff`: 사람 연결 모듈(테이블 없음, 앱 등록 안 함). 사람은 수불 `staff`(`inventory.Staff`). 현재 사용자는 `X-Staff-Id` 헤더로 받고 없거나 비활성(`is_active = 0`)인 id는 거부
 - `backend/apps/documents`: 문서 도메인 — 양식 조회, 문서 작성·조회·수정(바뀐 부분만, 버전 확인)·논리 삭제, 문서 생명주기 전이
 - `backend/apps/approvals`: 결재 도메인 — 결재 요청(회차)·역할 칸·칸별 후보자, 승인·반려 판정, 결재함·이력 조회. 후보 중 1명이 처리하면 해당 칸 완료
-- `backend/apps/document_workflow`: 문서 워크플로우 — 역할 설정으로 결재선을 구성하고 상신·승인·반려에서 두 도메인을 한 트랜잭션으로 묶음. 테이블 없음
+- `backend/apps/document_workflow`: 문서 워크플로우 — 문서 권한(DB)으로 결재선을 구성하고 상신·승인·반려에서 두 도메인을 한 트랜잭션으로 묶음. 테이블 없음
 - `backend/apps/doc_requirements`: 작성 요구 — 수불·생산이 입고 등록·생산 시작 때 같은 트랜잭션에서 부르는 함수(`require_for_lot`·`require_for_batch`)로 필요한 문서를 만들고, LOT·배치별 연결 문서를 조회. 수불·생산 값은 뷰(`v_doc_incoming_lot`·`v_doc_batch`)로만 읽음. 테이블 없음. 문서 영역(`documents`·`approvals`·`document_workflow`·`doc_requirements`)의 결정 사항은 [document-decisions.md](document-decisions.md), 생산·수불 앱 연동 명세는 [document-inventory-interface.md](document-inventory-interface.md)
 - `backend/apps/production_log`: 생산일지(P15) — 공정·공정 템플릿·변경 이력 테이블과 API, 생산일지 저장·작성완료 검사(DOC 양식 확장 등록), 작성완료 때 연동 값 고정, CCP 값 가져오기. 수불 값은 `doc_requirements`의 공개 함수로만 읽음. 결정 사항은 [document-decisions.md](document-decisions.md) 10장
+- `backend/apps/admin_settings`: 관리 설정(P16) — 품목별 CCP(`ccp_default`·`item_ccp`·배치 적용 기록 `batch_ccp_applied`), 문서 권한(`role_config`·`role_leader`·`role_form`·`role_form_member` — HACCP팀장·양식 담당자·작성 권한자·결재 칸), 변경 이력(`admin_change_log`) 표와 `/api/v1/admin/` API, 처음 설정(활성 직원 0명), 옛 역할 파일 가져오기 명령 `import_roles`. 직원 쓰기는 수불 `inventory/staff_admin.py`만 부름. 다른 앱은 `admin_settings/store.py` 함수로만 읽음. 표는 [ERD — 관리 설정](../handover/erd/document.md#관리-설정)
 - `backend/apps/devtools`, `backend/apps/devserver`: 개발 전용(개발 콘솔 API, 개발 시드 명령 `seed_dev_workflow`·`seed_dev_p4`, 정적 파일 no-cache 개발 서버). 개발용 입고 LOT은 수불 입고 서비스로, 생산 배치는 수불 생산 서비스가 들어오기 전까지 개발 전용 INSERT로 만든다(`devtools/inventory_dev.py`). 운영 설정에는 등록하지 않음
 
-로그인·계정·Django 관리자 기능은 없습니다. 문서 작성·결재에는 직원 선택과 역할 설정에 따른 권한 검사를 적용합니다. 첨부 파일은 documents 앱에서 관리합니다. 아래는 주요 테이블 요약이며 전체 목록은 각 앱의 models.py와 migrations를 확인합니다. 사람·LOT·배치·품목은 수불 테이블을 참조합니다.
+로그인·계정·Django 관리자 기능은 없습니다. 문서 작성·결재에는 직원 선택과 문서 권한(DB, 화면 [문서 권한])에 따른 권한 검사를 적용합니다. 첨부 파일은 documents 앱에서 관리합니다. 아래는 주요 테이블 요약이며 전체 목록은 각 앱의 models.py와 migrations를 확인합니다. 사람·LOT·배치·품목은 수불 테이블을 참조합니다.
 
 | 테이블 | 소유 앱 | 내용 |
 |---|---|---|

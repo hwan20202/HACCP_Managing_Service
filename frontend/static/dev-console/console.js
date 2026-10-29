@@ -133,6 +133,19 @@
     templateActive: { label: 'PLG 템플릿 사용 중지·다시 사용 (A07)', method: 'POST', flow: 'TPL-ACT', uses: ['id', 'body'], path: (s) => `process-templates/${s.id}/active`, scope: (s) => `process_template_id=${s.id}` },
     templateDelete: { label: 'PLG 템플릿 삭제 (A07)', method: 'DELETE', flow: 'TPL-DEL', uses: ['id', 'query'], path: (s) => `process-templates/${s.id}${s.query ? `?${s.query}` : ''}`, scope: (s) => `process_template_id=${s.id}` },
     masterHistory: { label: 'PLG 기준정보 변경 이력 (A08)', method: 'GET', flow: 'MST-HIS', uses: ['query'], path: (s) => `master-history${s.query ? `?${s.query}` : ''}` },
+    // ---- P16 관리 설정 묶음 ① — admin/p16-s2-spec.md 4장 A01·A02·A11(콘솔 흐름 admin_settings/flows.py CONSOLE). 쓰기는 X-CSRFToken(api-client)
+    admItemCcp: { label: 'ADM 품목별 CCP 목록 (A01)', method: 'GET', flow: 'ADM-CCP-LST', uses: ['query'], path: (s) => `admin/item-ccp${s.query ? `?${s.query}` : ''}` },
+    admItemCcpSave: { label: 'ADM 품목 CCP 저장 (A02)', method: 'PUT', flow: 'ADM-CCP-SAV', uses: ['id', 'body'], path: (s) => `admin/item-ccp/${s.id}` },
+    admHistory: { label: 'ADM 변경 이력 (A11)', method: 'GET', flow: 'ADM-HIS', uses: ['query'], defaultQuery: 'target=item_ccp', path: (s) => `admin/history${s.query ? `?${s.query}` : ''}` },
+    // ---- P16 묶음 ② 직원(A03~A06·A08)·문서 권한(A09·A10). A05·A08은 현재 사용자 없이 = 처음 설정(활성 0명일 때만 — R62)
+    admStaff: { label: 'ADM 직원 목록 (A03)', method: 'GET', flow: 'ADM-STF-LST', uses: ['query'], defaultQuery: 'state=all', path: (s) => `admin/staff${s.query ? `?${s.query}` : ''}` },
+    admStaffCode: { label: 'ADM 직원 코드 제안 (A04)', method: 'GET', flow: 'ADM-STF-COD', uses: [], path: () => 'admin/staff/next-code' },
+    admStaffCreate: { label: 'ADM 직원 등록 (A05)', method: 'POST', flow: 'ADM-STF-NEW', uses: ['body'], path: () => 'admin/staff' },
+    admStaffRename: { label: 'ADM 직원 이름 (A06)', method: 'PATCH', flow: 'ADM-STF-REN', uses: ['id', 'body'], path: (s) => `admin/staff/${s.id}` },
+    admStaffActive: { label: 'ADM 직원 활성·비활성 (A08)', method: 'POST', flow: 'ADM-STF-ACT', uses: ['id', 'body'], path: (s) => `admin/staff/${s.id}/active` },
+    admStaffImpact: { label: 'ADM 비활성 영향 (A07)', method: 'GET', flow: 'ADM-STF-IMP', uses: ['id'], path: (s) => `admin/staff/${s.id}/impact` },  // P16 묶음 ③
+    admRoles: { label: 'ADM 문서 권한 (A09)', method: 'GET', flow: 'ADM-ROL-GET', uses: [], path: () => 'admin/roles' },
+    admRolesSave: { label: 'ADM 문서 권한 저장 (A10)', method: 'PUT', flow: 'ADM-ROL-SAV', uses: ['body'], path: () => 'admin/roles' },
   };
   function periodicScope(spec, fromKey, toKey) {
     try {
@@ -806,7 +819,7 @@
     return r.ok ? r.json() : null;
   }
   const SEED_HINT = 'seed_dev_workflow로 시드 데이터를 넣으세요';
-  // P14: 결재선은 역할 설정(backend/apps/staff/roles.json)으로 자동 — 상신 본문에 slots 없음(보내면 400 unknown_key).
+  // P14: 결재선은 역할(P16: DB 문서 권한)으로 자동 — 상신 본문에 slots 없음(보내면 400 unknown_key).
   // 개발 역할: 3 = 모든 양식 담당자, 1 = CCP 담당자 + HACCP팀장(겸직), 5 = HACCP팀장, 2 = D·위생 양식 담당자, 4 = 역할 없음.
   // 역할 칸은 대기 중 결재자가 비어 있으므로 처리할 사람 = 후보(candidate_ids) 중 1명.
   const OWNER = '3';
@@ -1724,7 +1737,130 @@
       } }),
   );
 
+  // ---------------------------------------------------------------- 프리셋 ADM-PS-01~07 (P16 S6 — admin/p16-s1-screens.md 10장)
+  // 관리 설정은 DB 전체 설정이라 다른 프리셋(PLG·ROLE)에 영향이 없도록 **바꾼 설정 값은 같은 프리셋 안에서 실행 전 값으로 되돌린다**
+  // (마지막 호출들 — 품목 CCP는 실행 전 mode·공정, 문서 권한은 실행 전 사람 목록). 되돌림도 저장 API라 문서 권한 버전·변경 이력은
+  // 늘어난다(D-273 B3 a — 다른 프리셋이 개발 DB에 문서·이력을 남기는 것과 같음). PS-03·04가 만든 직원은 비활성으로 남는다.
+  // 사전 조건: 배치는 fixtures/prodlog(품목 3915001 "녹용 효력환(개발)" — 생산 시작 훅이 CCP 일지 3), 문서는 fixtures/d03·ccp,
+  // 가져오기(PS-07)는 fixtures/admin-import(한 트랜잭션에서 비우고 가져온 뒤 되돌림 — DB 변화 없음).
+  // ④ DB 비교는 문서·LOT 단위라 관리 설정 표는 나오지 않는다 — 바뀐 것은 응답과 A11 이력으로 본다.
+  const adm = (preset) => ({ unit: 'ADM', ...preset });
+  async function admItem(code) {
+    const list = await quietGet(`admin/item-ccp?q=${encodeURIComponent(code)}&include_inactive=1`);
+    const it = list && list.items.find((x) => x.item_code === code);
+    if (!it) throw new Error(`반제품 ${code}가 없습니다(fixtures/prodlog가 만듦).`);
+    return it;
+  }
+  async function admRolesNow() {
+    const r = await quietGet('admin/roles');
+    if (!r) throw new Error('문서 권한(A09)을 읽지 못했습니다.');
+    return r;
+  }
+  const idsOf = (list) => list.map((x) => x.id);
+  async function admFormOf(types) {
+    const roles = await admRolesNow();
+    const form = types.map((t) => roles.forms.find((f) => f.type_code === t)).find(Boolean);
+    if (!form) throw new Error(`활성 양식 ${types.join('·')}가 없습니다(${SEED_HINT}).`);
+    return form;
+  }
+  // 바꾼 양식의 담당자·작성 권한자를 원래대로(그때 버전으로)
+  async function admRestoreForm(exec, form) {
+    const now = await admRolesNow();
+    await exec({ func: 'admRolesSave', staff: '3', body: J({ expected_version: now.version, forms: { [form.type_code]: { owners: idsOf(form.owners), writers: idsOf(form.writers) } } }) });
+  }
+  // 품목 CCP를 실행 전 값(original = 준비 때 읽은 A01 행)으로 — 기본 따름이었으면 기본 따름, 품목 설정이었으면 그 공정(D-273 B2)
+  async function admRestoreItem(exec, original) {
+    const now = await admItem(original.item_code);
+    await exec({ func: 'admItemCcpSave', staff: '3', id: String(original.item_id), body: J({ mode: original.mode, processes: original.mode === 'own' ? original.processes : [], expected_version: now.version }) });
+  }
+  async function admNewStaff(exec, name) {
+    const code = await quietGet('admin/staff/next-code');
+    const made = await exec({ func: 'admStaffCreate', staff: '3', body: J({ name, staff_code: code ? code.code : `PS-${Date.now() % 100000}` }) });
+    if (!made.record.ok) throw new Error('직원 등록(A05)이 실패했습니다.');
+    return made.record.data.staff;
+  }
+  PRESETS.push(
+    adm({ id: 'ADM-PS-01', label: '품목별 CCP 섞임 — 기본 따름·품목 설정·CCP 없음', expect: '[1·2] A02 200(3915001 품목 설정 1P·3P, 3916001 CCP 없음 — ADM-CCP-SAV 01~04) → [3] A01 only_own=1: 두 품목 mode own·effective [1P,3P]/[], 진행 중 배치 수 1 이상(불러올 때 시작한 배치) · [4·5] 되돌림 A02 200(실행 전 mode·공정으로 — 버전·이력은 남음) · 이력은 A11 target=item_ccp',
+      prepare: async () => {
+        await plgFixture({ scenario: 'started' });
+        await plgFixture({ scenario: 'excel' });
+        const a = await admItem('3915001');
+        const b = await admItem('3916001');
+        const first = { func: 'admItemCcpSave', staff: '3', id: String(a.item_id), body: J({ mode: 'own', processes: ['1P', '3P'], reason: 'ADM-PS-01(콘솔)', expected_version: a.version }) };
+        return { ...first, script: async (exec) => {
+          await exec(first);
+          await exec({ func: 'admItemCcpSave', staff: '3', id: String(b.item_id), body: J({ mode: 'own', processes: [], expected_version: b.version }) });
+          await exec({ func: 'admItemCcp', staff: '3', query: 'only_own=1' });
+          await admRestoreItem(exec, a);
+          await admRestoreItem(exec, b);
+        } };
+      } }),
+    adm({ id: 'ADM-PS-02', label: '설정을 바꾼 뒤 과거 배치 — 대시보드는 실제 CCP 일지', expect: '[1] A02 200(3915001 → 품목 설정 1P만) → [2] CCP 대시보드 200: batches에서 불러올 때 시작한 배치의 processes = CCP-1P·2B·3P 그대로(공정 = 실제 일지 — S1a Q3·R07, 설정과 무관) → [3] 되돌림 A02(실행 전 값으로) · 그 배치의 CCP 일지 수 3 그대로',
+      prepare: async () => {
+        const made = await plgFixture({ scenario: 'started' });
+        const a = await admItem('3915001');
+        const first = { func: 'admItemCcpSave', staff: '3', id: String(a.item_id), body: J({ mode: 'own', processes: ['1P'], reason: `ADM-PS-02 배치 ${made.batch_number}(콘솔)`, expected_version: a.version }) };
+        return { ...first, script: async (exec) => {
+          await exec(first);
+          await exec({ func: 'ccpDashboard', staff: '3', query: `date=${seoulToday()}` });
+          await admRestoreItem(exec, a);
+        } };
+      } }),
+    adm({ id: 'ADM-PS-03', label: '비활성하면 담당자 0명이 되는 직원', expect: '[1] A05 201(새 직원) → [2] A10 200(그 양식 담당자 = 새 직원 한 명) → [3] A07 200: orphaned [{type_code: 그 양식, role: owner, effect: submit_blocked}], 역할 담당 1양식, sole_approvals [] · [4] 되돌림 A10(원래 담당자) → [5] A08 비활성 200(confirm_impact)',
+      prepare: async () => {
+        const form = await admFormOf(['HYGIENE_CHECK', 'D11', 'D12']);
+        return { func: 'admStaffCode', staff: '3', script: async (exec) => {
+          const s = await admNewStaff(exec, 'ADM-PS-03 영향 확인');
+          const roles = await admRolesNow();
+          await exec({ func: 'admRolesSave', staff: '3', body: J({ expected_version: roles.version, forms: { [form.type_code]: { owners: [s.id], writers: idsOf(form.writers) } } }) });
+          await exec({ func: 'admStaffImpact', staff: '3', id: String(s.id) });
+          await admRestoreForm(exec, form);
+          await exec({ func: 'admStaffActive', staff: '3', id: String(s.id), body: J({ active: false, confirm_impact: true }) });
+        } };
+      } }),
+    adm({ id: 'ADM-PS-04', label: '비활성 직원이 문서 권한에 남은 상태(점선 칩)', expect: '[1] A05 201 → [2] A10 200(그 양식 작성 권한자 + 새 직원) → [3] A08 비활성 200 → [4] A09 200: 그 양식 writers에 새 직원 is_active false 그대로 + warnings R-W2(비활성 — 역할에서 뺐습니다) · 화면 [문서 권한]은 점선·취소선 칩 · [5] 되돌림 A10(원래 작성 권한자 — 비활성 직원 빼기는 허용)',
+      prepare: async () => {
+        const form = await admFormOf(['D01', 'D02', 'HYGIENE_CHECK']);
+        return { func: 'admStaffCode', staff: '3', script: async (exec) => {
+          const s = await admNewStaff(exec, 'ADM-PS-04 비활성 남김');
+          const roles = await admRolesNow();
+          await exec({ func: 'admRolesSave', staff: '3', body: J({ expected_version: roles.version, forms: { [form.type_code]: { owners: idsOf(form.owners), writers: [...idsOf(form.writers), s.id] } } }) });
+          await exec({ func: 'admStaffActive', staff: '3', id: String(s.id), body: J({ active: false, confirm_impact: true }) });
+          await exec({ func: 'admRoles', staff: '3' });
+          await admRestoreForm(exec, form);
+        } };
+      } }),
+    adm({ id: 'ADM-PS-05', label: '결재 대기·개선조치 확인·지정 점검자가 있는 직원', expect: '200 · ADM-STF-IMP 도식 일치(01·02·DOC-TPL-01·03·APR-IMP-01·02·04·DOC-IMP-01·02) · staff 3: pending_approvals ≥ 1(불러올 때 상신한 D03 담당자 칸 — 다른 후보 2가 있어 sole_approvals에는 없음), pending_checks ≥ 1(확인자 3 지정 개선조치), inspector_docs ≥ 1(점검자 3인 작성중 D03), is_current_user true(헤더 3) · ④ 변화 없음',
+      prepare: async () => {
+        await fixtureDoc({ state: 'submitted' });
+        await fixtureDoc({ state: 'draft', inspector: 3 });
+        await ccpFixture({ batches: 1, rows: [BAD_2B], deviations: [{ process: '2B', row: 1, checker_ids: [3] }] });
+        return { func: 'admStaffImpact', staff: '3', id: '3' };
+      } }),
+    adm({ id: 'ADM-PS-06', label: '문서 권한 버전 충돌(다른 사람이 먼저 저장)', expect: '[1] A10 200(버전 v → v+1) → [2] 같은 본문·옛 expected_version v → 409 VERSION_CONFLICT(ADM-ROL-SAV-02 실패, 저장·이력 없음) → [3] 되돌림 A10 200(새 버전)',
+      prepare: async () => {
+        const form = await admFormOf(['D11', 'D12', 'D10', 'HYGIENE_CHECK']);
+        const roles = await admRolesNow();
+        const writers = idsOf(form.writers);
+        const changed = writers.includes(4) ? writers.filter((x) => x !== 4) : [...writers, 4];
+        const first = { func: 'admRolesSave', staff: '3', body: J({ expected_version: roles.version, forms: { [form.type_code]: { owners: idsOf(form.owners), writers: changed } } }) };
+        return { ...first, script: async (exec) => {
+          await exec(first);
+          await exec({ ...first, staff: '2' });  // 다른 사람 — 옛 버전 그대로
+          await admRestoreForm(exec, form);
+        } };
+      } }),
+    adm({ id: 'ADM-PS-07', label: '처음 가져오기 전(빈 문서 권한) → import_roles 결과', expect: '불러올 때 개발 API가 한 트랜잭션에서 문서 권한의 사람을 비우고 apps/staff/roles.json을 import_roles(F21, actor DEV-001)로 가져온 뒤 되돌림 → 아래 "준비"에 결과(팀장 2명·옮긴 양식·이 DB에 없어 건너뛴 양식) · [실행] A09 200: 문서 권한 그대로(버전·사람 변화 없음 — 되돌렸으므로) · 실제 서버는 manage.py import_roles(설치 안내 "기존 서버 업데이트")',
+      prepare: async () => {
+        const made = await devPost('/api/dev/fixtures/admin-import', {});
+        const r = made.report;
+        prepared.push({ note: `가져오기 결과(되돌림): 비우기 전 사람 ${made.before.leaders + made.before.members}명 → 비움 0 → 팀장 ${r.leaders}명·양식 ${r.forms.length}개(${r.forms.join(', ')})${r.skipped.length ? ` · 건너뜀 ${r.skipped.join(', ')}` : ''}${r.inactive_codes.length ? ` · 비활성 ${r.inactive_codes.join(', ')}` : ''} · 가져온 뒤 사람 ${made.after.leaders + made.after.members}명` });
+        return { func: 'admRoles', staff: '3' };
+      } }),
+  );
+
   function preparedText(m) {
+    if (m.note) return esc(m.note);  // P16 ADM-PS-07 — 문서가 아닌 준비 결과
     if (m.document_id === null) return `새 LOT ${esc(m.lot_number)} · 문서 없음(작성 요구 안 부름)`;
     if (m.lot_number === '-') return `문서 #${esc(m.document_id)}(${esc(m.status)})`;
     if (m.kind) return `새 LOT ${esc(m.lot_number)} · ${esc(m.kind)} 문서 #${esc(m.document_id)}(${esc(m.status)})`;
@@ -1901,7 +2037,7 @@
   }
 
   // ---------------------------------------------------------------- 프리셋 ROLE-PS-01~11·13 (P14, roles/p14-s1-screens.md 7장)
-  // 개발 역할 파일(backend/apps/staff/roles.json): 팀장 1·5, D03·D01·D10·위생 담당자 2·3, CCP 담당자 1·3(1 = 겸직),
+  // 개발 문서 권한(가상 직원 시드가 backend/apps/staff/roles.json을 DB에 넣음): 팀장 1·5, D03·D01·D10·위생 담당자 2·3, CCP 담당자 1·3(1 = 겸직),
   // D01·D02 작성 권한자 4(r4 D-198 — 상신만, 후보 아님. 그 밖의 양식에서 4는 역할 없음).
   // ROLE-PS-12(개선조치 팀장 확인)는 P11 병합 뒤.
   const role = (preset) => ({ unit: 'ROLE', ...preset });
@@ -1957,11 +2093,11 @@
         const req = await latestRequest(d.document_id);
         return { func: 'cancelSubmission', staff: '5', id: String(req.request_id), docId: String(d.document_id) };
       } }),
-    role({ id: 'ROLE-PS-08', label: '결재선 없음', expect: '409 NO_APPROVAL_LINE · WF-SUB-03b 실패 · ④ 변화 없음 — 개발 역할 파일에는 상신 불가 양식이 없으므로 HACCP_ROLES_FILE로 담당자 0명 양식이 있는 파일을 지정했을 때만 준비됨',
+    role({ id: 'ROLE-PS-08', label: '결재선 없음', expect: '409 NO_APPROVAL_LINE · WF-SUB-03b 실패 · ④ 변화 없음 — 개발 문서 권한에는 상신 불가 양식이 없으므로 문서 권한에서 담당자 0명 양식을 만들었을 때만 준비됨',
       prepare: async () => {
         const roles = await quietGetAs('roles', 1);
-        const form = roles && roles.forms.find((f) => !f.submittable && f.block_reason !== 'config_invalid');
-        if (!form) throw new Error('상신할 수 없는 양식이 없습니다(개발 역할 파일은 모두 상신 가능). HACCP_ROLES_FILE로 담당자 0명 양식이 있는 파일을 지정하고 서버를 다시 시작하세요.');
+        const form = roles && roles.forms.find((f) => !f.submittable && f.block_reason !== 'no_approval');
+        if (!form) throw new Error('상신할 수 없는 양식이 없습니다(개발 문서 권한은 모두 상신 가능). 문서 권한에서 한 양식의 담당자를 모두 빼고 다시 준비하세요.');
         const d = await findDoc('completed', (x) => x.template && x.template.type_code === form.type_code);
         if (!d) throw new Error(`${form.type_code} 작성완료 문서가 없습니다.`);
         return { func: 'submit', staff: '1', id: String(d.document_id), body: J({ expected_version: d.version }) };
@@ -2043,8 +2179,13 @@
     $('#dcStaff').addEventListener('change', (e) => api.setStaff(e.target.value));
     $('#dcFunc').innerHTML = Object.entries(FUNCS).map(([k, f]) => `<option value="${k}">${esc(f.label)}</option>`).join('');
     const group = (unit, label) => `<optgroup label="${label}">${PRESETS.filter((p) => (p.unit || p.id.split('-')[0]) === unit).map((p) => `<option value="${p.id}">${p.id} ${esc(p.label)}</option>`).join('')}</optgroup>`;
-    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)') + group('FILE', '파일 업로드 (스프린트 3)') + group('P8', '점검표·작성 안 함 (P8)') + group('P9', '주기형 작성 요구 (P9)') + group('P10', '문서함·결재함 (P10)') + group('P11', 'CCP 대시보드 (P11)') + group('ROLE', '역할 기반 결재 (P14)') + group('P12', '출력 (P12)') + group('PLG', '생산일지 (P15)');
-    $('#dcFunc').addEventListener('change', () => { state.preset = null; toggleInputs(); });
+    $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)') + group('FILE', '파일 업로드 (스프린트 3)') + group('P8', '점검표·작성 안 함 (P8)') + group('P9', '주기형 작성 요구 (P9)') + group('P10', '문서함·결재함 (P10)') + group('P11', 'CCP 대시보드 (P11)') + group('ROLE', '역할 기반 결재 (P14)') + group('P12', '출력 (P12)') + group('PLG', '생산일지 (P15)') + group('ADM', '관리 설정 (P16)');
+    $('#dcFunc').addEventListener('change', () => {
+      state.preset = null;
+      const q = FUNCS[$('#dcFunc').value].defaultQuery;  // 필수 쿼리가 있는 호출은 미리 채움(P16 S5 검토 C1)
+      if (q) $('#dcQuery').value = q;
+      toggleInputs();
+    });
     ['#dcId', '#dcQuery', '#dcBody', '#dcDocId'].forEach((sel) => $(sel).addEventListener('input', () => { if (state.preset && state.preset.script) state.preset = null; }));
     $('#dcLoadPreset').addEventListener('click', loadPreset);
     $('#dcRun').addEventListener('click', run);

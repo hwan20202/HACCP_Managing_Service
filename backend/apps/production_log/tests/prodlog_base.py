@@ -8,6 +8,7 @@
 from django.db import connection, transaction
 from django.test import TestCase
 
+from apps.admin_settings.testing import ensure_ccp_defaults
 from apps.doc_requirements import services as req
 from apps.documents import seed as doc_seed
 from apps.documents import services as doc
@@ -122,6 +123,7 @@ class ProdLogTestCase(TestCase):
     def setUpTestData(cls):
         staff_services.ensure_dev_staff(range(1, 6))
         doc_seed.ensure_p4_templates()
+        ensure_ccp_defaults()  # P16: 생산 시작 CCP 공정 = 관리 설정 기본 CCP
         if cls.install_prod_log:
             doc_seed.ensure_p15_templates()
         cls.inv = Inventory()

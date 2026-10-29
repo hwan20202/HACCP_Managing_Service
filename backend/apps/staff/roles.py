@@ -1,35 +1,27 @@
-"""역할(P14) — 설정 파일의 HACCP팀장·양식별 담당자·작성 권한자·결재 칸 구성. 테이블 없음.
+"""역할(P14 → P16) — HACCP팀장·양식별 담당자·작성 권한자·결재 칸 구성. 원본은 DB(ADM 문서 권한).
 
 - 작성 권한자(``writers``, D-198 — 명세 ROLE-C08): 양식별, 작성(ROLE-R07, r13 D-201)과
   상신·재상신(ROLE-R01). 결재 칸 후보가 아니다.
 - 작성(R07) = 담당자·작성 권한자·팀장 + 그 문서 점검자(점검자 값은 DOC가 넘김 — 이 모듈은
   문서를 읽지 않는다). 점검자 지정(R08) = 담당자·팀장.
 
-- 설정 파일은 ``HACCP_ROLES_FILE``(비우면 이 폴더의 roles.json — 가상 개발 직원만). 서버 시작 뒤
-  처음 쓸 때 한 번 읽어 보관한다(파일을 바꾸면 재시작 — ROLE-C05). ``HACCP_ROLES_RELOAD``가 참이면
-  호출마다 다시 읽는다(테스트용).
-- 직원은 설정에 ``staff_code``로 적고 **쓸 때마다** 그 순간의 활성 ``staff.id``로 바꾼다(SQL 1개,
-  ``scope()`` 안에서는 한 번). 없는 코드·비활성 직원은 역할에서 빠진 것으로 보고 경고만 남긴다
-  (ROLE-C04). 직원 등록·비활성 변경은 재시작 없이 반영된다(S4 리뷰 A1).
-- 이 모듈은 ``staff``와 설정 파일만 읽고 다른 단위(DOC·APR·WF·REQ)를 import하지 않는다(ROLE-NFR-01).
-  흐름: dev-notes/roles/p14-s2-flows.md 3.1.
+- P16 묶음 ②(ADM-R30·R36): 원본 = ``adm.store.role_rows()``(문서 권한 표 — SQL 2). 저장 즉시 다음
+  호출부터 적용(재시작 없음). 설정 파일·보관본·형식 오류 경로(옛 409)는 없앴다(Q5 a).
+  ``roles.json``은 ``import_roles`` 입력용 — 형식 검사 ``validate_file_data``만 남긴다(R41).
+- 사람은 ``staff.id``로 저장되고, 쓸 때마다 그 순간의 활성 여부로 효과를 정한다 — 비활성 직원은
+  역할에서 빠진 것으로 보고 경고만(R-W2, ADM-R24). ``scope()`` 안에서는 한 번만 읽는다.
+- 이 모듈은 ``staff``·ADM 저장소만 읽고 다른 단위(DOC·APR·WF·REQ)를 import하지 않는다(ROLE-NFR-01).
+  흐름: dev-notes/admin/p16-s2-flows.md 4.3.
 """
 
 import contextvars
-import json
-import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
 
-from django.conf import settings
-
+from apps.admin_settings import store as adm_store
 from apps.core.http import ApiError
 from apps.core.trace import step
 
-from .models import Staff
-
-DEFAULT_FILE = Path(__file__).resolve().parent / "roles.json"
 SLOT_CONFIGS = {
     "owner": ("owner",),
     "owner_leader": ("owner", "leader"),
@@ -39,12 +31,6 @@ SLOT_CONFIGS = {
 ROLE_NAMES = ("owner", "leader")
 DEFAULT_LABELS = {"owner": "담당자", "leader": "HACCP팀장"}
 LABEL_MAX = 20
-
-
-class RoleConfigInvalid(ApiError):
-    status = 409
-    code = "ROLE_CONFIG_INVALID"
-    message = "역할 설정 파일 오류로 이 작업을 할 수 없습니다."
 
 
 class RoleRequired(ApiError):
@@ -65,7 +51,7 @@ class NoApprovalLine(ApiError):
     code = "NO_APPROVAL_LINE"
     message = "결재선을 만들 수 없습니다."
     MESSAGES = {
-        "no_config": "이 양식의 결재 칸 구성이 역할 설정에 없습니다.",
+        "no_config": "이 양식의 결재 칸 구성이 문서 권한에 없습니다.",
         "no_candidates": "결재 칸을 처리할 사람이 없습니다(역할 보유자 0명).",
         "no_approval": "결재 없는 양식입니다.",  # P15 slots none
     }
@@ -92,31 +78,9 @@ class RoleConfig:
     leaders: frozenset = frozenset()
     forms: dict = field(default_factory=dict)  # type_code → FormRole
     warnings: list = field(default_factory=list)  # [{code, type_code?, staff_code?, message}]
-    error: str | None = None  # 형식 오류(R-E1)면 내용
-    people: dict = field(default_factory=dict)  # staff_id → {id, staff_code, name}
-
-
-@dataclass(frozen=True)
-class _File:
-    """설정 파일 내용(보관본 — 재시작 때 반영, ROLE-C05). data는 형식 검사를 통과한 JSON."""
-
-    data: dict | None = None
-    error: str | None = None
-
-
-_lock = threading.Lock()
-_cache = None  # _File
-
-
-def config_path():
-    return Path(getattr(settings, "HACCP_ROLES_FILE", None) or DEFAULT_FILE)
-
-
-def reset():
-    """보관본을 지운다(테스트·관리 명령용). 다음 load()가 파일을 다시 읽는다."""
-    global _cache
-    with _lock:
-        _cache = None
+    people: dict = field(default_factory=dict)  # 활성 staff_id → {id, staff_code, name}
+    version: int = 0
+    empty: bool = True  # 문서 권한에 사람이 0명(비활성 포함) — setup 경고(R38)
 
 
 _scoped = contextvars.ContextVar("haccp_roles_scope", default=None)
@@ -124,9 +88,9 @@ _scoped = contextvars.ContextVar("haccp_roles_scope", default=None)
 
 @contextmanager
 def scope():
-    """한 작업(상신·목록·묶음 화면) 안에서는 역할을 한 번만 만든다(직원 조회 SQL 1개).
+    """한 작업(상신·목록·묶음 화면) 안에서는 역할을 한 번만 만든다(SQL 2개).
 
-    역할은 쓸 때마다 그 순간의 활성 직원으로 만든다(리뷰 A1). 한 작업 안에서 여러 번 물어도
+    역할은 쓸 때마다 그 순간의 DB로 만든다(R36). 한 작업 안에서 여러 번 물어도
     같은 결과를 쓰고 질의를 한 번만 하도록 묶는다. 바깥 scope가 있으면 그것을 쓴다.
     """
     if _scoped.get() is not None:
@@ -139,33 +103,24 @@ def scope():
         _scoped.reset(token)
 
 
-def _file():
-    """설정 파일: 운영은 서버 시작 뒤 처음 한 번(보관본), HACCP_ROLES_RELOAD(테스트)면 매번."""
-    global _cache
-    if getattr(settings, "HACCP_ROLES_RELOAD", False):
-        return _read_file()
-    with _lock:
-        if _cache is None:
-            _cache = _read_file()
-        return _cache
-
-
 def load():
-    """지금의 역할. 파일은 보관본, 직원 코드 → 활성 id·경고는 그때 DB로(scope 안에서는 한 번)."""
+    """지금의 역할(DB). scope 안에서는 한 번."""
     held = _scoped.get()
     if held:
         return held[0]
-    config = _resolve(_file())
+    with step("ROLE-CFG-01", "ROLE", "문서 권한 읽기(adm.store.role_rows)"):
+        rows = adm_store.role_rows()
+    config = _resolve(rows)
     if held is not None:
         held.append(config)
     return config
 
 
-# ---------------------------------------------------------------- 읽기·검사 (ROLE-CFG)
+# ---------------------------------------------------------------- 파일 형식 검사 (가져오기 — R41)
 
 
-def _format_problems(data):
-    """R-E1 형식 검사. 반환: 문제 목록(빈 목록 = 정상)."""
+def validate_file_data(data):
+    """R-E1 형식 검사(``import_roles``만 씀). 반환: 문제 목록(빈 목록 = 정상)."""
     if not isinstance(data, dict):
         return ["최상위는 JSON 객체여야 합니다."]
     problems = []
@@ -211,79 +166,43 @@ def _code_list(value):
     )
 
 
-def _read_file():
-    path = config_path()
-    with step("ROLE-CFG-01", "ROLE", "설정 파일 읽기") as s:
-        s.note(str(path))
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, ValueError) as error:
-            s.fail(f"읽기 실패: {error}")
-            return _File(error=f"설정 파일을 읽지 못했습니다: {error}")
-    with step("ROLE-CFG-02", "ROLE", "형식 검사") as s:
-        problems = _format_problems(data)
-        if problems:
-            s.fail(f"오류 {len(problems)}건")
-            return _File(error=" / ".join(problems))
-    return _File(data=data)
+def _resolve(rows):
+    """ROLE-CFG-04·05: 비활성 빼기(R-W2), 칸 후보 검사(R-W5)."""
+    config = RoleConfig(version=rows["version"])
+    with step("ROLE-CFG-04", "ROLE", "비활성 빼기") as s:
 
-
-def _resolve(file):
-    """ROLE-CFG-03~05: 코드 → 지금 활성인 staff id(쓸 때마다 — 리뷰 A1), 경고, 칸 후보 검사."""
-    if file.error:
-        return RoleConfig(error=file.error)
-    data = file.data
-    codes = set(data["haccp_leaders"])
-    for form in data["forms"].values():
-        codes.update(form["owners"])
-        codes.update(form.get("writers", []))
-    with step("ROLE-CFG-03", "ROLE", "직원 코드 → id(지금 활성 여부)"):
-        rows = {
-            code: (sid, name, active)
-            for sid, code, name, active in Staff.objects.filter(staff_code__in=codes).values_list(
-                "id", "staff_code", "name", "is_active"
-            )
-        }
-    config = RoleConfig()
-    with step("ROLE-CFG-04", "ROLE", "없는 코드·비활성 빼기") as s:
-
-        def ids(code_list, where):
+        def ids(people, where):
             out = set()
-            for code in code_list:
-                row = rows.get(code)
-                if row is None:
-                    config.warnings.append(
-                        {
-                            "code": "R-W1",
-                            "staff_code": code,
-                            "where": where,
-                            "message": f"없는 직원 코드 {code}({where}) — 무시했습니다.",
-                        }
-                    )
-                elif not row[2]:
+            for p in people:
+                config.empty = False
+                if not p["is_active"]:
                     config.warnings.append(
                         {
                             "code": "R-W2",
-                            "staff_code": code,
+                            "staff_code": p["staff_code"],
                             "where": where,
                             "message": (
-                                f"비활성 직원 {row[1]}({code}, {where}) — 역할에서 뺐습니다."
+                                f"비활성 직원 {p['name']}({p['staff_code']}, {where})"
+                                " — 역할에서 뺐습니다."
                             ),
                         }
                     )
-                else:
-                    out.add(row[0])
-                    config.people[row[0]] = {"id": row[0], "staff_code": code, "name": row[1]}
+                    continue
+                out.add(p["id"])
+                config.people[p["id"]] = {
+                    "id": p["id"],
+                    "staff_code": p["staff_code"],
+                    "name": p["name"],
+                }
             return frozenset(out)
 
-        config.leaders = ids(data["haccp_leaders"], "haccp_leaders")
-        for type_code, form in data["forms"].items():
-            labels = {**DEFAULT_LABELS, **{k: v.strip() for k, v in form.get("labels", {}).items()}}
+        config.leaders = ids(rows["leaders"], "haccp_leaders")
+        for type_code, form in rows["forms"].items():
             config.forms[type_code] = FormRole(
                 owners=ids(form["owners"], f"forms.{type_code}.owners"),
                 slots=SLOT_CONFIGS[form["slots"]],
-                labels=labels,
-                writers=ids(form.get("writers", []), f"forms.{type_code}.writers"),
+                labels={**DEFAULT_LABELS, **form["labels"]},
+                writers=ids(form["writers"], f"forms.{type_code}.writers"),
             )
         s.note(f"경고 {len(config.warnings)}건")
     with step("ROLE-CFG-05", "ROLE", "양식별 칸 후보 검사"):
@@ -338,10 +257,6 @@ def _submit_role(config, staff_id, type_code):
 # ---------------------------------------------------------------- 조회
 
 
-def config_error():
-    return load().error
-
-
 def leaders():
     return load().leaders
 
@@ -369,21 +284,13 @@ def is_writer(staff_id, type_code):
 
 
 def can_submit(staff_id, type_code):
-    """ROLE-R01(r11 D-198): 담당자·작성 권한자·HACCP팀장.
-
-    설정 오류 여부는 보지 않는다(호출자가 먼저).
-    """
+    """ROLE-R01(r11 D-198): 담당자·작성 권한자·HACCP팀장."""
     return _submit_role(load(), staff_id, type_code) is not None
 
 
 def require_submitter(staff_id, type_code):
-    """ROLE-R01: 설정 오류가 먼저(ROLE-C07), 그다음 담당자·작성 권한자·팀장.
-
-    반환: 통과한 역할 이름.
-    """
+    """ROLE-R01: 담당자·작성 권한자·팀장. 반환: 통과한 역할 이름."""
     config = load()
-    if config.error:
-        raise RoleConfigInvalid()
     role = _submit_role(config, staff_id, type_code)
     if role is None:
         raise RoleRequired(RoleRequired.SUBMIT, RoleRequired.SUBMIT_MESSAGE)
@@ -395,13 +302,11 @@ def forms_of(staff_id):
 
 
 def require_owner_or_leader(staff_id, type_code):
-    """ROLE-R04(정정 시작): 설정 오류가 먼저(ROLE-C07), 그다음 담당자 또는 팀장.
+    """ROLE-R04(정정 시작): 담당자 또는 팀장.
 
     상신(R01)은 작성 권한자도 되므로 require_submitter(r11 D-198).
     """
     config = load()
-    if config.error:
-        raise RoleConfigInvalid()
     if not (_is_owner(config, staff_id, type_code) or _is_leader(config, staff_id)):
         raise RoleRequired()
 
@@ -414,15 +319,12 @@ INSPECTOR_MESSAGE = "점검자는 이 양식의 담당자나 HACCP팀장만 지�
 def write_role(staff_id, type_code, inspector_id=None):
     """ROLE-R07(r13): 작성이 통과하는 역할 이름(trace 기록용) — 없으면 None.
 
-    설정 형식 오류면 검사하지 않는다(ROLE-C07 — 현장 기록이 멈추지 않게): ``"config_invalid"``.
-    여럿이면 팀장 > 담당자 > 작성 권한자 > 점검자. inspector_id = 그 문서 ``info.inspector``
-    (새 문서는 None).
+    문서 권한이 비어도 예외 없음(ADM-R38 Q-5 a). 여럿이면 팀장 > 담당자 > 작성 권한자 > 점검자.
+    inspector_id = 그 문서 ``info.inspector``(새 문서는 None).
     """
     if staff_id is None:
         return None
     config = load()
-    if config.error:
-        return "config_invalid"
     role = _submit_role(config, staff_id, type_code)
     if role is not None:
         return role
@@ -437,18 +339,16 @@ def can_write(staff_id, type_code, inspector_id=None):
 
 
 def can_assign_inspector(staff_id, type_code):
-    """ROLE-R08 여부(화면 권한 값) — 설정 형식 오류면 False(서버는 409)."""
+    """ROLE-R08 여부(화면 권한 값)."""
     config = load()
-    if staff_id is None or config.error:
+    if staff_id is None:
         return False
     return _is_owner(config, staff_id, type_code) or _is_leader(config, staff_id)
 
 
 def require_inspector_setter(staff_id, type_code):
-    """ROLE-R08(r13): 점검자 지정·바꾸기 — 설정 오류가 먼저(409), 그다음 담당자 또는 팀장."""
+    """ROLE-R08(r13): 점검자 지정·바꾸기 — 담당자 또는 팀장."""
     config = load()
-    if config.error:
-        raise RoleConfigInvalid()
     if not (_is_owner(config, staff_id, type_code) or _is_leader(config, staff_id)):
         raise RoleRequired(message=INSPECTOR_MESSAGE)
 
@@ -456,13 +356,11 @@ def require_inspector_setter(staff_id, type_code):
 def approval_line(type_code, config=None):
     """ROLE-F01: 양식의 결재선. 반환 {ok, slots:[{slot_no, role, label, candidate_ids}], reason}.
 
-    reason ∈ config_invalid · no_config · no_candidates · no_approval(P15)
+    reason ∈ no_config · no_candidates · no_approval(P15)
     (ok면 None). 후보는 id 순(지금 활성 직원).
     """
     if config is None:
         config = load()
-    if config.error:
-        return {"ok": False, "slots": [], "reason": "config_invalid"}
     form = config.forms.get(type_code)
     if form is None:
         return {"ok": False, "slots": [], "reason": "no_config"}
@@ -486,11 +384,23 @@ def approval_line(type_code, config=None):
 
 def require_approval_line(type_code):
     line = approval_line(type_code)
-    if line["reason"] == "config_invalid":
-        raise RoleConfigInvalid()
     if not line["ok"]:
         raise NoApprovalLine(line["reason"], type_code)
     return line["slots"]
+
+
+def setup(config, active_forms):
+    """R38 빈 권한 경고: {empty: 사람 0명, leaders: 활성 팀장 수, blocked_forms: 상신 불가 양식}.
+
+    blocked_forms = 결재 칸이 있는 활성 양식 중 칸 후보 0명(no_candidates)·행 없음(no_config).
+    오류(403·409)와 따로 — 문서 권한 화면 위 경고·시스템 검사(R38)용.
+    """
+    blocked = []
+    for type_code, _name in active_forms:
+        line = approval_line(type_code, config)
+        if line["reason"] in ("no_candidates", "no_config"):
+            blocked.append(type_code)
+    return {"empty": config.empty, "leaders": len(config.leaders), "blocked_forms": blocked}
 
 
 def summary(active_forms, staff_id=None):
@@ -522,30 +432,23 @@ def summary(active_forms, staff_id=None):
             }
         )
     warnings = list(config.warnings)
-    known = {t for t, _ in active_forms}
     for type_code, _name in active_forms:
-        if not config.error and type_code not in config.forms:
+        if type_code not in config.forms:
             warnings.append(
                 {
                     "code": "R-W4",
                     "type_code": type_code,
-                    "message": f"{type_code}: 역할 설정에 없습니다 — 상신할 수 없습니다.",
+                    "message": f"{type_code}: 문서 권한에 없습니다 — 상신할 수 없습니다.",
                 }
             )
-    for type_code in sorted(set(config.forms) - known):
-        warnings.append(
-            {
-                "code": "R-W3",
-                "type_code": type_code,
-                "message": f"{type_code}: 활성 양식이 아닙니다 — 무시했습니다.",
-            }
-        )
+    # P16: 비활성 양식의 문서 권한 행은 보존이 정상이라 R-W3(활성 양식 아님)은 없앰
     result = {
         "leaders": [person(sid) for sid in sorted(config.leaders)],
         "forms": forms,
         "warnings": warnings,
-        "config_error": config.error,
-        "reload": "restart",
+        "version": config.version,
+        "setup": setup(config, active_forms),
+        "reload": "immediate",  # P16: 저장 즉시 다음 요청부터(R36)
     }
     if staff_id is not None:
         result["me"] = {

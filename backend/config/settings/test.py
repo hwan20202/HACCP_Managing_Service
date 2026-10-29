@@ -11,5 +11,6 @@ DATABASES = {
     }
 }
 
-# P14: 테스트마다 직원·설정이 바뀌므로 역할 설정을 호출마다 다시 읽는다
-HACCP_ROLES_RELOAD = True
+# P16: 테스트 DB는 직원·문서 권한이 비어 있어 시작 때 빈 권한 경고(W002)가 늘 나온다 — 소음만 끔
+# (check_roles 자체는 apps.staff.tests.test_roles가 직접 부른다)
+SILENCED_SYSTEM_CHECKS = ["document_workflow.W002"]

@@ -76,6 +76,12 @@
       screen.start(host);
     },
 
+    // P16 R52·R64: 관리 설정 저장·처음 설정 뒤 직원·역할 캐시를 비워 다음 화면에서 다시 읽게 함
+    reloadPeople() {
+      this.staff = null;
+      this.roles = null;
+    },
+
     async loadStaff() {
       if (this.staff) return this.staff;
       const [result, roles] = await Promise.all([HaccpApi.get('staff?include_inactive=1', { staffId: '' }), HaccpApi.get('roles', { staffId: '' })]);
@@ -131,17 +137,16 @@
       return form ? form.owners.map((p) => p.id) : [];
     },
     leaderIds() { return this.roles ? this.roles.leaders.map((p) => p.id) : []; },
-    // P14 r13(D-201) 작성 권한(ROLE-R07): 양식 담당자·작성 권한자·HACCP팀장 — 역할 설정 파일 오류면 검사 안 함(C07).
+    // P14 r13(D-201) 작성 권한(ROLE-R07): 양식 담당자·작성 권한자·HACCP팀장(P16: 설정 파일 오류 경로 없음).
     // 문서 화면은 서버가 준 permissions.write를 쓰고, 이 함수는 새 문서 양식 고르기·작성 폼(문서 점검자 포함)용
     canWriteForm(id, typeCode, inspectorId = null) {
       if (!id) return false;
-      if (this.roles && this.roles.config_error) return true;
       if (inspectorId && Number(inspectorId) === Number(id)) return true;
       return this.isLeader(id) || this.ownerForms(id).includes(typeCode) || this.writerForms(id).includes(typeCode);
     },
-    // r13 점검자 지정(ROLE-R08): 담당자·HACCP팀장 — 설정 파일 오류면 서버가 409라 false
+    // r13 점검자 지정(ROLE-R08): 담당자·HACCP팀장
     canAssignInspector(id, typeCode) {
-      if (!id || !this.roles || this.roles.config_error) return false;
+      if (!id || !this.roles) return false;
       return this.isLeader(id) || this.ownerForms(id).includes(typeCode);
     },
     WRITE_WHY: '이 양식의 담당자·작성 권한자·HACCP팀장이나 지정된 점검자만 작성할 수 있습니다.',
@@ -168,7 +173,7 @@
       const label = (slot && slot.label) || role || '-';
       return role && label !== role ? `${label} (${role})` : label;
     },
-    roleLink(text = '역할 보기') {
+    roleLink(text = '문서 권한 ↗') {  // P16: 역할 보기 → 문서 권한(ADM-SC-03, 같은 페이지 키)
       return `<a href="#" class="te-role-link" data-role-view>${this.esc(text)}</a>`;
     },
 
@@ -304,7 +309,7 @@
 
   window.TempEntry = TempEntry;
 
-  // P14: [역할 보기] 링크(결재 영역·모달·폼 어디서든) — 열린 모달을 닫고 역할 보기 화면으로
+  // P14: [문서 권한] 링크(결재 영역·모달·폼 어디서든, P16 이름 바꿈) — 열린 모달을 닫고 문서 권한 화면으로
   document.addEventListener('click', (e) => {
     const link = e.target.closest && e.target.closest('[data-role-view]');
     if (!link) return;

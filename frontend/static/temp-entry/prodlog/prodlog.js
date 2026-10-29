@@ -428,7 +428,7 @@
         return `<button type="button" data-add-proc="${p.process_id}"${used || noDoc ? ' disabled' : ''}><span>${esc(p.name)}</span><span class="te-hint">${esc(note)}</span></button>`;
       };
       return `<div class="te-pl-menu" role="menu" id="plMenu"><div class="te-pl-menu-grp">기본 제공</div>${builtins.map(btn).join('')}
-        ${missing.length ? '<div class="te-pl-menu-note">CCP 공정은 이 배치에 CCP 일지가 있을 때만 넣을 수 있습니다.</div>' : ''}
+        ${missing.length ? '<div class="te-pl-menu-note">CCP 공정은 이 배치에 CCP 일지가 있을 때만 넣을 수 있습니다.</div><button type="button" data-manage="item-ccp"><span>품목별 CCP ↗</span><span class="te-hint">생산 기준정보 — 다음 생산부터</span></button>' : ''}
         <div class="te-pl-menu-grp">일반 공정 (공정 목록)</div>${general.map((p) => `<button type="button" data-add-proc="${p.process_id}"><span>${esc(p.name)}</span><span class="te-hint">${esc(MODES[p.mode] || '')}</span></button>`).join('') || '<div class="te-pl-menu-note">사용 중인 일반 공정이 없습니다</div>'}
         <button type="button" data-add-custom><span>직접 입력</span><span class="te-hint">이름·입력 방식 직접</span></button>
         <button type="button" data-manage="process"><span>공정 목록 관리 ↗</span><span class="te-hint">생산 기준정보</span></button></div>`;

@@ -1,9 +1,12 @@
 -- HACCP 관리 프로그램 현재 DB 스키마 (SQLite)
--- 기준 코드: main 2234f02 (2026-10-27) — 빈 DB에 `python backend/manage.py migrate`를 실행한 결과를 그대로 옮김
+-- 기준 코드: feature/p16-admin-settings 61d4b9f (2026-10-29) — 빈 DB에 `python backend/manage.py migrate`를 실행한 결과를 그대로 옮김
 -- 다시 만들기: docs/handover/erd/README.md "다시 뽑는 법"
 -- 직접 실행하지 말 것: 표는 migrate가 만든다. 이 파일은 읽기용이다.
 
--- ============================================================ 표 40개
+-- ============================================================ 표 48개
+
+-- admin_change_log
+CREATE TABLE "admin_change_log" ("log_id" integer NOT NULL PRIMARY KEY AUTOINCREMENT, "target" text NOT NULL, "target_id" integer NOT NULL, "action" text NOT NULL, "before_json" text NULL CHECK ((JSON_VALID("before_json") OR "before_json" IS NULL)), "after_json" text NULL CHECK ((JSON_VALID("after_json") OR "after_json" IS NULL)), "reason" text NULL, "at" datetime NOT NULL, "actor_id" bigint NOT NULL REFERENCES "staff" ("id") DEFERRABLE INITIALLY DEFERRED, CONSTRAINT "ck_admin_log_target" CHECK ("target" IN ('item_ccp', 'staff', 'role_leader', 'role_form', 'roles_import')), CONSTRAINT "ck_admin_log_action" CHECK ("action" IN ('set', 'default', 'create', 'rename', 'deactivate', 'activate', 'change', 'import', 'bootstrap_create', 'bootstrap_activate')), CONSTRAINT "ck_admin_log_reason" CHECK (("reason" IS NULL OR (LENGTH("reason") >= 1 AND LENGTH("reason") <= 100))));
 
 -- approval
 CREATE TABLE "approval" ("approval_id" integer NOT NULL PRIMARY KEY AUTOINCREMENT, "slot_no" integer NOT NULL, "label" text NULL, "state" text DEFAULT 'pending' NOT NULL, "comment" text NULL, "decided_at" datetime NULL, "approver_id" bigint NULL REFERENCES "staff" ("id") DEFERRABLE INITIALLY DEFERRED, "request_id" integer NOT NULL REFERENCES "approval_request" ("request_id") DEFERRABLE INITIALLY DEFERRED, "role" text NULL, CONSTRAINT "uq_approval_slot" UNIQUE ("request_id", "slot_no"), CONSTRAINT "ck_approval_slot_no" CHECK ("slot_no" >= 1), CONSTRAINT "ck_approval_state" CHECK ("state" IN ('pending', 'approved', 'rejected', 'skipped')), CONSTRAINT "ck_approval_decided" CHECK ((("decided_at" IS NULL AND "state" = 'pending') OR (NOT ("state" = 'pending') AND "decided_at" IS NOT NULL))), CONSTRAINT "ck_approval_reject_comment" CHECK ((NOT ("state" = 'rejected') OR ("comment" IS NOT NULL AND NOT (TRIM("comment") = '' AND "comment" IS NOT NULL)))), CONSTRAINT "ck_approval_role" CHECK (("role" IS NULL OR "role" IN ('owner', 'leader'))), CONSTRAINT "ck_approval_approver" CHECK ((("approver_id" IS NOT NULL AND "role" IS NULL) OR ("approver_id" IS NOT NULL AND "role" IS NOT NULL AND "state" IN ('approved', 'rejected')) OR ("approver_id" IS NULL AND "role" IS NOT NULL AND NOT ("state" IN ('approved', 'rejected'))))));
@@ -26,6 +29,9 @@ CREATE TABLE audit_logs (
     staff_id         INTEGER NOT NULL REFERENCES staff(id),
     occurred_at      TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
 ) STRICT;
+
+-- batch_ccp_applied
+CREATE TABLE "batch_ccp_applied" ("ccp_1p" bool NOT NULL, "ccp_2b" bool NOT NULL, "ccp_3p" bool NOT NULL, "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT, "decided_at" datetime NOT NULL, "batch_id" bigint NOT NULL UNIQUE REFERENCES "production_batches" ("id") DEFERRABLE INITIALLY DEFERRED, CONSTRAINT "ck_batch_ccp_1p" CHECK ("ccp_1p" IN (0, 1)), CONSTRAINT "ck_batch_ccp_2b" CHECK ("ccp_2b" IN (0, 1)), CONSTRAINT "ck_batch_ccp_3p" CHECK ("ccp_3p" IN (0, 1)));
 
 -- bom_line_alternatives
 CREATE TABLE bom_line_alternatives (
@@ -60,6 +66,9 @@ CREATE TABLE boms (
     created_at        TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
     UNIQUE (item_id, version)
 ) STRICT;
+
+-- ccp_default
+CREATE TABLE "ccp_default" ("ccp_1p" bool NOT NULL, "ccp_2b" bool NOT NULL, "ccp_3p" bool NOT NULL, "process_type" text NOT NULL PRIMARY KEY, "updated_at" datetime NOT NULL, CONSTRAINT "ck_ccp_default_type" CHECK ("process_type" IN ('MANUFACTURE', 'PACKAGING')), CONSTRAINT "ck_ccp_default_1p" CHECK ("ccp_1p" IN (0, 1)), CONSTRAINT "ck_ccp_default_2b" CHECK ("ccp_2b" IN (0, 1)), CONSTRAINT "ck_ccp_default_3p" CHECK ("ccp_3p" IN (0, 1)));
 
 -- deviation_action
 CREATE TABLE "deviation_action" ("deviation_id" integer NOT NULL PRIMARY KEY AUTOINCREMENT, "description" text NOT NULL, "action_result" text NULL, "checked_at" datetime NULL, "created_at" datetime NOT NULL, "updated_at" datetime NOT NULL, "version" integer DEFAULT 1 NOT NULL, "deleted_at" datetime NULL, "actor_id" bigint NULL REFERENCES "staff" ("id") DEFERRABLE INITIALLY DEFERRED, "checked_by" bigint NULL REFERENCES "staff" ("id") DEFERRABLE INITIALLY DEFERRED, "created_by" bigint NOT NULL REFERENCES "staff" ("id") DEFERRABLE INITIALLY DEFERRED, "deleted_by" bigint NULL REFERENCES "staff" ("id") DEFERRABLE INITIALLY DEFERRED, "updated_by" bigint NOT NULL REFERENCES "staff" ("id") DEFERRABLE INITIALLY DEFERRED, "section_id" integer NULL REFERENCES "doc_section" ("section_id") DEFERRABLE INITIALLY DEFERRED, "document_id" integer NOT NULL REFERENCES "document" ("document_id") DEFERRABLE INITIALLY DEFERRED, CONSTRAINT "ck_deviation_description" CHECK ((LENGTH("description") >= 1 AND LENGTH("description") <= 500 AND NOT (TRIM("description", ' ' || char(9) || char(10) || char(13)) = ''))), CONSTRAINT "ck_deviation_result" CHECK (("action_result" IS NULL OR LENGTH("action_result") <= 1000)), CONSTRAINT "ck_deviation_checked_pair" CHECK ((("checked_at" IS NULL AND "checked_by" IS NULL) OR ("checked_at" IS NOT NULL AND "checked_by" IS NOT NULL))), CONSTRAINT "ck_deviation_deleted_pair" CHECK ((("deleted_at" IS NULL AND "deleted_by" IS NULL) OR ("deleted_at" IS NOT NULL AND "deleted_by" IS NOT NULL))), CONSTRAINT "ck_deviation_version" CHECK ("version" >= 1));
@@ -170,6 +179,19 @@ CREATE TABLE inventory (
 
 -- inventory_purge_scope
 CREATE TABLE inventory_purge_scope (lot_id INTEGER PRIMARY KEY REFERENCES lots(id)) STRICT;
+
+-- item_ccp
+CREATE TABLE "item_ccp" (
+  "ccp_1p" bool NOT NULL CHECK ("ccp_1p" IN (0, 1)),
+  "ccp_2b" bool NOT NULL CHECK ("ccp_2b" IN (0, 1)),
+  "ccp_3p" bool NOT NULL CHECK ("ccp_3p" IN (0, 1)),
+  "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+  "mode" text NOT NULL CHECK ("mode" IN ('default', 'own')),
+  "version" integer NOT NULL CHECK ("version" >= 1),
+  "updated_at" datetime NOT NULL,
+  "item_id" bigint NOT NULL UNIQUE REFERENCES "items" ("id") ON DELETE CASCADE,
+  CHECK ("mode" = 'own' OR (NOT "ccp_1p" AND NOT "ccp_2b" AND NOT "ccp_3p"))
+);
 
 -- item_types
 CREATE TABLE item_types (
@@ -289,6 +311,22 @@ CREATE TABLE production_outputs (
     created_at         TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
 ) STRICT;
 
+-- role_config
+CREATE TABLE "role_config" (
+  "id" integer NOT NULL PRIMARY KEY CHECK ("id" = 1),
+  "version" integer NOT NULL DEFAULT 1 CHECK ("version" >= 1),
+  "updated_at" datetime NOT NULL
+);
+
+-- role_form
+CREATE TABLE "role_form" ("id" integer NOT NULL PRIMARY KEY AUTOINCREMENT, "type_code" text NOT NULL UNIQUE, "slots" text NOT NULL, "label_owner" text NULL, "label_leader" text NULL, "created_at" datetime NOT NULL, CONSTRAINT "ck_role_form_type_code" CHECK ((LENGTH("type_code") >= 1 AND LENGTH("type_code") <= 40)), CONSTRAINT "ck_role_form_slots" CHECK ("slots" IN ('owner', 'owner_leader', 'leader', 'none')), CONSTRAINT "ck_role_form_label_owner" CHECK (("label_owner" IS NULL OR ("label_owner" = (TRIM("label_owner")) AND LENGTH("label_owner") >= 1 AND LENGTH("label_owner") <= 20))), CONSTRAINT "ck_role_form_label_leader" CHECK (("label_leader" IS NULL OR ("label_leader" = (TRIM("label_leader")) AND LENGTH("label_leader") >= 1 AND LENGTH("label_leader") <= 20))));
+
+-- role_form_member
+CREATE TABLE "role_form_member" ("id" integer NOT NULL PRIMARY KEY AUTOINCREMENT, "role" text NOT NULL, "role_form_id" integer NOT NULL REFERENCES "role_form" ("id") DEFERRABLE INITIALLY DEFERRED, "staff_id" bigint NOT NULL REFERENCES "staff" ("id") DEFERRABLE INITIALLY DEFERRED, CONSTRAINT "ck_role_member_role" CHECK ("role" IN ('owner', 'writer')), CONSTRAINT "ux_role_form_member" UNIQUE ("role_form_id", "role", "staff_id"));
+
+-- role_leader
+CREATE TABLE "role_leader" ("id" integer NOT NULL PRIMARY KEY AUTOINCREMENT, "staff_id" bigint NOT NULL UNIQUE REFERENCES "staff" ("id") DEFERRABLE INITIALLY DEFERRED);
+
 -- staff
 CREATE TABLE staff (
     id          INTEGER PRIMARY KEY,
@@ -330,7 +368,13 @@ CREATE TABLE suppliers (
     created_at     TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
 ) STRICT;
 
--- ============================================================ 인덱스 46개
+-- ============================================================ 인덱스 51개
+
+-- ix_admin_log_actor (on admin_change_log)
+CREATE INDEX "ix_admin_log_actor" ON "admin_change_log" ("actor_id", "at");
+
+-- ix_admin_log_target (on admin_change_log)
+CREATE INDEX "ix_admin_log_target" ON "admin_change_log" ("target", "target_id", "at" DESC);
 
 -- ix_approval_inbox (on approval)
 CREATE INDEX "ix_approval_inbox" ON "approval" ("approver_id", "state");
@@ -465,6 +509,15 @@ CREATE INDEX ix_outputs_batch ON production_outputs (batch_id);
 
 -- ix_outputs_lot (on production_outputs)
 CREATE INDEX ix_outputs_lot   ON production_outputs (lot_id);
+
+-- ix_role_form_member_staff (on role_form_member)
+CREATE INDEX "ix_role_form_member_staff" ON "role_form_member" ("staff_id");
+
+-- role_form_member_role_form_id_b563ea0f (on role_form_member)
+CREATE INDEX "role_form_member_role_form_id_b563ea0f" ON "role_form_member" ("role_form_id");
+
+-- role_form_member_staff_id_aa7be003 (on role_form_member)
+CREATE INDEX "role_form_member_staff_id_aa7be003" ON "role_form_member" ("staff_id");
 
 -- ix_sm_corrects (on stock_movements)
 CREATE INDEX ix_sm_corrects ON stock_movements (corrects_movement_id);
@@ -726,7 +779,7 @@ LEFT JOIN incoming_receipts r           ON r.stock_movement_id = m.id
 LEFT JOIN production_material_usages pu ON pu.stock_movement_id = m.id
 LEFT JOIN production_outputs po         ON po.stock_movement_id = m.id;
 
--- ============================================================ 트리거 40개
+-- ============================================================ 트리거 41개
 
 -- trg_alternatives_locked_delete (on bom_line_alternatives)
 CREATE TRIGGER trg_alternatives_locked_delete BEFORE DELETE ON bom_line_alternatives
@@ -984,6 +1037,12 @@ CREATE TRIGGER trg_outputs_one_lot_per_batch BEFORE INSERT ON production_outputs
 WHEN EXISTS (SELECT 1 FROM production_outputs WHERE batch_id = NEW.batch_id AND lot_id <> NEW.lot_id)
 BEGIN
     SELECT RAISE(ABORT, 'a batch has one output lot: add output to that lot (0006)');
+END;
+
+-- trg_role_config_no_delete (on role_config)
+CREATE TRIGGER "trg_role_config_no_delete" BEFORE DELETE ON "role_config"
+BEGIN
+  SELECT RAISE(ABORT, 'role_config row is required');
 END;
 
 -- trg_sm_correction_lot (on stock_movements)

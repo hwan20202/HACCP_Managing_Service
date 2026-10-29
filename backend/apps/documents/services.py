@@ -2145,7 +2145,7 @@ def create_deviation(actor_id, document_id, data):
 
     P14(ROLE-FR-12): checker_ids 키가 없으면 확인자 기본값 = 그 양식 담당자 + HACCP팀장(담당자
     먼저, 각각 id 순, 10명까지 — 넘치면 checker_default_truncated). 빈 목록을 보내면 비운다.
-    기본값이 0명이면 저장하고 checker_warning(config_invalid·no_holders — r14 D-202 Q5 a).
+    기본값이 0명이면 저장하고 checker_warning(no_holders — r14 D-202 Q5 a, P16 형식 오류 경로 없앰).
     권한: ROLE-R07(r13) — 404 → 403 순서라 문서 확인이 INSERT보다 먼저다.
     """
     with step("DOC-DVC-01", "DOC", "형식 검사") as s:
@@ -2170,7 +2170,7 @@ def create_deviation(actor_id, document_id, data):
         elif cleaned["checker_ids"]:
             s.skip("확인자 있음")
         else:
-            warning = "config_invalid" if roles.config_error() else "no_holders"
+            warning = "no_holders"
             s.note(warning)  # 저장은 계속한다(작성을 막지 않음 — ROLE-C07과 같은 원칙)
     now = timezone.now()
     with transaction.atomic():
@@ -2770,14 +2770,14 @@ def document_roles(document, actor_id=None):
         owner_ids = sorted(roles.owners(type_code))
         line = roles.approval_line(type_code)
     with step("DOC-GET-05", "DOC", "권한(현재 사용자)") as s:
-        usable = actor_id is not None and roles.config_error() is None
+        usable = actor_id is not None
         may_submit = usable and roles.can_submit(actor_id, type_code)  # R01 + 작성 권한자(D-198)
         may_correct = usable and (roles.is_owner(actor_id, type_code) or roles.is_leader(actor_id))
         info = next((r["values"] for r in document["sections"] if r["section_def"] == "info"), {})
         permissions = {
             "submit": may_submit and line["ok"] and document["status"] in SUBMITTABLE,
             "start_correction": may_correct and document["status"] in CORRECTABLE,  # R04
-            # r13: 역할로 쓸 수 있나(상태 무관 — 버튼별 상태는 화면이). 설정 오류면 true(C07)
+            # r13: 역할로 쓸 수 있나(상태 무관 — 버튼별 상태는 화면이)
             "write": roles.can_write(actor_id, type_code, (info or {}).get("inspector")),
             "assign_inspector": type_code in INSPECTOR_TYPES
             and roles.can_assign_inspector(actor_id, type_code),  # R08
@@ -3820,6 +3820,31 @@ def _pending_queryset():
     )
 
 
+def pending_checks_of(staff_id):
+    """P16 ADM-F16: 이 사람이 지정 확인자인 개선조치 확인 대기 수(VR-P11-01 조건 재사용 — SQL 1).
+
+    팀장이 확인할 수 있는 것(R05)은 세지 않는다 — 지정 확인자로 남은 것만(비활성하면 팀장이 확인).
+    """
+    with step("DOC-IMP-01", "DOC", "지정 확인자인 확인 대기"):
+        return _pending_queryset().filter(_mine(staff_id)).count()
+
+
+def inspector_docs_of(staff_id):
+    """P16 ADM-F16: 이 사람이 지정 점검자(info.inspector)인 상신 전 문서 수(SQL 1)."""
+    with step("DOC-IMP-02", "DOC", "지정 점검자인 상신 전 문서"):
+        with connection_cursor() as cursor:
+            cursor.execute(
+                "SELECT COUNT(*) FROM document d "
+                "JOIN document_template t ON t.template_id = d.template_id "
+                "JOIN doc_section s ON s.document_id = d.document_id AND s.section_def = 'info' "
+                f"WHERE d.deleted_at IS NULL AND d.status IN ({', '.join(['%s'] * len(EDITABLE))}) "
+                f"AND t.type_code IN ({', '.join(['%s'] * len(INSPECTOR_TYPES))}) "
+                "AND json_extract(s.values_json, '$.inspector') = %s",
+                [*EDITABLE, *INSPECTOR_TYPES, staff_id],
+            )
+            return cursor.fetchone()[0]
+
+
 def _mine(actor_id):
     return Exists(DeviationChecker.objects.filter(deviation_id=OuterRef("pk"), staff_id=actor_id))
 
@@ -3827,9 +3852,9 @@ def _mine(actor_id):
 def _check_leader(actor_id):
     """P14 ROLE-R05(FR-13): 팀장은 지정 확인자가 아니어도 확인한다(확인자 없는 개선조치 포함).
 
-    역할 설정 파일 형식 오류면 팀장 예외는 쓸 수 없다(ROLE-C07 — 지정 확인자의 확인은 그대로).
+    P16: 역할 원본이 DB라 설정 파일 오류 경로 없음(ADM Q5 a).
     """
-    return actor_id is not None and roles.config_error() is None and roles.is_leader(actor_id)
+    return actor_id is not None and roles.is_leader(actor_id)
 
 
 def _my_pending(queryset, actor_id, leader):
@@ -3988,7 +4013,7 @@ def check_deviation(actor_id, deviation_id, expected_version):
                     validation.error("expected_version", "required", "1 이상의 정수여야 합니다.")
                 ]
             )
-        leader = _check_leader(actor_id)  # P14 R05 — 설정 오류면 False(C07)
+        leader = _check_leader(actor_id)  # P14 R05
         s.note("HACCP팀장" if leader else "지정 확인자만")
     now = timezone.now()
     with transaction.atomic():

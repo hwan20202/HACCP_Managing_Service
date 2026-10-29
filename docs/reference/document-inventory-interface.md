@@ -38,7 +38,7 @@ LOT마다 D01 시험성적서·D02 원산지 증빙·D03 육안검사 문서를 
 result = services.require_for_batch(staff_id, batch_id)
 ```
 
-현재 제조 공정 기본값은 CCP-1P·2B·3P이고, 제조 배치에는 생산일지(`PROD-LOG`) 1건을 함께 만듭니다(공정 없이, 결재 없음 — 양식을 `install_document_templates --production-log`로 설치했을 때만). 품목별 예외는 `doc_requirements/rules.py`의 `CCP_BY_ITEM`에서 정할 수 있으며 현재는 비어 있습니다. 취소 배치는 거부합니다. 포장배치에는 작성 요구가 없고, 신규 포장배치 생성 자체도 MVP 범위에서 금지합니다.
+현재 제조 공정 기본값은 CCP-1P·2B·3P이고, 제조 배치에는 생산일지(`PROD-LOG`) 1건을 함께 만듭니다(공정 없이, 결재 없음 — 양식을 `install_document_templates --production-log`로 설치했을 때만). P16부터 공정 목록은 관리 설정 DB입니다: 기본은 `ccp_default`, 품목별 예외는 생산 기준정보 › 품목별 CCP(`item_ccp`), 배치마다 처음 생산 시작 때 정한 공정을 `batch_ccp_applied`에 남기고 [다시 호출]은 그 기록대로 만듭니다. 품목을 지우면(`item_removal.py`) 그 품목의 CCP 설정도 DB가 함께 지웁니다. 취소 배치는 거부합니다. 포장배치에는 작성 요구가 없고, 신규 포장배치 생성 자체도 MVP 범위에서 금지합니다.
 
 반환은 `production_batch_id`, `documents`이며 CCP 일지 항목에는 `process_code`가 있고, 생산일지 항목은 `type_code: "PROD-LOG"`·`process_code` null입니다. 연결 문서를 셀 때 CCP 일지는 `process_code`(또는 `CCP-` 유형)로 구분합니다. 생산 시작을 생략한 사후 입력은 수불의 완료 처리에서 이 함수를 호출합니다.
 

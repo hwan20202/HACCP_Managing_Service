@@ -9,6 +9,7 @@ import json
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 
+from apps.admin_settings.models import RoleForm
 from apps.approvals import errors as apr_errors
 from apps.core import trace
 from apps.document_workflow import services as wf
@@ -32,7 +33,7 @@ from apps.document_workflow.tests.p7 import d03, setup_p7
 from apps.documents.tests.base import make_document
 from apps.staff import roles
 from apps.staff.models import Staff
-from apps.staff.tests.base import RolesFileMixin, default_roles
+from apps.staff.tests.base import EMPTY, RolesFileMixin, default_roles
 
 
 class RoleCase(RolesFileMixin, TestCase):
@@ -103,6 +104,7 @@ class SubmitLineTests(RoleCase):
         del data["forms"]["CCP_MONITORING"]
         data["haccp_leaders"] = ["DEV-001"]
         self.use_roles(data)
+        RoleForm.objects.filter(type_code="CCP_MONITORING").delete()  # 양식 행 없음(R-W4)
         with self.assertRaises(roles.RoleRequired):  # 설정 없는 양식 = 담당자 없음, 팀장만 가능
             wf.submit(OWNER, document_id, version_of(document_id))
         with self.assertRaises(roles.NoApprovalLine) as caught:
@@ -128,17 +130,18 @@ class SubmitLineTests(RoleCase):
         self.assertEqual(new["slots"][0]["candidate_ids"], [3, 4])
         self.assertEqual(new["request_id"], second["request"]["request_id"])
 
-    def test_tc02_config_invalid(self):
+    def test_tc02_empty_roles(self):
+        """ADM-TC-15(P16 — ROLE-TC-02 대체): 문서 권한이 비면 상신 403, 상신된 칸은 고정 후보로."""
         out = self.submit()
         other = new_document(self.t)
-        self.use_roles(raw="{broken")
-        for actor in (OWNER, NO_ROLE):  # 역할이 없어도 403이 아니라 409
-            with self.assertRaises(roles.RoleConfigInvalid):
+        self.use_roles(EMPTY)
+        for actor in (OWNER, NO_ROLE):  # 설정 오류(409) 경로 없음 — 역할 없음 403
+            with self.assertRaises(roles.RoleRequired):
                 wf.submit(actor, other, version_of(other))
-        # 이미 상신된 칸 처리는 저장된 후보로 된다
+        # 이미 상신된 칸 처리는 저장된 후보로 된다(R36)
         ids = slot_ids(out["request"])
         wf.decide(OWNER, ids[1], "approved")
-        # 팀장 예외 취소는 막히고(ROLE-C07) 상신자 본인 취소는 된다
+        # 팀장이 아니게 됐으니 팀장 예외 취소는 막히고 상신자 본인 취소는 된다
         with self.assertRaises(apr_errors.NotRequester):
             wf.cancel_submission(LEADER, out["request"]["request_id"])
         wf.cancel_submission(OWNER, out["request"]["request_id"])
@@ -159,8 +162,7 @@ class StaffChangeTests(RoleCase):
     """리뷰 A1: 서버 시작 뒤 비활성이 된 후보는 빠진다(전에는 상신·개선조치가 400)."""
 
     def setUp(self):
-        self.use_cache()
-        roles.load()  # 서버 시작 뒤 첫 사용(보관본)
+        roles.load()  # P16: 원본이 DB라 보관본 없음 — 직원 변경은 다음 load()부터
 
     def test_inactive_leader_left_out(self):
         Staff.objects.filter(pk=LEADER).update(is_active=False)
@@ -256,11 +258,11 @@ class CorrectionRoleTests(RoleCase):
                     )
                     self.assertEqual(result["status"], "correcting")
                     transaction.set_rollback(True)
-        # ROLE-TC-02·C07: 설정 파일 오류면 역할 없는 사람도 403이 아니라 409
-        self.use_roles(raw="{broken")
+        # P16: 문서 권한이 비면 담당자였던 사람도 403(설정 오류 409 경로 없음)
+        self.use_roles(EMPTY)
         for actor in (OWNER, NO_ROLE):
-            with self.subTest(config="invalid", actor=actor):
-                with self.assertRaises(roles.RoleConfigInvalid):
+            with self.subTest(config="empty", actor=actor):
+                with self.assertRaises(roles.RoleRequired):
                     doc.start_correction(actor, document_id, version_of(document_id), "재확인")
         self.assertEqual(db_state(document_id), before)
 

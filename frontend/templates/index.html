@@ -283,10 +283,16 @@
   <script src="{% static 'temp-entry/prodlog/prodlog.js' %}"></script>
   <script src="{% static 'temp-entry/approval/approval.js' %}"></script>
   <script src="{% static 'temp-entry/requirement/requirement.js' %}"></script>
+  <script src="{% static 'temp-entry/admin-settings/admin-common.js' %}"></script>
   <script src="{% static 'temp-entry/role/role.js' %}"></script>
+  <script src="{% static 'temp-entry/admin-settings/staff-admin.js' %}"></script>
   <script src="{% static 'temp-entry/master/master.js' %}"></script>
+  <script src="{% static 'temp-entry/admin-settings/item-ccp.js' %}"></script>
   <script src="{% static 'temp-entry/dashboard/dashboard.js' %}"></script>
   {% endif %}
+  <!-- [P16] 시작 확인·처음 설정(ADM-R51·R69 — 늘 실림, 문서 화면 코드와 무관). app.js보다 먼저 -->
+  <link rel="stylesheet" href="{% static 'start-check/start-check.css' %}" />
+  <script src="{% static 'start-check/start-check.js' %}"></script>
   <script src="{% static 'prototype/js/app.js' %}"></script>
 </body>
 </html>
