@@ -97,7 +97,7 @@ erDiagram
 | 컬럼 | 형 | NULL 허용 | 기본값 | 키 | 설명 |
 |---|---|---|---|---|---|
 | `id` | INTEGER | 예 |  | PK | 직원 번호(API의 `X-Staff-Id`) |
-| `staff_code` | TEXT |  |  | 유일 | 직원 코드(역할 설정 파일이 이 코드로 사람을 가리킴) |
+| `staff_code` | TEXT |  |  | 유일 | 직원 코드(등록 뒤 바꾸지 않음). 문서 권한 표(`role_leader`·`role_form_member`)는 `staff.id`로 사람을 가리키고, 이 코드는 옛 역할 파일을 옮기는 `import_roles`만 씀 |
 | `name` | TEXT |  |  |  | 이름(서명·출력에 찍힘) |
 | `is_active` | INTEGER |  | `1` |  | 재직(사용) 중이면 1. 0이면 현재 사용자로 고를 수 없음 |
 | `created_at` | TEXT |  | `datetime('now', 'localtime')` |  | 만든 시각(KST 글자) |
@@ -105,6 +105,7 @@ erDiagram
 **앱 규칙**(코드가 지킴)
 
 - 비활성 직원은 쓰기 요청이 거부됩니다(403 `INVALID_STAFF`). 지우지 않고 비활성으로 바꿉니다.
+- P16부터 관리 설정 화면(직원 관리)이 이 표에 등록·이름 수정·비활성·다시 활성을 합니다. 쓰기는 수불 `backend/apps/inventory/staff_admin.py`만 거칩니다(이름 1~40자·코드 1~20자, 코드는 비활성 포함 유일). 문서 권한·관리 설정 이력도 이 `id`를 FK로 가리킵니다([document.md — 관리 설정](document.md#관리-설정)).
 
 <a id="suppliers"></a>
 ### `suppliers` — 공급처(매입처)

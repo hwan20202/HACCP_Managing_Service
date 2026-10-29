@@ -290,6 +290,34 @@ class RoleSaveTests(SetupCase):
         staff = self.api("get", "admin/history?target=staff", staff=None).json()["items"]
         self.assertEqual(staff[0]["label"], "바뀐이름(DEV-003)")
 
+    def test_every_flow_matches_trace(self):
+        """D-274: 콘솔 흐름(flows.py)과 실제 trace 단계 — 직원·문서 권한 읽기·쓰기 전부
+        (안쪽 DOC 단계 포함).
+
+        품목 CCP·이력은 test_ccp.FlowTraceTests, 문서 권한 저장은 test_api_and_flows, 비활성 영향은
+        test_impact가 본다 — 여기와 합쳐 FLOWS 전부.
+        """
+        cases = {
+            "ADM-STF-LST": lambda: services.staff_list(),
+            "ADM-STF-COD": lambda: services.suggest_staff_code(),
+            "ADM-STF-NEW": lambda: services.create_staff(1, {"name": "흐름", "staff_code": "FL-1"}),
+            "ADM-STF-REN": lambda: services.rename_staff(1, 2, {"name": "흐름 이름"}),
+            "ADM-STF-ACT": lambda: services.set_staff_active(
+                1, 4, {"active": False, "confirm_impact": True}
+            ),
+            "ADM-ROL-GET": lambda: services.roles_for_edit(),
+        }
+        for flow, call in cases.items():
+            record, token = trace.start("TEST", flow)
+            try:
+                call()
+            finally:
+                trace.stop(token)
+            ids = [s.step_id for s in record.steps]
+            self.assertTrue(flows.matches(flow, ids), (flow, ids))
+        elsewhere = {"ADM-CCP-LST", "ADM-CCP-SAV", "ADM-HIS", "ADM-ROL-SAV", "ADM-STF-IMP"}
+        self.assertEqual(set(cases) | elsewhere, set(flows.FLOWS))
+
     def test_api_and_flows(self):
         r = self.api("get", "admin/roles", staff=None)
         body = r.json()

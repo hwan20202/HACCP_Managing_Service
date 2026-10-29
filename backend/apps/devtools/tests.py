@@ -691,3 +691,35 @@ class ProdLogFixtureTests(TestCase):
                 },
             },
         )
+
+
+@override_settings(ROOT_URLCONF="apps.devtools.test_urls")
+class AdminImportFixtureTests(TestCase):
+    """P16 S6 ADM-PS-07: 가져오기 결과를 보고 되돌림(DB 변화 없음)."""
+
+    def test_import_rolled_back(self):
+        from apps.admin_settings import store
+        from apps.admin_settings.models import AdminChangeLog
+        from apps.documents.seed import ensure_p4_templates
+        from apps.staff import services as staff_services
+
+        staff_services.ensure_dev_staff(range(1, 6))
+        ensure_p4_templates()
+        before = store.role_rows()
+        r = self.client.post(
+            "/api/dev/fixtures/admin-import", data="{}", content_type="application/json"
+        )
+        self.assertEqual(r.status_code, 200, r.content)
+        out = r.json()
+        self.assertEqual(out["emptied"]["leaders"] + out["emptied"]["members"], 0)
+        self.assertEqual(out["report"]["leaders"], 2)
+        self.assertIn("D03", out["report"]["forms"])
+        self.assertTrue(out["rolled_back"])
+        after = store.role_rows()
+        self.assertEqual(after["version"], before["version"])
+        self.assertEqual(after["leaders"], before["leaders"])
+        self.assertFalse(AdminChangeLog.objects.filter(target="roles_import").exists())
+        bad = self.client.post(
+            "/api/dev/fixtures/admin-import", data='{"x": 1}', content_type="application/json"
+        )
+        self.assertEqual(bad.status_code, 400)

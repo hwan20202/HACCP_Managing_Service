@@ -1,14 +1,15 @@
 # ERD — 문서 쪽
 
-문서·결재·생산일지 영역의 표 16개입니다. 영역마다 관계 그림을 먼저 두고, 표마다 컬럼·키·제약·앱 규칙을 적습니다. 전체 구조와 읽는 법은 [ERD 안내](README.md)를 먼저 봅니다.
+문서·결재·생산일지·관리 설정 영역의 표 24개입니다. 영역마다 관계 그림을 먼저 두고, 표마다 컬럼·키·제약·앱 규칙을 적습니다. 전체 구조와 읽는 법은 [ERD 안내](README.md)를 먼저 봅니다.
 
-> 현재 기준 2026-10-27 · 기준 코드 `2234f02`(main) · 형·NULL·기본값·키·제약은 빈 DB에 `migrate`한 실제 스키마에서 그대로 옮겼습니다(전체 SQL은 [schema.sql](schema.sql)).
+> 현재 기준 2026-10-29 · 기준 코드 `61d4b9f`(`feature/p16-admin-settings`) · 형·NULL·기본값·키·제약은 빈 DB에 `migrate`한 실제 스키마에서 그대로 옮겼습니다(전체 SQL은 [schema.sql](schema.sql)).
 
 | 영역 | 표 |
 |---|---|
 | [문서](#문서) | [`document_template`](#document_template) · [`document`](#document) · [`doc_section`](#doc_section) · [`document_ref`](#document_ref) · [`file`](#file) · [`document_file`](#document_file) · [`deviation_action`](#deviation_action) · [`deviation_checker`](#deviation_checker) · [`document_correction`](#document_correction) |
 | [결재](#결재) | [`approval_request`](#approval_request) · [`approval`](#approval) · [`approval_candidate`](#approval_candidate) |
 | [생산일지·생산 기준정보](#생산일지생산-기준정보) | [`process`](#process) · [`process_template`](#process_template) · [`process_template_step`](#process_template_step) · [`master_change_log`](#master_change_log) |
+| [관리 설정](#관리-설정) | [`ccp_default`](#ccp_default) · [`item_ccp`](#item_ccp) · [`batch_ccp_applied`](#batch_ccp_applied) · [`admin_change_log`](#admin_change_log) · [`role_config`](#role_config) · [`role_leader`](#role_leader) · [`role_form`](#role_form) · [`role_form_member`](#role_form_member) |
 
 **읽는 법**
 
@@ -466,7 +467,7 @@ erDiagram
 
 **앱 규칙**(DB가 아니라 코드가 지킴)
 
-- 역할 칸의 후보는 `approval_candidate`에 상신 순간 고정됩니다. 그 뒤 역할 설정이 바뀌어도 이번 회차 후보는 그대로입니다.
+- 역할 칸의 후보는 `approval_candidate`에 상신 순간 고정됩니다. 그 뒤 문서 권한이 바뀌어도 이번 회차 후보는 그대로입니다.
 - 한 칸이라도 반려하면 회차 `rejected`, 모든 칸 승인이면 `approved`.
 
 <a id="approval_candidate"></a>
@@ -677,3 +678,316 @@ erDiagram
 **앱 규칙**(DB가 아니라 코드가 지킴)
 
 - 대상이 삭제돼도 이력은 남습니다(대상 FK 없음).
+
+## 관리 설정
+
+```mermaid
+erDiagram
+  items ||--o| item_ccp : "item_id UNIQUE (ON DELETE CASCADE, 수불)"
+  production_batches ||--o| batch_ccp_applied : "batch_id UNIQUE (수불)"
+  staff ||--o{ admin_change_log : "actor_id (수불)"
+  staff ||--o| role_leader : "staff_id UNIQUE (수불)"
+  staff ||--o{ role_form_member : "staff_id (수불)"
+  role_form ||--o{ role_form_member : "role_form_id"
+  document_template }o..|| role_form : "type_code (값으로만, FK 아님)"
+  ccp_default {
+    text process_type PK "MANUFACTURE · PACKAGING"
+    bool ccp_1p
+    bool ccp_2b
+    bool ccp_3p
+  }
+  item_ccp {
+    int id PK
+    int item_id FK "UNIQUE"
+    text mode "default · own"
+    bool ccp_1p
+    bool ccp_2b
+    bool ccp_3p
+    int version
+  }
+  batch_ccp_applied {
+    int id PK
+    int batch_id FK "UNIQUE"
+    bool ccp_1p
+    bool ccp_2b
+    bool ccp_3p
+  }
+  admin_change_log {
+    int log_id PK
+    text target
+    int target_id "FK 아님"
+    text action
+    int actor_id FK
+  }
+  role_config {
+    int id PK "항상 1"
+    int version
+  }
+  role_leader {
+    int id PK
+    int staff_id FK "UNIQUE"
+  }
+  role_form {
+    int id PK
+    text type_code "UNIQUE"
+    text slots
+  }
+  role_form_member {
+    int id PK
+    int role_form_id FK
+    text role "owner · writer"
+    int staff_id FK
+  }
+```
+
+P16에서 생긴 `admin_settings` 앱의 표 8개입니다. 품목별 CCP(`ccp_default`·`item_ccp`·`batch_ccp_applied`), 문서 권한(`role_config`·`role_leader`·`role_form`·`role_form_member`), 둘이 함께 쓰는 변경 이력(`admin_change_log`)으로 나뉩니다. P16 전에는 문서 권한이 역할 설정 파일(`roles.json`)에 있었고, 지금은 이 표가 원본입니다(파일은 `import_roles`로 한 번 옮길 때만 씀).
+
+- 직원은 새 표가 없습니다. 수불 [`staff`](inventory.md#staff)를 그대로 쓰고, 쓰기는 수불 `backend/apps/inventory/staff_admin.py`가 맡습니다.
+- 수불 표(`items`·`production_batches`·`staff`)를 FK로 가리킵니다. 문서 쪽 표(`document_template` 등)로 가는 FK는 없습니다 — `role_form.type_code`는 양식 코드 값으로만 잇습니다(새 양식 버전을 설치해도 권한이 이어짐).
+- 공정 집합은 bool 열 3개(`ccp_1p`·`ccp_2b`·`ccp_3p`)입니다. 화면·API의 `processes` 목록(`1P`→`2B`→`3P` 순)은 서비스가 만듭니다. bool 열마다 `IN (0, 1)` 검사가 있습니다.
+- 품목·배치·직원 id를 PK로 쓰지 않고 대리 키 `id` + UNIQUE를 둡니다(SQLite에서 rowid에 NULL을 넣으면 번호가 자동으로 붙는 것을 막음).
+
+<a id="ccp_default"></a>
+### `ccp_default` — 전체 기본 CCP
+
+공정 구분별 기본 CCP 일지 구성. 품목이 "기본 따름"이면 이 값을 씁니다.
+
+| 소유 앱 | 만드는 곳 | 쓰는 API |
+|---|---|---|
+| `admin_settings` | Django 모델 (`backend/apps/admin_settings/models.py`) · 데이터는 마이그레이션 `0002_ccp_data` | `ADM-A01`(읽기) |
+
+| 컬럼 | 형 | NULL 허용 | 기본값 | 키 | 설명 |
+|---|---|---|---|---|---|
+| `ccp_1p` | bool |  |  |  | 1P 쇳가루 제거 일지를 만들면 1 |
+| `ccp_2b` | bool |  |  |  | 2B 건조 일지를 만들면 1 |
+| `ccp_3p` | bool |  |  |  | 3P 금속검출 일지를 만들면 1 |
+| `process_type` | TEXT |  |  | PK | 공정 구분 `MANUFACTURE`(제조) / `PACKAGING`(포장) |
+| `updated_at` | datetime |  |  |  | 넣은 시각(마이그레이션 실행 시각) |
+
+**키·제약**
+
+- 검사 `ck_ccp_default_type`: `process_type IN ('MANUFACTURE', 'PACKAGING')`
+- 검사 `ck_ccp_default_1p`·`ck_ccp_default_2b`·`ck_ccp_default_3p`: `ccp_… IN (0, 1)`
+
+**앱 규칙**(DB가 아니라 코드가 지킴)
+
+- 마이그레이션이 2행을 넣습니다: `MANUFACTURE` 1P·2B·3P, `PACKAGING` 없음(P16 이전 규칙과 같음).
+- API·화면으로 바꾸지 않습니다. 바꾸려면 마이그레이션을 추가합니다.
+
+<a id="item_ccp"></a>
+### `item_ccp` — 품목 CCP 설정
+
+반제품마다 "기본 따름" 또는 "품목 설정(공정 집합)". 화면 **[생산 기준정보] › [품목별 CCP]**.
+
+| 소유 앱 | 만드는 곳 | 쓰는 API |
+|---|---|---|
+| `admin_settings` | **SQL**(마이그레이션 `0001_initial`의 RunSQL — Django 상태는 모델 그대로, `SeparateDatabaseAndState`) | `ADM-A01` · `ADM-A02` |
+
+| 컬럼 | 형 | NULL 허용 | 기본값 | 키 | 설명 |
+|---|---|---|---|---|---|
+| `ccp_1p` | bool |  |  |  | 1P 일지를 만들면 1 |
+| `ccp_2b` | bool |  |  |  | 2B 일지를 만들면 1 |
+| `ccp_3p` | bool |  |  |  | 3P 일지를 만들면 1 |
+| `id` | INTEGER |  |  | PK | 설정 번호 |
+| `mode` | TEXT |  |  |  | `default`(기본 따름) / `own`(품목 설정) |
+| `version` | INTEGER |  |  |  | 낙관적 잠금 버전(행 없음 = API에서 0) |
+| `updated_at` | datetime |  |  |  | 마지막 저장 시각 |
+| `item_id` | bigint |  |  | FK → `items.id`(**ON DELETE CASCADE**) · 유일 | 품목(수불). 품목당 0·1행 |
+
+**키·제약**
+
+- 검사(이름 없음): `mode IN ('default', 'own')` · `version >= 1` · `ccp_… IN (0, 1)`
+- 검사(이름 없음): `mode = 'own' OR (NOT ccp_1p AND NOT ccp_2b AND NOT ccp_3p)` — 기본 따름이면 공정 열이 모두 0
+- 유일: `item_id`
+
+**앱 규칙**(DB가 아니라 코드가 지킴)
+
+- 반제품(`items.item_type = SEMI`)만 저장합니다(`not_producible`). 사용 중지 품목도 저장할 수 있습니다.
+- `own`에서 셋 다 0이면 "CCP 없음"입니다.
+- 기본 따름으로 되돌려도 행을 지우지 않고 `mode = default`로 바꾸며 버전을 올립니다.
+- 같은 값이면 저장·이력이 없습니다. 바꾸면 `admin_change_log`에 `set`·`default` 1행.
+- 수불이 미사용 품목을 `DELETE FROM items`로 직접 지우면 DB가 이 행도 같이 지웁니다(즉시 FK·CASCADE — 그래서 이 표만 SQL로 만듦). 모델 스키마를 바꿀 때 이 FK를 RunSQL로 유지해야 합니다.
+- 누가 바꿨는지는 이 표가 아니라 이력에 있습니다(`updated_by` 없음).
+
+<a id="batch_ccp_applied"></a>
+### `batch_ccp_applied` — 배치 CCP 적용 기록
+
+배치를 처음 생산 시작할 때(처음 작성 요구 때) 결정한 CCP 공정 집합. 이후에는 설정이 바뀌어도 이 기록대로만 CCP 일지를 찾고 만듭니다.
+
+| 소유 앱 | 만드는 곳 | 쓰는 API |
+|---|---|---|
+| `admin_settings` | Django 모델 (`backend/apps/admin_settings/models.py`) · 이관 데이터는 `0002_ccp_data` | (API 없음 — `admin_settings/store.py::ccp_for_batch`·`batch_ccp`를 작성 요구가 부름) |
+
+| 컬럼 | 형 | NULL 허용 | 기본값 | 키 | 설명 |
+|---|---|---|---|---|---|
+| `ccp_1p` | bool |  |  |  | 1P 일지를 만듦 |
+| `ccp_2b` | bool |  |  |  | 2B 일지를 만듦 |
+| `ccp_3p` | bool |  |  |  | 3P 일지를 만듦 |
+| `id` | INTEGER |  |  | PK | 기록 번호 |
+| `decided_at` | datetime |  |  |  | 결정한 시각(이관 행은 마이그레이션 실행 시각) |
+| `batch_id` | bigint |  |  | FK → `production_batches.id` · 유일 | 배치(수불). 배치당 0·1행 |
+
+**키·제약**
+
+- 검사 `ck_batch_ccp_1p`·`ck_batch_ccp_2b`·`ck_batch_ccp_3p`: `ccp_… IN (0, 1)`
+- 유일: `batch_id`
+
+**앱 규칙**(DB가 아니라 코드가 지킴)
+
+- 결정 규칙: 품목 `mode = own`이면 그 집합, 아니면 배치 공정 구분의 `ccp_default`. 셋 다 0이면 "CCP 없음"(CCP 일지 없음).
+- 기록 없음 = 생산 시작 전. 작성 요구 화면 배치 요약의 `ccp_processes`가 `null`입니다.
+- 마이그레이션 `0002`가 **P16 이전에 생산을 시작한 제조 배치**(`started_at` 있음, 취소 포함)에 1P·2B·3P를 채웠습니다.
+- 동시에 처음 시작하면 먼저 기록한 쪽을 따릅니다(UNIQUE). 배치는 수불 트리거가 지우지 못하게 막습니다.
+- 품목 CCP 설정과 달리 이력을 남기지 않습니다.
+
+<a id="admin_change_log"></a>
+### `admin_change_log` — 관리 설정 변경 이력
+
+품목 CCP·직원·문서 권한을 관리 설정에서 바꾼 기록. 화면 **[이력]**. 모양은 [`master_change_log`](#master_change_log)와 같습니다.
+
+| 소유 앱 | 만드는 곳 | 쓰는 API |
+|---|---|---|
+| `admin_settings` | Django 모델 (`backend/apps/admin_settings/models.py`) | `ADM-A11`(읽기) · 쓰기 API(`ADM-A02`·`A05`·`A06`·`A08`·`A10`)와 `import_roles`가 기록 |
+
+| 컬럼 | 형 | NULL 허용 | 기본값 | 키 | 설명 |
+|---|---|---|---|---|---|
+| `log_id` | INTEGER |  |  | PK | 이력 번호 |
+| `target` | TEXT |  |  |  | `item_ccp` · `staff` · `role_leader` · `role_form` · `roles_import` |
+| `target_id` | INTEGER |  |  |  | 품목 id · 직원 id · 양식 행 id(`role_form.id`) · 0(팀장·가져오기) |
+| `action` | TEXT |  |  |  | `set`(품목 설정) · `default`(기본 따름) · `create` · `rename` · `deactivate` · `activate` · `change`(문서 권한) · `import`(가져오기) · `bootstrap_create` · `bootstrap_activate`(처음 설정) |
+| `before_json` | TEXT | 예 |  |  | 바뀌기 전 값(바뀐 값만) |
+| `after_json` | TEXT | 예 |  |  | 바뀐 뒤 값 |
+| `reason` | TEXT | 예 |  |  | 사유(품목 CCP만, 1~100자) |
+| `at` | datetime |  |  |  | 시각 |
+| `actor_id` | bigint |  |  | FK → `staff.id` | 바꾼 사람(처음 설정은 등록·다시 활성된 그 직원) |
+
+**키·제약**
+
+- 인덱스 `ix_admin_log_target`: `admin_change_log (target, target_id, at DESC)`
+- 인덱스 `ix_admin_log_actor`: `admin_change_log (actor_id, at)`
+- 검사 `(이름 없음)`: `(JSON_VALID(before_json) OR before_json IS NULL)`
+- 검사 `(이름 없음)`: `(JSON_VALID(after_json) OR after_json IS NULL)`
+- 검사 `ck_admin_log_target`: `target IN ('item_ccp', 'staff', 'role_leader', 'role_form', 'roles_import')`
+- 검사 `ck_admin_log_action`: `action IN ('set', 'default', 'create', 'rename', 'deactivate', 'activate', 'change', 'import', 'bootstrap_create', 'bootstrap_activate')`
+- 검사 `ck_admin_log_reason`: `(reason IS NULL OR (LENGTH(reason) >= 1 AND LENGTH(reason) <= 100))`
+
+**앱 규칙**(DB가 아니라 코드가 지킴)
+
+- 저장과 같은 트랜잭션에서 씁니다. 같은 값 저장은 이력이 없습니다.
+- 대상 FK가 없어 대상(품목 등)이 지워져도 이력은 남습니다. 지워진 품목은 화면 이름이 비어 보입니다.
+- 수불 CSV 가져오기·수불 `/staff/` API로 바뀐 직원은 여기 남지 않습니다(이력 범위 = 관리 설정에서 바꾼 것).
+- `bootstrap_*`는 "처음 설정으로 처리됨"이라는 뜻입니다. `actor_id`는 그 직원이지만 본인이 한 일이라는 뜻은 아닙니다.
+
+<a id="role_config"></a>
+### `role_config` — 문서 권한 버전
+
+문서 권한 전체의 버전 1행. 저장·가져오기마다 +1이고, 저장은 이 버전으로 낙관적 잠금을 합니다.
+
+| 소유 앱 | 만드는 곳 | 쓰는 API |
+|---|---|---|
+| `admin_settings` | **SQL**(마이그레이션 `0003_roles`의 RunSQL, 모델 `managed=False`) · 1행은 `0004_role_data` | `ADM-A09` · `ADM-A10` · `ROLE-A01`(`version`) |
+
+| 컬럼 | 형 | NULL 허용 | 기본값 | 키 | 설명 |
+|---|---|---|---|---|---|
+| `id` | INTEGER |  |  | PK | 항상 1 |
+| `version` | INTEGER |  | `1` |  | 문서 권한 버전 |
+| `updated_at` | datetime |  |  |  | 마지막 저장 시각 |
+
+**키·제약**
+
+- 검사(이름 없음): `id = 1`(최대 1행) · `version >= 1`
+
+**트리거**(DB가 직접 막음)
+
+| 트리거 | 때 | 하는 일 |
+|---|---|---|
+| `trg_role_config_no_delete` | BEFORE DELETE | 행을 지우지 않음(최소 1행) |
+
+**앱 규칙**(DB가 아니라 코드가 지킴)
+
+- 바뀐 곳이 없는 저장은 버전을 올리지 않습니다.
+- 삭제 트리거 때문에 Django 테스트의 표 비우기 대상에서 빠지도록 `managed=False`입니다.
+
+<a id="role_leader"></a>
+### `role_leader` — HACCP팀장
+
+HACCP팀장으로 지정된 직원. 양식과 상관없는 전체 역할입니다.
+
+| 소유 앱 | 만드는 곳 | 쓰는 API |
+|---|---|---|
+| `admin_settings` | Django 모델 (`backend/apps/admin_settings/models.py`) | `ADM-A09` · `ADM-A10` · `ROLE-A01` |
+
+| 컬럼 | 형 | NULL 허용 | 기본값 | 키 | 설명 |
+|---|---|---|---|---|---|
+| `id` | INTEGER |  |  | PK | 행 번호 |
+| `staff_id` | bigint |  |  | FK → `staff.id` · 유일 | 팀장 직원(사람당 1행) |
+
+**키·제약**
+
+- 유일: `staff_id`
+
+**앱 규칙**(DB가 아니라 코드가 지킴)
+
+- 새로 넣는 사람은 활성 직원이어야 합니다(`inactive_staff`). 이미 들어 있던 비활성 직원은 남을 수 있고 효과만 빠집니다.
+- 직원은 지우지 않으므로 FK에 지울 때 동작이 없습니다(역할에 든 직원 삭제는 실패).
+
+<a id="role_form"></a>
+### `role_form` — 양식별 결재 칸 구성
+
+양식 코드마다 1행. 결재 칸 구성과 칸 이름을 둡니다(버전과 무관 — 새 양식 버전을 설치해도 그대로).
+
+| 소유 앱 | 만드는 곳 | 쓰는 API |
+|---|---|---|
+| `admin_settings` | Django 모델 (`backend/apps/admin_settings/models.py`) · 행은 `0004_role_data`와 양식 설치 때 `store.ensure_form_rows` | `ADM-A09` · `ROLE-A01` |
+
+| 컬럼 | 형 | NULL 허용 | 기본값 | 키 | 설명 |
+|---|---|---|---|---|---|
+| `id` | INTEGER |  |  | PK | 양식 행 번호(이력 `target_id`) |
+| `type_code` | TEXT |  |  | 유일 | 양식 코드(`document_template.type_code`와 값으로 이음) |
+| `slots` | TEXT |  |  |  | 결재 칸 구성 `owner`(담당자만) · `owner_leader`(담당자 + HACCP팀장) · `leader`(팀장만) · `none`(결재 없음) |
+| `label_owner` | TEXT | 예 |  |  | 담당자 칸 이름(NULL = 기본 "담당자") |
+| `label_leader` | TEXT | 예 |  |  | 팀장 칸 이름(NULL = 기본 "HACCP팀장") |
+| `created_at` | datetime |  |  |  | 만든 시각 |
+
+**키·제약**
+
+- 유일: `type_code`
+- 검사 `ck_role_form_type_code`: `(LENGTH(type_code) >= 1 AND LENGTH(type_code) <= 40)`
+- 검사 `ck_role_form_slots`: `slots IN ('owner', 'owner_leader', 'leader', 'none')`
+- 검사 `ck_role_form_label_owner`·`ck_role_form_label_leader`: `NULL` 또는 앞뒤 공백 없이 1~20자
+
+**앱 규칙**(DB가 아니라 코드가 지킴)
+
+- 기본 구성(`admin_settings/store.py::default_form`): D01·D02 `owner`, PROD-LOG `none`, D10 담당자 칸 "작성자", 나머지 `owner_leader`.
+- 행은 마이그레이션 시점의 활성 양식과, 이후 양식을 설치·활성화할 때 없는 코드만 기본 구성으로 생깁니다(있으면 그대로). 빈 DB에서는 양식 설치 전이라 0행입니다.
+- 화면·API는 `slots`·칸 이름을 바꾸지 않습니다. 바뀌는 곳은 `import_roles`(파일 값으로 덮어씀)뿐입니다.
+- 행은 지우지 않습니다. 비활성 양식의 행도 남습니다.
+
+<a id="role_form_member"></a>
+### `role_form_member` — 양식 담당자·작성 권한자
+
+양식 × 역할(`owner` 담당자 / `writer` 작성 권한자) × 직원.
+
+| 소유 앱 | 만드는 곳 | 쓰는 API |
+|---|---|---|
+| `admin_settings` | Django 모델 (`backend/apps/admin_settings/models.py`) | `ADM-A09` · `ADM-A10` · `ADM-A07` · `ROLE-A01` |
+
+| 컬럼 | 형 | NULL 허용 | 기본값 | 키 | 설명 |
+|---|---|---|---|---|---|
+| `id` | INTEGER |  |  | PK | 행 번호 |
+| `role` | TEXT |  |  |  | `owner`(담당자) / `writer`(작성 권한자) |
+| `role_form_id` | INTEGER |  |  | FK → `role_form.id` | 양식 행 |
+| `staff_id` | bigint |  |  | FK → `staff.id` | 직원 |
+
+**키·제약**
+
+- 유일 `ux_role_form_member`: (role_form_id, role, staff_id)
+- 검사 `ck_role_member_role`: `role IN ('owner', 'writer')`
+- 인덱스 `ix_role_form_member_staff`: `role_form_member (staff_id)` — 비활성 영향 조회용
+- 인덱스 `role_form_member_role_form_id_b563ea0f`·`role_form_member_staff_id_aa7be003`: Django가 FK마다 자동으로 만든 것(`staff_id`는 위 인덱스와 같은 열)
+
+**앱 규칙**(DB가 아니라 코드가 지킴)
+
+- 같은 사람이 한 양식의 담당자와 작성 권한자를 함께 가져도 됩니다(같은 역할 중복만 막음).
+- 새로 넣는 사람은 활성 직원이어야 합니다. 비활성 직원 행은 남고 효과만 빠집니다.
+- 저장은 바뀐 양식×역할만 다시 씁니다(빠진 사람 지우고 새 사람 넣기).

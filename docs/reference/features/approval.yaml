@@ -38,11 +38,10 @@
   errors:
     - {code: ROLE_REQUIRED, status: 403, at: backend/apps/staff/roles.py}
     - {code: NO_APPROVAL_LINE, status: 409, at: backend/apps/staff/roles.py}
-    - {code: ROLE_CONFIG_INVALID, status: 409, at: backend/apps/staff/roles.py}
     - {code: VERSION_CONFLICT, status: 409, at: backend/apps/documents/errors.py}
 
-  settings: [HACCP_ROLES_FILE, HACCP_DOC_MENU]
-  checks: [document_workflow.E002, document_workflow.W002]   # backend/apps/document_workflow/checks.py
+  settings: [HACCP_DOC_MENU]           # P16: HACCP_ROLES_FILE 없앰 — 문서 권한은 DB(admin_settings)
+  checks: [document_workflow.W002]   # backend/apps/document_workflow/checks.py (P16: E002 없앰, W002 = 빈 권한 경고)
 
   tests:
     - backend/apps/document_workflow/tests/test_api.py
@@ -57,7 +56,7 @@
     - 일괄 상신(F-WF-06, batch_submit)이 _submit_steps를 같이 쓴다. 한쪽을 고치면 둘 다 테스트한다.
     - 잠글 때 증빙 파일 보존 표시(D-058)와 성적서 유무 확정(D-234)이 같은 트랜잭션에서 일어난다.
     - 결재선 규칙을 바꾸면 화면 미리 보기(approval_line)와 확인 창이 같은 함수를 쓰는지 확인한다.
-    - 역할 설정 형식을 바꾸면 docs/handover/installation.md "역할 설정(결재선)"과 checks.py도 고친다.
+    - 문서 권한(결재 칸 구성·담당자)은 DB 표 role_*(backend/apps/admin_settings, ERD docs/handover/erd/document.md#관리-설정)가 원본이다. 저장 방식을 바꾸면 staff/roles.py(load·_resolve), checks.py(W002), docs/handover/installation.md "관리 설정"도 고친다.
 
   verify:
     - python backend/manage.py test apps.document_workflow.tests.test_p14_roles --settings=config.settings.test

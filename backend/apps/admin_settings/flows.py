@@ -13,7 +13,8 @@ FLOWS = {
     "ADM-STF-NEW": ["ADM-STF-NEW-01", "ADM-STF-NEW-02", "ADM-STF-NEW-03", "ADM-STF-NEW-04"],
     "ADM-STF-REN": ["ADM-STF-REN-01", "ADM-STF-REN-02", "ADM-STF-REN-03"],
     "ADM-STF-ACT": ["ADM-STF-ACT-01", "ADM-STF-ACT-02", "ADM-STF-ACT-03", "ADM-STF-ACT-04"],
-    "ADM-ROL-GET": ["ADM-ROL-GET-01", "ADM-ROL-GET-02"],
+    # 01 안에서 DOC 활성 양식 목록(DOC-TPL-01)을 읽는다 — A07(ADM-STF-IMP)과 같음(D-274)
+    "ADM-ROL-GET": ["ADM-ROL-GET-01", "DOC-TPL-01", "ADM-ROL-GET-02"],
     "ADM-ROL-SAV": [f"ADM-ROL-SAV-{n:02d}" for n in range(1, 8)],
     # 묶음 ③ 비활성 영향(F16) — APR·DOC 읽기 함수 단계 포함
     "ADM-STF-IMP": [
