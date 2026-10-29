@@ -26,52 +26,45 @@ def check_batch_types(app_configs, **kwargs):
 
 @register(Tags.compatibility)
 def check_roles(app_configs, **kwargs):
-    """P14 역할 설정 점검(S2a 1.4): 형식 오류 R-E1은 Error, 나머지는 Warning.
+    """P16 문서 권한 점검(ADM-R38): 모두 Warning(P14 E002 없앰 — 원본이 DB라 형식 오류 없음).
 
-    staff·양식 표를 읽는다 — 표가 없거나(마이그레이션 전) 직원이 없으면 형식 검사만 한다(L-22).
+    문서 권한 비어 있음·활성 HACCP팀장 0명·처리할 사람 없는 결재 칸(상신 불가 양식)을 알린다.
+    직원이 0명이어도 낸다(설치 점검 P-5). 표가 없으면(마이그레이션 전) 아무것도 안 낸다.
     """
-    import json
-
-    from django.core.checks import Error
     from django.db import connection
     from django.db.utils import DatabaseError
 
-    from apps.staff import roles
-
-    try:
-        data = json.loads(roles.config_path().read_text(encoding="utf-8"))
-        problems = roles._format_problems(data)
-    except (OSError, UnicodeDecodeError, ValueError) as error:
-        problems = [f"설정 파일을 읽지 못했습니다: {error}"]
-    if problems:
-        return [
-            Error(
-                "역할 설정 파일(HACCP_ROLES_FILE) 형식 오류 — 모든 상신이 막힙니다: "
-                + " / ".join(problems),
-                id="document_workflow.E002",
-            )
-        ]
     try:
         tables = set(connection.introspection.table_names())
     except DatabaseError:
         return []
-    if not {"staff", "document_template"} <= tables:
+    if not {"staff", "document_template", "role_config", "role_form"} <= tables:
         return []
     from apps.documents import services as doc
-    from apps.staff import services as staff_services
 
     try:
-        if not staff_services.active_people():
-            return []  # 직원 등록 전(새 설치·테스트 DB) — 모든 코드가 R-W1이 되는 소음 방지
-        roles.reset()
         summary = doc.roles_summary()
     except DatabaseError:
         return []
-    return [
-        Warning(
-            f"역할 설정 {item['code']}: {item['message']}",
-            hint="역할 보기 화면에서 확인하세요. 설정 파일을 고친 뒤 서버를 다시 시작합니다.",
-            id="document_workflow.W002",
+    hint = "문서 권한 화면에서 지정하세요. 저장 즉시 적용됩니다."
+    setup = summary["setup"]
+    messages = []
+    if setup["empty"]:
+        messages.append("문서 권한이 비어 있습니다 — 담당자·HACCP팀장이 한 명도 없습니다.")
+        # D-270 B2: 역할 파일을 쓰던 기존 서버는 migrate 뒤 이 상태 — 옮기는 명령을 함께 알림
+        hint += (
+            " 역할 파일(roles.json)을 쓰던 기존 서버는 "
+            "manage.py import_roles --file <roles.json> --actor <활성 직원 코드>로 옮깁니다."
         )
+    if not setup["leaders"]:
+        messages.append("활성 HACCP팀장이 0명입니다.")
+    if setup["blocked_forms"]:
+        messages.append(
+            "결재 칸을 처리할 사람이 없어 상신할 수 없는 양식: " + ", ".join(setup["blocked_forms"])
+        )
+    messages += [
+        f"문서 권한 {item['code']}: {item['message']}"
         for item in summary["warnings"]
+        if item["code"] != "R-W5"  # 칸 후보 없음은 위 상신 불가 양식 한 줄로
     ]
+    return [Warning(m, hint=hint, id="document_workflow.W002") for m in messages]

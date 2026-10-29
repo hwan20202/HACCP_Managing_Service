@@ -137,6 +137,14 @@
     admItemCcp: { label: 'ADM 품목별 CCP 목록 (A01)', method: 'GET', flow: 'ADM-CCP-LST', uses: ['query'], path: (s) => `admin/item-ccp${s.query ? `?${s.query}` : ''}` },
     admItemCcpSave: { label: 'ADM 품목 CCP 저장 (A02)', method: 'PUT', flow: 'ADM-CCP-SAV', uses: ['id', 'body'], path: (s) => `admin/item-ccp/${s.id}` },
     admHistory: { label: 'ADM 변경 이력 (A11)', method: 'GET', flow: 'ADM-HIS', uses: ['query'], defaultQuery: 'target=item_ccp', path: (s) => `admin/history${s.query ? `?${s.query}` : ''}` },
+    // ---- P16 묶음 ② 직원(A03~A06·A08)·문서 권한(A09·A10). A05·A08은 현재 사용자 없이 = 처음 설정(활성 0명일 때만 — R62)
+    admStaff: { label: 'ADM 직원 목록 (A03)', method: 'GET', flow: 'ADM-STF-LST', uses: ['query'], defaultQuery: 'state=all', path: (s) => `admin/staff${s.query ? `?${s.query}` : ''}` },
+    admStaffCode: { label: 'ADM 직원 코드 제안 (A04)', method: 'GET', flow: 'ADM-STF-COD', uses: [], path: () => 'admin/staff/next-code' },
+    admStaffCreate: { label: 'ADM 직원 등록 (A05)', method: 'POST', flow: 'ADM-STF-NEW', uses: ['body'], path: () => 'admin/staff' },
+    admStaffRename: { label: 'ADM 직원 이름 (A06)', method: 'PATCH', flow: 'ADM-STF-REN', uses: ['id', 'body'], path: (s) => `admin/staff/${s.id}` },
+    admStaffActive: { label: 'ADM 직원 활성·비활성 (A08)', method: 'POST', flow: 'ADM-STF-ACT', uses: ['id', 'body'], path: (s) => `admin/staff/${s.id}/active` },
+    admRoles: { label: 'ADM 문서 권한 (A09)', method: 'GET', flow: 'ADM-ROL-GET', uses: [], path: () => 'admin/roles' },
+    admRolesSave: { label: 'ADM 문서 권한 저장 (A10)', method: 'PUT', flow: 'ADM-ROL-SAV', uses: ['body'], path: () => 'admin/roles' },
   };
   function periodicScope(spec, fromKey, toKey) {
     try {
@@ -810,7 +818,7 @@
     return r.ok ? r.json() : null;
   }
   const SEED_HINT = 'seed_dev_workflow로 시드 데이터를 넣으세요';
-  // P14: 결재선은 역할 설정(backend/apps/staff/roles.json)으로 자동 — 상신 본문에 slots 없음(보내면 400 unknown_key).
+  // P14: 결재선은 역할(P16: DB 문서 권한)으로 자동 — 상신 본문에 slots 없음(보내면 400 unknown_key).
   // 개발 역할: 3 = 모든 양식 담당자, 1 = CCP 담당자 + HACCP팀장(겸직), 5 = HACCP팀장, 2 = D·위생 양식 담당자, 4 = 역할 없음.
   // 역할 칸은 대기 중 결재자가 비어 있으므로 처리할 사람 = 후보(candidate_ids) 중 1명.
   const OWNER = '3';
@@ -1905,7 +1913,7 @@
   }
 
   // ---------------------------------------------------------------- 프리셋 ROLE-PS-01~11·13 (P14, roles/p14-s1-screens.md 7장)
-  // 개발 역할 파일(backend/apps/staff/roles.json): 팀장 1·5, D03·D01·D10·위생 담당자 2·3, CCP 담당자 1·3(1 = 겸직),
+  // 개발 문서 권한(가상 직원 시드가 backend/apps/staff/roles.json을 DB에 넣음): 팀장 1·5, D03·D01·D10·위생 담당자 2·3, CCP 담당자 1·3(1 = 겸직),
   // D01·D02 작성 권한자 4(r4 D-198 — 상신만, 후보 아님. 그 밖의 양식에서 4는 역할 없음).
   // ROLE-PS-12(개선조치 팀장 확인)는 P11 병합 뒤.
   const role = (preset) => ({ unit: 'ROLE', ...preset });
@@ -1961,11 +1969,11 @@
         const req = await latestRequest(d.document_id);
         return { func: 'cancelSubmission', staff: '5', id: String(req.request_id), docId: String(d.document_id) };
       } }),
-    role({ id: 'ROLE-PS-08', label: '결재선 없음', expect: '409 NO_APPROVAL_LINE · WF-SUB-03b 실패 · ④ 변화 없음 — 개발 역할 파일에는 상신 불가 양식이 없으므로 HACCP_ROLES_FILE로 담당자 0명 양식이 있는 파일을 지정했을 때만 준비됨',
+    role({ id: 'ROLE-PS-08', label: '결재선 없음', expect: '409 NO_APPROVAL_LINE · WF-SUB-03b 실패 · ④ 변화 없음 — 개발 문서 권한에는 상신 불가 양식이 없으므로 문서 권한에서 담당자 0명 양식을 만들었을 때만 준비됨',
       prepare: async () => {
         const roles = await quietGetAs('roles', 1);
-        const form = roles && roles.forms.find((f) => !f.submittable && f.block_reason !== 'config_invalid');
-        if (!form) throw new Error('상신할 수 없는 양식이 없습니다(개발 역할 파일은 모두 상신 가능). HACCP_ROLES_FILE로 담당자 0명 양식이 있는 파일을 지정하고 서버를 다시 시작하세요.');
+        const form = roles && roles.forms.find((f) => !f.submittable && f.block_reason !== 'no_approval');
+        if (!form) throw new Error('상신할 수 없는 양식이 없습니다(개발 문서 권한은 모두 상신 가능). 문서 권한에서 한 양식의 담당자를 모두 빼고 다시 준비하세요.');
         const d = await findDoc('completed', (x) => x.template && x.template.type_code === form.type_code);
         if (!d) throw new Error(`${form.type_code} 작성완료 문서가 없습니다.`);
         return { func: 'submit', staff: '1', id: String(d.document_id), body: J({ expected_version: d.version }) };

@@ -250,7 +250,7 @@ class HistoryTests(TestCase):
         )
         self.assertEqual(len(services.history("item_ccp")["items"]), 3)
         self.assertTrue(first["at"].endswith("+09:00"))  # 검토 B5: 한국 시각(문서·결재 API와 같음)
-        for args in (("staff",), ("item_ccp", -1), ("item_ccp", None, 0)):
+        for args in (("unknown",), ("item_ccp", -1), ("item_ccp", None, 0)):
             with self.subTest(args=args), self.assertRaises(ValidationFailed):
                 services.history(*args)
 

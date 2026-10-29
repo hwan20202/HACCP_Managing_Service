@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from django.utils import timezone
 
+from apps.admin_settings import store as adm_store
 from apps.staff import services as staff_services
 
 from .models import DocSection, Document, DocumentTemplate
@@ -158,6 +159,8 @@ def _ensure(definitions):
             defaults={"name": name, "schema_json": schema, "is_active": active, "created_at": now},
         )
         result[(type_code, version)] = template
+    # P16 ADM-R31: 설치·활성 양식마다 문서 권한 양식 행(없을 때만 기본 구성 — 이력 없음)
+    adm_store.ensure_form_rows({t.type_code for t in result.values() if t.is_active})
     return result
 
 

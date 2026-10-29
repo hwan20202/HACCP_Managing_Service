@@ -76,8 +76,8 @@
 
   // P14(D-185): 사람은 "이름(코드)" — staff n 표시 없음
   const staffList = (ids) => (ids || []).map((id) => T.person(id)).join('·');
-  // P14 R05(FR-13): 개선조치 확인 = 지정 확인자 또는 HACCP팀장(확인자 없는 것도) — 역할 설정 파일 오류면 팀장 예외 없음
-  const isCheckLeader = (id) => !!id && T.isLeader(id) && !(T.roles && T.roles.config_error);
+  // P14 R05(FR-13): 개선조치 확인 = 지정 확인자 또는 HACCP팀장(확인자 없는 것도)
+  const isCheckLeader = (id) => !!id && T.isLeader(id);
 
   // ================================================= DSH-SC-02 개선조치 확인 창
   // row: {deviation_id, version, title, description, action_result, actor_id}. 결과 { ok } — 실패해도 토스트를 띄우고 부른 쪽이 다시 조회

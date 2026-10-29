@@ -2244,8 +2244,8 @@
       const mayEdit = (x) => mayWrite || (!!api.staffId && (x.checker_ids || []).includes(me));
       // P11 DOC-SC-04 확인 칸: 확인됨 → 확인한 사람·시각 / 미확인 + 확인할 수 있음 → [확인] / 미확인 + 다른 사람 → 대기 / 확인자 없음 → –
       // 문서 상태와 무관하게 확인할 수 있음(노출 조건은 대시보드 목록에만 — S2-Q3 a). 새 행(저장 전)은 확인 없음
-      // P14 R05(FR-13): 확인 = 지정 확인자 또는 HACCP팀장(확인자 없는 줄도) — 역할 설정 파일 오류면 팀장 예외 없음(C07)
-      const leader = !!api.staffId && T.isLeader(me) && !(T.roles && T.roles.config_error);
+      // P14 R05(FR-13): 확인 = 지정 확인자 또는 HACCP팀장(확인자 없는 줄도)
+      const leader = !!api.staffId && T.isLeader(me);
       const canCheck = (x) => !!api.staffId && ((x.checker_ids || []).includes(me) || leader);
       const checkCell = (x, key) => {
         if (!x.deviation_id) return '<span class="te-hint">새 행</span>';
@@ -2309,9 +2309,8 @@
           res = await api.patch(`deviations/${cur.deviation_id}`, { expected_version: cur.version, ...patch });
         }
         if (res.ok && res.data && res.data.checker_warning) {
-          // r14(D-202 Q5 a): 확인자 기본값 0명 — 저장은 됨, 역할 설정 확인 알림
-          const why = res.data.checker_warning === 'config_invalid' ? '역할 설정 파일 오류' : '이 양식에 담당자·HACCP팀장이 없음';
-          T.toast(`개선조치를 저장했지만 확인자를 정하지 못했습니다(${why}) — 역할 설정을 확인하세요.`, 'error');
+          // r14(D-202 Q5 a): 확인자 기본값 0명 — 저장은 됨, 문서 권한 확인 알림(P16: no_holders만)
+          T.toast('개선조치를 저장했지만 확인자를 정하지 못했습니다(이 양식에 담당자·HACCP팀장이 없음) — 문서 권한을 확인하세요.', 'error');
           reload();
           return;
         }
@@ -2576,9 +2575,9 @@
           $('#fixGo').disabled = false;
           return;
         }
-        // P14: 403 ROLE_REQUIRED·409 ROLE_CONFIG_INVALID — 모달 안 오류(다시 눌러도 같은 결과)
-        if (data.code === 'ROLE_REQUIRED' || data.code === 'ROLE_CONFIG_INVALID') {
-          $('#fixTop').innerHTML = `<div class="te-error-box">[${esc(data.code)}] ${data.code === 'ROLE_REQUIRED' ? '이 양식의 담당자나 HACCP팀장만 정정할 수 있습니다.' : '역할 설정 파일 오류로 정정을 시작할 수 없습니다.'} ${T.roleLink()}</div>`;
+        // P14: 403 ROLE_REQUIRED — 모달 안 오류(다시 눌러도 같은 결과)
+        if (data.code === 'ROLE_REQUIRED') {
+          $('#fixTop').innerHTML = `<div class="te-error-box">[${esc(data.code)}] 이 양식의 담당자나 HACCP팀장만 정정할 수 있습니다. ${T.roleLink()}</div>`;
           return;
         }
         // 409(다른 사람이 먼저 정정 시작·승인 아님·버전) → 모달 안 [코드] 메시지 + [다시 열기]

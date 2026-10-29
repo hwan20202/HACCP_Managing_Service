@@ -1,7 +1,8 @@
 // =============================================
 // 역할 보기 (P14 ROLE-SC-01, 읽기 전용)
 // 설계: dev-notes/roles/p14-s1-screens.md 4장 ROLE-SC-01 · API: p14-s2-spec.md 10.1 GET /api/v1/roles
-// 역할은 설정 파일(roles.json)에서만 바꾼다(ROLE-C01). 화면은 서버가 계산한 값을 보여 줄 뿐이다.
+// P16 묶음 ②: 역할 원본은 DB 문서 권한(ADM-R30) — 저장 즉시 반영(R36). 응답 setup으로 빈 권한 경고(R38).
+// 화면은 서버가 계산한 값을 보여 줄 뿐이다(편집은 문서 권한 화면 ADM-SC-03).
 // r4(D-198)·r6(D-201): 작성 권한자 열 — 작성·상신을 할 수 있고 결재 칸 후보가 아님
 // =============================================
 (function () {
@@ -11,7 +12,6 @@
   const BLOCK = {
     no_config: '설정 없음',
     no_candidates: '처리할 사람 없음',
-    config_invalid: '설정 파일 오류',
   };
   // 역할 응답의 사람({id, staff_code, name}) — 화면 공통 사람 표시와 같은 모양
   const who = (p) => `<span class="te-person" data-person="${p.id}">${esc(p.name)}<span class="te-person-code">(${esc(p.staff_code)})</span></span>`;
@@ -45,10 +45,13 @@
     },
 
     html(data) {
-      const info = '<div class="te-status-note" id="roInfo">ⓘ 역할은 설정 파일(roles.json)에서만 바꿉니다. 설정 파일을 바꾼 뒤에는 서버를 다시 시작해야 반영됩니다. 직원 등록·비활성은 바로 반영됩니다.<br>작성 권한자는 작성·상신을 할 수 있습니다 — 결재(칸 처리)·정정 시작·점검자 지정은 담당자·HACCP팀장이 합니다.</div>';
-      if (data.config_error) {
-        return `${info}<div class="te-error-box" id="roConfigError"><strong>역할 설정 파일을 읽지 못했습니다 — 모든 상신이 막혀 있습니다.</strong><div class="te-hint">${esc(data.config_error)}</div></div>`;
-      }
+      const info = '<div class="te-status-note" id="roInfo">ⓘ 역할은 문서 권한에 저장되며, 바꾸면 다음 작업부터 바로 반영됩니다. 직원 등록·비활성도 바로 반영됩니다.<br>작성 권한자는 작성·상신을 할 수 있습니다 — 결재(칸 처리)·정정 시작·점검자 지정은 담당자·HACCP팀장이 합니다.</div>';
+      // R38: 빈 권한 경고(오류와 따로) — 상신할 수 없는 양식이 있을 때만
+      const setup = data.setup || { blocked_forms: [] };
+      const blocked = setup.blocked_forms || [];
+      const setupWarn = blocked.length || setup.empty
+        ? `<div class="te-notice" id="roSetup"><strong>문서 권한에 비어 있는 곳이 있습니다 — 상신할 수 없는 양식 ${blocked.length}개</strong>${blocked.length ? `<div class="te-hint">${blocked.map(esc).join(', ')}</div>` : ''}${setup.empty ? '<div class="te-hint">담당자·HACCP팀장이 한 명도 지정되지 않았습니다.</div>' : ''}</div>`
+        : '';
       const warnings = data.warnings || [];
       const warn = warnings.length ? `
         <details class="te-role-warnings" id="roWarnings" ${warnings.length <= 3 ? 'open' : ''}>
@@ -68,6 +71,7 @@
       const me = data.me ? `<div class="te-meta" id="roMe">내 역할: <b>${esc([data.me.is_leader ? 'HACCP팀장' : '', data.me.owner_of.length ? `담당자(${data.me.owner_of.join(', ')})` : '', (data.me.writer_of || []).length ? `작성 권한자(${data.me.writer_of.join(', ')})` : ''].filter(Boolean).join(' · ') || '없음')}</b></div>` : '';
       return `
         ${info}
+        ${setupWarn}
         ${warn}
         <div class="te-meta" id="roLeaders" style="margin-top:.75rem"><span>HACCP팀장</span> <b>${whoList(data.leaders)}</b></div>
         <div class="te-table-wrap"><table class="data-table" id="roForms">

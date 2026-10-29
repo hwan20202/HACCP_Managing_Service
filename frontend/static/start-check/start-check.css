@@ -1,0 +1,25 @@
+/* P16 시작 확인·처음 설정(ADM-R69 독립 부품 — temp-entry.css를 쓰지 않음) */
+.sc-wrap { padding: 2rem 1rem; display: flex; justify-content: center; }
+.sc-loading { color: var(--text-muted, #6c757d); padding: 3rem 0; }
+.sc-card { background: var(--bg-surface, #fff); border: 1px solid var(--border-default, #dee2e6); border-radius: 8px;
+  padding: 1.5rem; max-width: 640px; width: 100%; box-shadow: var(--shadow-sm, none); }
+.sc-error { border-color: var(--color-danger, #dc3545); }
+.sc-title { font-size: 1.15rem; margin: 0 0 .5rem; }
+.sc-sub { font-size: 1rem; margin: 1.5rem 0 .5rem; }
+.sc-hint { color: var(--text-secondary, #495057); margin: 0 0 1rem; }
+.sc-form { display: grid; grid-template-columns: auto 1fr; gap: .5rem .75rem; align-items: center; }
+.sc-form button { grid-column: 2; justify-self: start; }
+.sc-actions { margin-top: .75rem; }
+.sc-msg { margin-top: .75rem; padding: .5rem .75rem; border-radius: 6px; background: #fdecea; color: #842029; }
+.sc-list { list-style: none; margin: 0; padding: 0; }
+.sc-person { display: flex; justify-content: space-between; align-items: center; gap: .75rem;
+  padding: .5rem 0; border-top: 1px solid var(--border-subtle, #e9ecef); }
+.sc-code { color: var(--text-muted, #6c757d); }
+.sc-roles { display: block; font-size: .85rem; color: var(--text-secondary, #495057); }
+.sc-toast { position: fixed; right: 1rem; bottom: 1rem; z-index: 1000; background: #212529; color: #fff;
+  padding: .6rem 1rem; border-radius: 6px; max-width: calc(100vw - 2rem); }
+@media (max-width: 600px) {
+  .sc-form { grid-template-columns: 1fr; }
+  .sc-form button { grid-column: 1; }
+  .sc-person { flex-direction: column; align-items: flex-start; }
+}

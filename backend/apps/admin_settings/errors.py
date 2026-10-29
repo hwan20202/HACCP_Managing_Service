@@ -28,3 +28,12 @@ class VersionConflict(AdmError):
 
 def detail(path, code, message):
     return {"path": path, "code": code, "message": message}
+
+
+class StaffNotFound(AdmError):
+    status, code, message = 404, "ADM_STAFF_NOT_FOUND", "직원을 찾을 수 없습니다."
+
+
+SETUP_FINISHED = (
+    '이미 직원이 등록되었습니다 — 새로고침 후 화면 머리 "현재 사용자"에서 고르세요.'  # ADM-R62
+)

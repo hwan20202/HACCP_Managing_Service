@@ -41,9 +41,8 @@
   }
   // 상신 거부 이유(ROLE-F01 approval_line.reason) — 결재 영역·상신 확인·일괄 상신이 같이 쓴다
   const LINE_BLOCK = {
-    no_config: '이 양식의 결재 칸 구성이 역할 설정에 없어 상신할 수 없습니다.',
+    no_config: '이 양식의 결재 칸 구성이 문서 권한에 없어 상신할 수 없습니다.',
     no_candidates: '결재 칸을 처리할 사람(역할 보유자)이 없어 상신할 수 없습니다.',
-    config_invalid: '역할 설정 파일 오류로 상신할 수 없습니다.',
   };
   const ROLE_ONLY = '이 양식의 담당자·작성 권한자나 HACCP팀장만 상신할 수 있습니다.';
   // 결재선 미리 보기(문서 상세 approval_line — 상신 때 서버가 같은 설정으로 만든다)
@@ -194,7 +193,6 @@
       APPROVAL_NOT_FOUND: '결재 칸을 찾을 수 없습니다.',
       ROLE_REQUIRED: ROLE_ONLY,
       NO_APPROVAL_LINE: `결재선을 만들 수 없습니다: ${error.message || ''}`,
-      ROLE_CONFIG_INVALID: LINE_BLOCK.config_invalid,
       INVALID_TRANSITION: MISMATCH_TEXT,
       DOCUMENT_NOT_FOUND: action === 'approve' ? MISMATCH_TEXT : '문서를 찾을 수 없습니다 (삭제되었을 수 있습니다).',
     };
@@ -349,9 +347,8 @@
       const noCoa = (list) => list.filter((r) => r.coa === '무');  // D-234 Q3 b
       const BLOCK = {
         role_required: '이 양식의 담당자·작성 권한자나 HACCP팀장만 상신할 수 있습니다',
-        no_config: '결재 칸 구성이 역할 설정에 없음',
+        no_config: '결재 칸 구성이 문서 권한에 없음',
         no_candidates: '결재 칸을 처리할 사람이 없음',
-        config_invalid: '역할 설정 파일 오류',
       };
       const ok = (r) => (r.can_submit === undefined ? r.status === 'completed' : r.can_submit);
       const targets = rows.filter(ok);
@@ -611,8 +608,6 @@
           state.top = `${ROLE_ONLY}${refresh}`;  // 다른 탭에서 사용자를 바꾼 경우
         } else if (code === 'NO_APPROVAL_LINE') {
           state.top = `결재선을 만들 수 없습니다: ${esc(res.data.message)} ${T.roleLink()}`;
-        } else if (code === 'ROLE_CONFIG_INVALID') {
-          state.top = `${LINE_BLOCK.config_invalid} ${T.roleLink()}`;
         } else if (code === 'DOCUMENT_LOCKED') {
           state.top = `문서가 작성완료 상태가 아니거나(작성 재개됨) 이미 결재 진행 중·승인되어 상신할 수 없습니다.${refresh}`;
         } else if (code === 'OPEN_REQUEST_EXISTS') {

@@ -60,7 +60,7 @@ def _boxes_of(type_code):
     칸 이름은 종이 이름이 있으면 그것(`print_forms.BOX_LABELS`, D03 "팀장" — DP-11 U2 a).
     """
     config = roles.load()
-    form = None if config.error else config.forms.get(type_code)
+    form = config.forms.get(type_code)
     if form is None:
         boxes = list(print_forms.DEFAULT_BOXES)
     else:

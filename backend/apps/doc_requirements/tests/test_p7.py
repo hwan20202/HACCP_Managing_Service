@@ -44,8 +44,8 @@ class IncomingBundleTests(TestCase):
         with CaptureQueriesContext(connection) as ctx:
             res = self.get()
         self.assertEqual(res.status_code, 200, res.content)
-        # 사용자 확인(API) 제외. D-234: + 성적서 유무 계산 1(F26)
-        self.assertLessEqual(len(ctx.captured_queries) - 1, 9)
+        # 사용자 확인(API) 제외. D-234: + 성적서 유무 계산 1(F26). P16: 역할 읽기 SQL 2(+1)
+        self.assertLessEqual(len(ctx.captured_queries) - 1, 10)
         body = res.json()
         lots = body["lots"]
         self.assertEqual(

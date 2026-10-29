@@ -9,9 +9,11 @@ const App = {
     this.setupSidebar();
     this.updateDateTime();
     setInterval(() => this.updateDateTime(), 60000);
-    this.navigate('dashboard');
     this.setupEvents();
-    this.setupHistory();
+    // P16 R70: 시작 확인(활성 직원 0명 판정)이 끝나 "준비됨"일 때만 첫 화면·뒤로 가기 복원
+    const start = () => { this.navigate('dashboard'); this.setupHistory(); };
+    if (window.StartCheck) StartCheck.run(start);
+    else start();
   },
 
   setupSidebar() {
@@ -122,6 +124,8 @@ const App = {
 
   navigate(page, updateNav = true, fromHistory = false) {
     if (!page) return;
+    // P16 R60·R70: 준비 전(불러오는 중·처음 설정·조회 실패)에는 이동하지 않고 기억만
+    if (window.StartCheck && !StartCheck.ready()) { StartCheck.hold(page); return; }
     if (page === 'production-log') page = 'production-batches';
     if (page === 'inventory-overview') page = 'raw-materials'; // retired menu / old links
     if (!fromHistory) { this.restoreSerial = (this.restoreSerial || 0) + 1; this.restoringHistory = false; }

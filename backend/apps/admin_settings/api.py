@@ -1,6 +1,9 @@
-"""관리 설정 HTTP API (/api/v1/admin/…) — 묶음 ① A01·A02·A11. 입출력만(p16-s2-spec 4장).
+"""관리 설정 HTTP API (/api/v1/admin/…) — 묶음 ① A01·A02·A11, 묶음 ② A03~A06·A08~A10.
 
+입출력만(p16-s2-spec 4장). 비활성 영향 A07은 묶음 ③.
 - 읽기는 헤더 없이, 쓰기는 X-Staff-Id(누구나 — R27)와 expected_version(낙관적 잠금 — R10).
+- 예외: 직원 등록(A05)·다시 활성(A08)은 현재 사용자가 없거나 활성이 아니면 처음 설정으로 본다
+  — 서비스가 같은 트랜잭션에서 활성 직원 0명인지 확인(R62).
 - CSRF: 문서 API와 달리 **검사를 끄지 않는다**(R71).
   화면은 `csrftoken` 쿠키(첫 화면 `home`이 발급) 값을 `X-CSRFToken`에 실어 보낸다.
 """
@@ -10,7 +13,7 @@ from django.views.decorators.http import require_http_methods
 
 from apps.core.http import ApiError, error_response, json_response, parse_json_body
 from apps.core.trace import step
-from apps.staff.services import actor_from_header
+from apps.staff.services import InvalidStaff, StaffHeaderMissing, actor_from_header
 
 from . import errors, services
 from .errors import detail
@@ -80,3 +83,78 @@ def history(request):
             _int(request, "limit", services.HISTORY_MAX),
         )
     )
+
+
+def _actor_or_setup(request):
+    """현재 사용자 id, 없거나 활성이 아니면 None(처음 설정 후보 — 서비스가 R62 판정)."""
+    try:
+        return actor_from_header(request.headers.get("X-Staff-Id"))
+    except StaffHeaderMissing, InvalidStaff:
+        return None
+
+
+# ---------------------------------------------------------------- 직원 (묶음 ②)
+
+
+@require_http_methods(["GET", "POST"])
+@_api
+def staff_collection(request):
+    """A03 GET ?q=&state= · A05 POST {name, staff_code}."""
+    if request.method == "GET":
+        return json_response(
+            services.staff_list(request.GET.get("q", ""), request.GET.get("state", "all"))
+        )
+    with step("ADM-STF-NEW-00", "API", "요청 형식 확인"):
+        body = parse_json_body(request)
+    with step("ADM-STF-NEW-00b", "API", "현재 사용자 확인(없으면 처음 설정)"):
+        actor = _actor_or_setup(request)
+    with transaction.atomic():
+        return json_response(services.create_staff(actor, body), status=201)
+
+
+@require_http_methods(["GET"])
+@_api
+def staff_next_code(request):
+    """A04: 코드 제안."""
+    return json_response(services.suggest_staff_code())
+
+
+@require_http_methods(["PATCH"])
+@_api
+def staff_item(request, staff_id):
+    """A06: {name}."""
+    with step("ADM-STF-REN-00", "API", "요청 형식 확인"):
+        body = parse_json_body(request)
+    with step("ADM-STF-REN-00b", "API", "현재 사용자 확인"):
+        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+    with transaction.atomic():
+        return json_response(services.rename_staff(actor, staff_id, body))
+
+
+@require_http_methods(["POST"])
+@_api
+def staff_active(request, staff_id):
+    """A08: {active, confirm_impact?}."""
+    with step("ADM-STF-ACT-00", "API", "요청 형식 확인"):
+        body = parse_json_body(request)
+    with step("ADM-STF-ACT-00b", "API", "현재 사용자 확인(없으면 처음 설정 — 다시 활성만)"):
+        actor = _actor_or_setup(request)
+    with transaction.atomic():
+        return json_response(services.set_staff_active(actor, staff_id, body))
+
+
+# ---------------------------------------------------------------- 문서 권한 (묶음 ②)
+
+
+@require_http_methods(["GET", "PUT"])
+@_api
+def roles_view(request):
+    """A09 GET · A10 PUT {expected_version, leaders, forms{type:{owners, writers}}}."""
+    if request.method == "GET":
+        return json_response(services.roles_for_edit())
+    with step("ADM-ROL-SAV-00", "API", "요청 형식 확인"):
+        body = parse_json_body(request)
+    with step("ADM-ROL-SAV-00b", "API", "현재 사용자 확인"):
+        actor = actor_from_header(request.headers.get("X-Staff-Id"))
+    with transaction.atomic():
+        return json_response(services.save_roles(actor, body))

@@ -23,7 +23,7 @@ from apps.documents.tests.p4 import (
 )
 from apps.documents.tests.test_files import pdf
 from apps.staff import roles
-from apps.staff.tests.base import RolesFileMixin, default_roles
+from apps.staff.tests.base import EMPTY, RolesFileMixin, default_roles
 
 WRITE = ["owner", "writer", "leader", "inspector"]
 NO_ROLE = 4  # D03에 역할 없음
@@ -246,16 +246,22 @@ class InspectorRoleTests(WriteCase):
         self.assertEqual(body["succeeded"], 1, body)
 
 
-class ConfigInvalidTests(WriteCase):
-    """ROLE-TC-47: 설정 파일 형식 오류 — 작성은 검사 안 함, 점검자 지정은 409."""
+class EmptyRolesTests(WriteCase):
+    """ADM-TC-15·18(P16 — ROLE-TC-47 대체): 문서 권한이 비면 예외 없이 막힘(Q-5 a).
 
-    def test_config_invalid(self):
-        self.use_roles(raw="{")
+    작성은 지정 점검자만, 점검자 지정은 403, 개선조치 확인자 경고는 no_holders(config_invalid 없음).
+    """
+
+    def test_empty_roles(self):
+        set_info(self.d03, {"inspector": NO_ROLE}, actor=2)  # 역할이 0명이 돼도 점검자는 작성
+        self.use_roles(EMPTY)
         self.subject(self.d03, NO_ROLE)
         made = services.create_deviation(NO_ROLE, self.d03, {"description": "x"})
-        self.assertEqual((made["checker_ids"], made["checker_warning"]), ([], "config_invalid"))
+        self.assertEqual((made["checker_ids"], made["checker_warning"]), ([], "no_holders"))
+        with self.assertRaises(roles.RoleRequired):
+            services.create_deviation(2, self.d03, {"description": "x"})  # 담당자였던 사람
         info = rows_of(self.d03, "info")[0]
-        with self.assertRaises(roles.RoleConfigInvalid):
+        with self.assertRaises(roles.RoleRequired):
             patch(
                 self.d03,
                 {"update": [{"section_id": info["section_id"], "values": {"inspector": 2}}]},
@@ -263,7 +269,7 @@ class ConfigInvalidTests(WriteCase):
             )
         items = [{"document_id": self.d03, "expected_version": version_of(self.d03)}]
         body = services.batch_set_inspector(1, items, 2)
-        self.assertEqual(body["results"][0]["error"]["code"], "ROLE_CONFIG_INVALID")
+        self.assertEqual(body["results"][0]["error"]["code"], "ROLE_REQUIRED")
 
 
 class CheckerWarningTests(WriteCase):
