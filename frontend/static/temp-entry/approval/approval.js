@@ -605,7 +605,7 @@
         }
         const refresh = ' <button class="btn btn-secondary btn-sm" data-reload>상세 새로고침</button>';
         if (code === 'ROLE_REQUIRED') {
-          state.top = `${ROLE_ONLY}${refresh}`;  // 다른 탭에서 사용자를 바꾼 경우
+          state.top = `${ROLE_ONLY} ${T.roleLink()}${refresh}`;  // 다른 탭에서 사용자를 바꾼 경우 · P16 R38 [문서 권한 ↗]
         } else if (code === 'NO_APPROVAL_LINE') {
           state.top = `결재선을 만들 수 없습니다: ${esc(res.data.message)} ${T.roleLink()}`;
         } else if (code === 'DOCUMENT_LOCKED') {

@@ -1,5 +1,5 @@
 """관리 설정(ADM) 서비스 — 묶음 ① 품목별 CCP(F10·F11)·공통 이력(F20), 묶음 ② 직원(F12~F15·F17)·
-문서 권한(F18·F19)·가져오기(F21). p16-s2-spec 2장·3.2·5장. 비활성 영향(F16)은 묶음 ③.
+문서 권한(F18·F19)·가져오기(F21), 묶음 ③ 비활성 영향(F16). p16-s2-spec 2장·3.2·3.4·5장.
 
 - 쓰기는 API가 연 한 트랜잭션 안: 본문 검사 → 대상 읽기 → 조건부 UPDATE(version) → 이력.
 - 권한 검사 없음(D-257 Q2 b) — 현재 사용자(X-Staff-Id)는 이력의 "누가"로만 씀.
@@ -470,6 +470,96 @@ def set_staff_active(actor_id, staff_id, body):
         else:
             s.skip("같은 값")
     return {"staff": _staff_out(staff_id), "changed": changed}
+
+
+# ---------------------------------------------------------------- 비활성 영향 (F16, 묶음 ③)
+
+
+def _orphaned(rows, now, staff_id, active_forms):
+    """이 사람을 빼면 활성 보유자가 0명이 되는 곳(S1a Q10 — 3.4 orphaned).
+
+    effect: submit_blocked(그 역할 칸이 있는 양식은 상신 막힘) · write_leader_only(결재 칸에
+    담당자가 없는 양식 — 담당자 0명이면 작성은 HACCP팀장·작성 권한자만). 팀장 0명은 type_code
+    None 한 줄 + 팀장 칸이 있는 활성 양식 목록. 이미 비활성인 사람은 효과가 없어 빈 목록.
+    """
+    if staff_id not in now.people:
+        return []
+
+    def without(people):
+        return [{**p, "is_active": False} if p["id"] == staff_id else p for p in people]
+
+    after = roles._resolve(
+        {
+            **rows,
+            "leaders": without(rows["leaders"]),
+            "forms": {
+                t: {**f, "owners": without(f["owners"]), "writers": without(f["writers"])}
+                for t, f in rows["forms"].items()
+            },
+        }
+    )
+    names = dict(active_forms)
+    out = []
+    if now.leaders and not after.leaders:
+        out.append(
+            {
+                "type_code": None,
+                "name": "HACCP팀장",
+                "role": "leader",
+                "effect": "submit_blocked",
+                "forms": [
+                    t for t, _n in active_forms if t in now.forms and "leader" in now.forms[t].slots
+                ],
+            }
+        )
+    for type_code, _name in active_forms:
+        form_now, form_after = now.forms.get(type_code), after.forms.get(type_code)
+        if form_now is None or not form_now.owners or form_after.owners:
+            continue
+        out.append(
+            {
+                "type_code": type_code,
+                "name": names[type_code],
+                "role": "owner",
+                "effect": "submit_blocked" if "owner" in form_now.slots else "write_leader_only",
+            }
+        )
+    return out
+
+
+def staff_impact(staff_id, current_user_id=None):
+    """F16(A07): 비활성 영향(3.4). 읽기만 — 처음 설정의 다시 활성 행에서도 씀(R61, 헤더 없이)."""
+    from apps.approvals import services as apr
+    from apps.documents import services as doc
+
+    with step("ADM-STF-IMP-01", "ADM", "대상"):
+        try:
+            person = staff_admin.get(staff_id)
+        except staff_admin.StaffAdminError as error:
+            raise _staff_error(error) from None
+    with step("ADM-STF-IMP-02", "ADM", "문서 권한·0명이 되는 곳"):
+        rows = store.role_rows()
+        active = _active_forms()
+        role = _role_index(rows).get(staff_id, NO_ROLES)
+        now = roles._resolve(rows)
+        orphaned = _orphaned(rows, now, staff_id, active)
+    with step("ADM-STF-IMP-03", "ADM", "결재 대기(APR)"):
+        slots = apr.pending_slots_of(staff_id)
+    with step("ADM-STF-IMP-04", "ADM", "개선조치 확인·지정 점검자(DOC)"):
+        checks = doc.pending_checks_of(staff_id)
+        inspector = doc.inspector_docs_of(staff_id)
+    return {
+        "staff": _person(person),
+        "roles": role,
+        "pending_approvals": slots["count"],
+        "sole_approvals": slots["sole"],
+        "pending_checks": checks,
+        "inspector_docs": inspector,
+        "orphaned": orphaned,
+        "active_leaders": len(now.leaders),
+        "last_active": person.is_active and staff_admin.active_count() <= 1,
+        "is_current_user": current_user_id is not None and current_user_id == staff_id,
+    }
 
 
 # ---------------------------------------------------------------- 문서 권한 (F18·F19)

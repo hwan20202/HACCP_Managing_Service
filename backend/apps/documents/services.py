@@ -3820,6 +3820,31 @@ def _pending_queryset():
     )
 
 
+def pending_checks_of(staff_id):
+    """P16 ADM-F16: 이 사람이 지정 확인자인 개선조치 확인 대기 수(VR-P11-01 조건 재사용 — SQL 1).
+
+    팀장이 확인할 수 있는 것(R05)은 세지 않는다 — 지정 확인자로 남은 것만(비활성하면 팀장이 확인).
+    """
+    with step("DOC-IMP-01", "DOC", "지정 확인자인 확인 대기"):
+        return _pending_queryset().filter(_mine(staff_id)).count()
+
+
+def inspector_docs_of(staff_id):
+    """P16 ADM-F16: 이 사람이 지정 점검자(info.inspector)인 상신 전 문서 수(SQL 1)."""
+    with step("DOC-IMP-02", "DOC", "지정 점검자인 상신 전 문서"):
+        with connection_cursor() as cursor:
+            cursor.execute(
+                "SELECT COUNT(*) FROM document d "
+                "JOIN document_template t ON t.template_id = d.template_id "
+                "JOIN doc_section s ON s.document_id = d.document_id AND s.section_def = 'info' "
+                f"WHERE d.deleted_at IS NULL AND d.status IN ({', '.join(['%s'] * len(EDITABLE))}) "
+                f"AND t.type_code IN ({', '.join(['%s'] * len(INSPECTOR_TYPES))}) "
+                "AND json_extract(s.values_json, '$.inspector') = %s",
+                [*EDITABLE, *INSPECTOR_TYPES, staff_id],
+            )
+            return cursor.fetchone()[0]
+
+
 def _mine(actor_id):
     return Exists(DeviationChecker.objects.filter(deviation_id=OuterRef("pk"), staff_id=actor_id))
 

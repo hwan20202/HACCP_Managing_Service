@@ -12,5 +12,7 @@ urlpatterns = [
     path("admin/staff/next-code", api.staff_next_code, name="api-admin-staff-next-code"),
     path("admin/staff/<int:staff_id>", api.staff_item, name="api-admin-staff-item"),
     path("admin/staff/<int:staff_id>/active", api.staff_active, name="api-admin-staff-active"),
+    # P16 묶음 ③ 비활성 영향(A07)
+    path("admin/staff/<int:staff_id>/impact", api.staff_impact, name="api-admin-staff-impact"),
     path("admin/roles", api.roles_view, name="api-admin-roles"),
 ]

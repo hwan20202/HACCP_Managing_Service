@@ -173,7 +173,7 @@
       const label = (slot && slot.label) || role || '-';
       return role && label !== role ? `${label} (${role})` : label;
     },
-    roleLink(text = '역할 보기') {
+    roleLink(text = '문서 권한 ↗') {  // P16: 역할 보기 → 문서 권한(ADM-SC-03, 같은 페이지 키)
       return `<a href="#" class="te-role-link" data-role-view>${this.esc(text)}</a>`;
     },
 
@@ -309,7 +309,7 @@
 
   window.TempEntry = TempEntry;
 
-  // P14: [역할 보기] 링크(결재 영역·모달·폼 어디서든) — 열린 모달을 닫고 역할 보기 화면으로
+  // P14: [문서 권한] 링크(결재 영역·모달·폼 어디서든, P16 이름 바꿈) — 열린 모달을 닫고 문서 권한 화면으로
   document.addEventListener('click', (e) => {
     const link = e.target.closest && e.target.closest('[data-role-view]');
     if (!link) return;

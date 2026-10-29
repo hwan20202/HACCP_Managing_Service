@@ -133,8 +133,10 @@
         const roles = rolesText(p.roles);
         return `<li class="sc-person" data-staff="${p.id}">
           <span><b>${esc(p.name)}</b> <span class="sc-code">(${esc(p.staff_code)})</span>
-          ${roles ? `<span class="sc-roles">문서 권한: ${esc(roles)} — 다시 활성하면 이 자격이 살아납니다</span>` : ''}</span>
-          <button class="btn btn-secondary btn-sm" data-activate="${p.id}">다시 활성</button></li>`;
+          ${roles ? `<span class="sc-roles">문서 권한: ${esc(roles)}</span>` : ''}
+          <span class="sc-impact" id="scImpact${p.id}" hidden></span></span>
+          <span class="sc-buttons"><button class="btn btn-secondary btn-sm" type="button" data-expand="${p.id}" aria-expanded="false">자세히</button>
+          <button class="btn btn-secondary btn-sm" type="button" data-activate="${p.id}">다시 활성</button></span></li>`;
       }).join('');
       const box = this.shell(`<div class="sc-card" id="scSetup">
         <h2 class="sc-title">처음 설정 — 직원을 먼저 등록하세요</h2>
@@ -152,7 +154,30 @@
       if (!box) return;
       box.querySelector('#scForm').addEventListener('submit', (ev) => { ev.preventDefault(); this.create(); });
       box.querySelectorAll('[data-activate]').forEach((b) => b.addEventListener('click', () => this.activate(Number(b.dataset.activate))));
+      box.querySelectorAll('[data-expand]').forEach((b) => b.addEventListener('click', () => this.expand(b)));
       this.focusSetup();
+    },
+
+    // R61(r5 Y5): 행을 펼칠 때만 A07(비활성 영향 — 읽기, 헤더 없이)로 문서 권한·대기 결재 수
+    async expand(button) {
+      const id = Number(button.dataset.expand);
+      const box = document.getElementById(`scImpact${id}`);
+      if (!box) return;
+      const open = button.getAttribute('aria-expanded') !== 'true';
+      button.setAttribute('aria-expanded', String(open));
+      button.textContent = open ? '접기' : '자세히';
+      box.hidden = !open;
+      if (!open || box.dataset.loaded) return;
+      box.textContent = '확인하는 중…';
+      const r = await call('GET', `admin/staff/${id}/impact`);
+      if (!r.ok || !r.data) { box.textContent = errorText(r); return; }
+      box.dataset.loaded = '1';
+      const d = r.data;
+      const roles = rolesText(d.roles);
+      const lines = [`대기 결재 ${d.pending_approvals}건`];  // 문서 권한은 행에 이미 보임(D-272 C2)
+      if (d.pending_checks) lines.push(`개선조치 확인 대기 ${d.pending_checks}건`);
+      if (d.inspector_docs) lines.push(`지정 점검자인 작성중 문서 ${d.inspector_docs}건`);
+      box.innerHTML = `${esc(lines.join(' · '))}${roles || d.pending_approvals ? '<br>다시 활성하면 이 자격이 살아납니다.' : ''}`;
     },
 
     focusSetup() {

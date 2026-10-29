@@ -1056,7 +1056,7 @@
                 ? `<button class="btn btn-primary btn-sm" data-template="${t.template_id}">선택</button>`
                 : `<button class="btn btn-secondary btn-sm" data-template="${t.template_id}" disabled title="${esc(T.WRITE_WHY)}">선택</button> <span class="te-hint">작성 권한 없음</span>`}</div>
             </div>`).join('')}</div>`
-          : '<div class="te-empty">사용 가능한 양식이 없습니다 (개발용 시드 데이터를 넣으세요).</div>'}
+          : '<div class="te-empty">여기서 바로 만드는 양식이 없습니다 — 입고·생산·주기 문서는 자동으로 만들어집니다.</div>'}
           <h3 class="te-sub">주기 양식 (날짜마다 1건)</h3>
           ${rules.length ? `<div class="te-table-wrap"><table class="data-table" id="tePeriodicPick">
             <tbody>${rules.map((x) => `<tr data-periodic-row="${esc(x.type_code)}">

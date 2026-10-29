@@ -143,6 +143,7 @@
     admStaffCreate: { label: 'ADM 직원 등록 (A05)', method: 'POST', flow: 'ADM-STF-NEW', uses: ['body'], path: () => 'admin/staff' },
     admStaffRename: { label: 'ADM 직원 이름 (A06)', method: 'PATCH', flow: 'ADM-STF-REN', uses: ['id', 'body'], path: (s) => `admin/staff/${s.id}` },
     admStaffActive: { label: 'ADM 직원 활성·비활성 (A08)', method: 'POST', flow: 'ADM-STF-ACT', uses: ['id', 'body'], path: (s) => `admin/staff/${s.id}/active` },
+    admStaffImpact: { label: 'ADM 비활성 영향 (A07)', method: 'GET', flow: 'ADM-STF-IMP', uses: ['id'], path: (s) => `admin/staff/${s.id}/impact` },  // P16 묶음 ③
     admRoles: { label: 'ADM 문서 권한 (A09)', method: 'GET', flow: 'ADM-ROL-GET', uses: [], path: () => 'admin/roles' },
     admRolesSave: { label: 'ADM 문서 권한 저장 (A10)', method: 'PUT', flow: 'ADM-ROL-SAV', uses: ['body'], path: () => 'admin/roles' },
   };

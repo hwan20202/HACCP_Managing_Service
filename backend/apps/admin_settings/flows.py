@@ -1,4 +1,4 @@
-"""설계 흐름의 정상 경로 단계 ID(P16 — p16-s2-spec 3.2 F10~F15·F17~F20).
+"""설계 흐름의 정상 경로 단계 ID(P16 — p16-s2-spec 3.2 F10~F20).
 
 코드를 바꾸면 함께 바꾼다.
 """
@@ -15,6 +15,18 @@ FLOWS = {
     "ADM-STF-ACT": ["ADM-STF-ACT-01", "ADM-STF-ACT-02", "ADM-STF-ACT-03", "ADM-STF-ACT-04"],
     "ADM-ROL-GET": ["ADM-ROL-GET-01", "ADM-ROL-GET-02"],
     "ADM-ROL-SAV": [f"ADM-ROL-SAV-{n:02d}" for n in range(1, 8)],
+    # 묶음 ③ 비활성 영향(F16) — APR·DOC 읽기 함수 단계 포함
+    "ADM-STF-IMP": [
+        "ADM-STF-IMP-01",
+        "ADM-STF-IMP-02",
+        "DOC-TPL-01",
+        "ADM-STF-IMP-03",
+        "APR-IMP-01",
+        "APR-IMP-02",
+        "ADM-STF-IMP-04",
+        "DOC-IMP-01",
+        "DOC-IMP-02",
+    ],
 }
 API_WRITES = ("ADM-CCP-SAV", "ADM-STF-NEW", "ADM-STF-REN", "ADM-STF-ACT", "ADM-ROL-SAV")
 # 같은 값 저장(changed false)은 저장·이력 단계 없이 끝남 — 콘솔이 누락으로 세지 않음.

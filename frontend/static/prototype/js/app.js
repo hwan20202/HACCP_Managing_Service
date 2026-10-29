@@ -191,6 +191,16 @@ const App = {
 
     container.innerHTML = html;
     container.scrollTop = 0;
+    if (page === 'settings') this.mountStaffAdmin(container);
+  },
+
+  // P16 R50·R69: 설정 화면 직원 카드 = 직원 관리(ADM-SC-02, 문서 화면 코드 부품). 문서 화면을 끈 서버는 안내만
+  mountStaffAdmin(container) {
+    const card = container.querySelector('#settingsStaff');
+    if (!card) return;
+    if (window.TempEntry && window.TempEntryStaffAdmin) { TempEntryStaffAdmin.mount(card); return; }
+    card.innerHTML = `<div class="card-header"><div class="card-title">👥 직원 관리</div></div>
+      <p class="settings-off-note" style="font-size:0.8rem;color:var(--text-muted);margin:0 0 0.75rem;" id="settingsStaffOff">문서 관리 메뉴(<code>HACCP_DOC_MENU=haccp</code>)를 켜면 직원 관리·문서 권한·품목별 CCP를 쓸 수 있습니다.</p>`;
   },
 
   renderSettings() {
@@ -206,7 +216,9 @@ const App = {
       <div class="grid-2">
         <!-- 회사 정보 -->
         <div class="card">
-          <div class="card-header"><div class="card-title">🏢 회사 정보</div></div>
+          <div class="card-header"><div class="card-title">🏢 회사 정보 <span class="badge badge-neutral settings-soon">준비 중</span></div></div>
+          <p class="settings-off-note" style="font-size:0.8rem;color:var(--text-muted);margin:0 0 0.75rem;">시제품 화면이라 아직 저장되지 않습니다.</p>
+          <fieldset disabled class="settings-soon-body" style="border:0;margin:0;padding:0;min-width:0;opacity:0.6;">
           <div class="form-group">
             <label class="form-label">회사명</label>
             <input type="text" class="form-control" value="${HACCP_DATA.company.name}" />
@@ -223,12 +235,15 @@ const App = {
             <label class="form-label">HACCP 인증번호</label>
             <input type="text" class="form-control" value="${HACCP_DATA.company.haccpNo}" />
           </div>
-          <button class="btn btn-primary" onclick="App.showToast('success','저장','회사 정보가 저장되었습니다.')">저장</button>
+          <button class="btn btn-primary">저장</button>
+          </fieldset>
         </div>
 
         <!-- 알림 설정 -->
         <div class="card">
-          <div class="card-header"><div class="card-title">🔔 알림 설정</div></div>
+          <div class="card-header"><div class="card-title">🔔 알림 설정 <span class="badge badge-neutral settings-soon">준비 중</span></div></div>
+          <p class="settings-off-note" style="font-size:0.8rem;color:var(--text-muted);margin:0 0 0.75rem;">시제품 화면이라 아직 저장되지 않습니다.</p>
+          <fieldset disabled class="settings-soon-body" style="border:0;margin:0;padding:0;min-width:0;opacity:0.6;">
           ${[
             { label: 'CCP 한계기준 이탈 알림', enabled: true },
             { label: 'CCP 경고기준 접근 알림', enabled: true },
@@ -247,36 +262,11 @@ const App = {
               </span>
             </label>
           </div>`).join('')}
+          </fieldset>
         </div>
 
-        <!-- 직원 관리 -->
-        <div class="card" style="grid-column:1/-1;">
-          <div class="card-header">
-            <div class="card-title">👥 직원 관리</div>
-            <button class="btn btn-primary btn-sm" onclick="App.showToast('info','추가','직원 추가 기능.')">직원 추가</button>
-          </div>
-          <div class="table-wrapper">
-            <table class="data-table">
-              <thead>
-                <tr><th>직원코드</th><th>성명</th><th>부서</th><th>역할</th><th>보건증기간</th><th>교육최근일</th><th>작업</th></tr>
-              </thead>
-              <tbody>
-                ${HACCP_DATA.employees.map(e => `
-                <tr>
-                  <td><code style="font-size:0.75rem;color:var(--text-muted);">${e.id}</code></td>
-                  <td style="font-weight:600;">${e.name}</td>
-                  <td>${e.dept}</td>
-                  <td>${e.role}</td>
-                  <td>${e.healthCard}</td>
-                  <td>${e.education}</td>
-                  <td>
-                    <button class="btn btn-secondary btn-sm" onclick="App.showToast('info','수정','직원 정보 수정.')">수정</button>
-                  </td>
-                </tr>`).join('')}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <!-- 직원 관리 — P16: 그린 뒤 mountStaffAdmin이 ADM-SC-02로 바꿈(R50) -->
+        <div class="card" style="grid-column:1/-1;" id="settingsStaff"><div class="te-empty">불러오는 중…</div></div>
       </div>
     </div>`;
   },

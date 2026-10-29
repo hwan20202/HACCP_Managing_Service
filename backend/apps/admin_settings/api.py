@@ -1,6 +1,7 @@
-"""관리 설정 HTTP API (/api/v1/admin/…) — 묶음 ① A01·A02·A11, 묶음 ② A03~A06·A08~A10.
+"""관리 설정 HTTP API (/api/v1/admin/…) — 묶음 ① A01·A02·A11, 묶음 ② A03~A06·A08~A10,
+묶음 ③ A07.
 
-입출력만(p16-s2-spec 4장). 비활성 영향 A07은 묶음 ③.
+입출력만(p16-s2-spec 4장).
 - 읽기는 헤더 없이, 쓰기는 X-Staff-Id(누구나 — R27)와 expected_version(낙관적 잠금 — R10).
 - 예외: 직원 등록(A05)·다시 활성(A08)은 현재 사용자가 없거나 활성이 아니면 처음 설정으로 본다
   — 서비스가 같은 트랜잭션에서 활성 직원 0명인지 확인(R62).
@@ -129,6 +130,15 @@ def staff_item(request, staff_id):
         actor = actor_from_header(request.headers.get("X-Staff-Id"))
     with transaction.atomic():
         return json_response(services.rename_staff(actor, staff_id, body))
+
+
+@require_http_methods(["GET"])
+@_api
+def staff_impact(request, staff_id):
+    """A07: 비활성 영향(읽기 — 헤더 없이도. 헤더가 있으면 is_current_user)."""
+    raw = request.headers.get("X-Staff-Id", "")
+    current = int(raw) if raw.isascii() and raw.isdigit() else None
+    return json_response(services.staff_impact(staff_id, current))
 
 
 @require_http_methods(["POST"])

@@ -16,6 +16,9 @@
   padding: .5rem 0; border-top: 1px solid var(--border-subtle, #e9ecef); }
 .sc-code { color: var(--text-muted, #6c757d); }
 .sc-roles { display: block; font-size: .85rem; color: var(--text-secondary, #495057); }
+.sc-impact { display: block; margin-top: .25rem; font-size: .85rem; background: #f1f3f5; border-radius: 6px; padding: .35rem .5rem; }
+.sc-impact[hidden] { display: none; }
+.sc-buttons { display: inline-flex; gap: .35rem; flex-shrink: 0; }
 .sc-toast { position: fixed; right: 1rem; bottom: 1rem; z-index: 1000; background: #212529; color: #fff;
   padding: .6rem 1rem; border-radius: 6px; max-width: calc(100vw - 2rem); }
 @media (max-width: 600px) {
