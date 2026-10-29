@@ -1,5 +1,6 @@
 // =============================================
 // P15 생산 기준정보 (PLG-SC-04 공정 목록 · PLG-SC-05 공정 템플릿 — p15-s1-screens.md 6·7장)
+// P16 세 번째 탭 품목별 CCP(ADM-SC-01) — admin-settings/item-ccp.js(TempEntryItemCcp)
 // API: PLG-A06 processes · A07 process-templates · A08 master-history (명세 p15-s2-spec.md 5장)
 // 공정·템플릿 관리는 누구나(현재 사용자만 있으면 — PLG-R12), 모든 변경은 이력 1행.
 // =============================================
@@ -53,7 +54,7 @@
     // r1 B1: 편집 화면을 떠나는 모든 길([← 목록]·탭·새로고침·사이드바·브라우저)에서 확인
     async leave() {
       if (!this.dirty() || !document.querySelector('#msEditor')) return true;
-      return T.confirm('저장 안 된 변경', '저장하지 않은 템플릿 변경이 있습니다. 나갈까요?', '나가기', 'btn-danger');  // 다시 그릴 때 편집 상태가 초기화됨
+      return T.confirm('저장 안 된 변경', '저장하지 않은 변경이 있습니다. 나갈까요?', '나가기', 'btn-danger');  // 다시 그릴 때 편집 상태가 초기화됨
     },
 
     guard() {
@@ -67,7 +68,7 @@
           const mine = ++seq;
           if (pending) { pending.remove(); pending = null; }
           if (!fromHistory && MS.dirty() && document.querySelector('#msEditor')) {
-            const asked = T.confirm('저장 안 된 변경', '저장하지 않은 템플릿 변경이 있습니다. 이 화면을 나갈까요?', '나가기', 'btn-danger');
+            const asked = T.confirm('저장 안 된 변경', '저장하지 않은 변경이 있습니다. 이 화면을 나갈까요?', '나가기', 'btn-danger');
             pending = [...document.querySelectorAll('.te-modal-wrap')].pop() || null;
             const ok = await asked;
             if (mine !== seq) return undefined;
@@ -87,16 +88,17 @@
     show() {
       this.root.innerHTML = `
         <div class="fade-in" id="teMaster">
-          ${T.topBar('생산 기준정보', '공정 · 공정 템플릿 — 누구나 관리, 모든 변경은 이력으로 남습니다', null, { temp: false })}
-          <div class="te-ms-tabs" role="tablist"><button type="button" class="te-ms-tab${this.tab === 'process' ? ' on' : ''}" data-tab="process" id="msTabProc">공정</button><button type="button" class="te-ms-tab${this.tab === 'template' ? ' on' : ''}" data-tab="template" id="msTabTpl">공정 템플릿</button></div>
+          ${T.topBar('생산 기준정보', '공정 · 공정 템플릿 · 품목별 CCP — 누구나 관리, 모든 변경은 이력으로 남습니다', null, { temp: false })}
+          <div class="te-ms-tabs" role="tablist"><button type="button" class="te-ms-tab${this.tab === 'process' ? ' on' : ''}" data-tab="process" id="msTabProc">공정</button><button type="button" class="te-ms-tab${this.tab === 'template' ? ' on' : ''}" data-tab="template" id="msTabTpl">공정 템플릿</button><button type="button" class="te-ms-tab${this.tab === 'item-ccp' ? ' on' : ''}" data-tab="item-ccp" id="msTabCcp">품목별 CCP</button></div>
           <div class="card" id="msBody"><div class="te-empty">불러오는 중…</div></div>
         </div>`;
       T.bindTopBar(this.root, async () => { if (await this.leave()) this.show(); });
       this.root.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', async () => {
         if (!(await this.leave())) return;
-        this.tab = b.dataset.tab; this.editing = null; this.show();
+        this.tab = b.dataset.tab; this.editing = null; this.dirty = () => false; this.show();
       }));
-      if (this.tab === 'process') this.showProcesses(); else if (this.editing) this.showEditor(this.editing); else this.showTemplates();
+      if (this.tab === 'item-ccp' && window.TempEntryItemCcp) window.TempEntryItemCcp.render(this, this.body());
+      else if (this.tab === 'process') this.showProcesses(); else if (this.editing) this.showEditor(this.editing); else this.showTemplates();
     },
 
     body() { return this.root.querySelector('#msBody'); },

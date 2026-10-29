@@ -83,7 +83,7 @@ def _row(item, setting, default, counts):
 
 def list_item_ccp(q="", include_inactive=False, only_own=False):
     """F10(A01): 반제품 + 설정 + 배치 수. SQL 4(기본·품목·설정·배치 수)."""
-    with step("ADM-CCP-L01", "ADM", "반제품·설정 읽기"):
+    with step("ADM-CCP-LST-01", "ADM", "반제품·설정 읽기"):
         defaults = _defaults()
         default = defaults.get(ITEM_PROCESS_TYPE, [])
         items = Item.objects.filter(item_type_id=PRODUCIBLE_TYPE)
@@ -96,7 +96,7 @@ def list_item_ccp(q="", include_inactive=False, only_own=False):
         settings = {s.item_id: s for s in ItemCcp.objects.filter(item_id__in=[i.pk for i in items])}
         if only_own:
             items = [i for i in items if getattr(settings.get(i.pk), "mode", None) == "own"]
-    with step("ADM-CCP-L02", "ADM", "생산 전·생산 중 배치 수(v_doc_batch)"):
+    with step("ADM-CCP-LST-02", "ADM", "생산 전·생산 중 배치 수(v_doc_batch)"):
         counts = _batch_counts()
     return {
         "default": {k: v for k, v in defaults.items()},
@@ -141,11 +141,11 @@ def _check_body(body):
 
 def save_item_ccp(actor_id, item_id, body):
     """F11(A02): 조건부 저장. 같은 값이면 저장·이력 없음(changed False)."""
-    with step("ADM-CCP-S01", "ADM", "요청 확인"):
+    with step("ADM-CCP-SAV-01", "ADM", "요청 확인"):
         if not isinstance(body, dict):
             raise errors.ValidationFailed(details=[detail("", "invalid", "객체여야 합니다.")])
         mode, processes, reason, expected = _check_body(body)
-    with step("ADM-CCP-S02", "ADM", "품목·설정 읽기"):
+    with step("ADM-CCP-SAV-02", "ADM", "품목·설정 읽기"):
         item = Item.objects.filter(pk=item_id).first()
         if item is None:
             raise errors.ItemNotFound()
@@ -162,7 +162,7 @@ def save_item_ccp(actor_id, item_id, body):
     if after_value == before_value:
         default = _defaults().get(ITEM_PROCESS_TYPE, [])
         return {"item": _row(item, setting, default, _batch_counts()), "changed": False}
-    with step("ADM-CCP-S03", "ADM", "조건부 저장(version)"):
+    with step("ADM-CCP-SAV-03", "ADM", "조건부 저장(version)"):
         now = timezone.now()
         flags = ItemCcp.flags(processes)
         if setting is None:
@@ -176,7 +176,7 @@ def save_item_ccp(actor_id, item_id, body):
             if n != 1:
                 raise errors.VersionConflict()
             setting.refresh_from_db()
-    with step("ADM-CCP-S04", "ADM", "이력"):
+    with step("ADM-CCP-SAV-04", "ADM", "이력"):
         _log(
             actor_id,
             "item_ccp",
@@ -224,7 +224,8 @@ def history(target, target_id=None, limit=HISTORY_MAX):
                 {
                     "log_id": r.pk,
                     "label": labels.get((r.target, r.target_id)),
-                    "at": r.at.isoformat(),
+                    # 검토 B5: 다른 API처럼 한국 시각
+                    "at": timezone.localtime(r.at).isoformat(timespec="seconds"),
                     "actor": {"id": r.actor_id, "name": names.get(r.actor_id)},
                     "target": r.target,
                     "target_id": r.target_id,

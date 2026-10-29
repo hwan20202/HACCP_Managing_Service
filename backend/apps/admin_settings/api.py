@@ -61,9 +61,9 @@ def item_ccp_list(request):
 @_api
 def item_ccp_item(request, item_id):
     """A02: 품목 CCP 저장 {mode, processes, reason?, expected_version}."""
-    with step("ADM-CCP-S00", "API", "요청 형식 확인"):
+    with step("ADM-CCP-SAV-00", "API", "요청 형식 확인"):
         body = parse_json_body(request)
-    with step("ADM-CCP-S00b", "API", "현재 사용자 확인"):
+    with step("ADM-CCP-SAV-00b", "API", "현재 사용자 확인"):
         actor = actor_from_header(request.headers.get("X-Staff-Id"))
     with transaction.atomic():
         return json_response(services.save_item_ccp(actor, item_id, body))

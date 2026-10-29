@@ -236,13 +236,22 @@
 
     batchSummary(batch) {
       const docs = batch.documents;
-      if (!docs.length) return batch.process_type === 'PACKAGING' ? '<span class="te-hint">요구되는 CCP 문서 없음</span>' : '<span class="te-hint">–</span>';
+      if (!docs.length) return `${batch.process_type === 'PACKAGING' ? '<span class="te-hint">요구되는 CCP 문서 없음</span>' : '<span class="te-hint">–</span>'}${this.appliedCcp(batch)}`;
       // P15 S4b r1(B2): CCP는 process_code 있는 문서만, 생산일지는 따로 표시
       const ccp = docs.filter((d) => d.process_code);
       const parts = [];
       if (ccp.length) parts.push(`CCP-${ccp.map((d) => d.process_code).join('·')} ✓`);
       if (docs.some((d) => d.type_code === 'PROD-LOG')) parts.push('생산일지 ✓');
-      return parts.length ? parts.join(' / ') : '<span class="te-hint">–</span>';
+      const applied = this.appliedCcp(batch);
+      return `${parts.length ? parts.join(' / ') : '<span class="te-hint">–</span>'}${applied}`;
+    },
+
+    // P16 ADM-R08: 배치 CCP 적용 기록(ccp_processes) — 목록 / [] = CCP 없음(품목 설정) / null = 기록 전
+    appliedCcp(batch) {
+      if (batch.ccp_processes === undefined) return '';
+      if (batch.ccp_processes === null) return '<div class="te-hint te-req-ccp">CCP 적용 기록 없음(생산 시작 전)</div>';
+      if (!batch.ccp_processes.length) return '<div class="te-req-ccp"><span class="te-pl-chip-warn">CCP 없음(품목 설정)</span></div>';
+      return `<div class="te-hint te-req-ccp">적용 CCP ${batch.ccp_processes.join('·')}</div>`;
     },
 
     lotTable(items) {

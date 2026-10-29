@@ -21,6 +21,7 @@ class DevConsolePageTests(SimpleTestCase):
         self.assertContains(response, "dev-console/console.js")
         self.assertContains(response, "temp-entry/api-client.js")
         self.assertNotContains(response, "fonts.googleapis.com")
+        self.assertIn("csrftoken", response.cookies)  # P16 S5 검토 B3: /dev/로 바로 열어도 쿠키
 
 
 class SeedWorkflowTests(TestCase):
@@ -599,8 +600,9 @@ class ProdLogFixtureTests(TestCase):
         flows = self.client.get("/api/dev/flows").json()
         self.assertIn("PLG-SAV", flows["flows"])
         self.assertEqual(flows["optional"]["PLG-LNK"], ["PLG-LNK-02"])
-        # 다른 단위 흐름엔 없음
-        self.assertTrue(all(k.startswith("PLG-") for k in flows["optional"]))
+        # 다른 단위 흐름엔 없음(P16: 관리 설정 ADM 흐름도 조건부 단계를 가짐)
+        self.assertTrue(all(k.startswith(("PLG-", "ADM-")) for k in flows["optional"]))
+        self.assertEqual(flows["optional"]["ADM-CCP-SAV"], ["ADM-CCP-SAV-03", "ADM-CCP-SAV-04"])
         self.assertNotIn("DOC-BRF", flows["optional"])
 
     def test_console_flows_match_service_traces(self):

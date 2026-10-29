@@ -249,6 +249,7 @@ class HistoryTests(TestCase):
             ("유자환(3201)", {"mode": "default", "processes": []}),
         )
         self.assertEqual(len(services.history("item_ccp")["items"]), 3)
+        self.assertTrue(first["at"].endswith("+09:00"))  # 검토 B5: 한국 시각(문서·결재 API와 같음)
         for args in (("staff",), ("item_ccp", -1), ("item_ccp", None, 0)):
             with self.subTest(args=args), self.assertRaises(ValidationFailed):
                 services.history(*args)
@@ -294,3 +295,31 @@ class ApiTests(TestCase):
         token = c.cookies["csrftoken"].value
         r = self.put(c, 201, body, HTTP_X_STAFF_ID="1", HTTP_X_CSRFTOKEN=token)
         self.assertEqual(r.status_code, 200)
+
+
+class FlowTraceTests(TestCase):
+    """개발 콘솔 흐름(flows.py)과 서비스 trace 단계가 같은지(S4 검토 C2 — S5에서 등록)."""
+
+    def setUp(self):
+        setup_items()
+
+    def test_flows(self):
+        from apps.admin_settings import flows
+        from apps.core import trace
+
+        cases = []
+        state, token = trace.start()
+        try:
+            services.list_item_ccp()
+            cases.append(("ADM-CCP-LST", list(state.steps)))
+            state.steps.clear()
+            save(201, "own", ["1P"])
+            cases.append(("ADM-CCP-SAV", list(state.steps)))
+            state.steps.clear()
+            services.history("item_ccp")
+            cases.append(("ADM-HIS", list(state.steps)))
+        finally:
+            trace.stop(token)
+        for flow, steps in cases:
+            ids = [s.step_id for s in steps]
+            self.assertTrue(flows.matches(flow, ids), (flow, ids))

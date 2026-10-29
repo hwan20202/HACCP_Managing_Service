@@ -451,3 +451,27 @@
 .te-ms-ov { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.3rem 0.8rem; background: #f8f9fa; padding: 0.5rem; border-radius: var(--radius-md); }
 .te-ms-add { margin: 0.6rem 0; }
 .te-ms-add .form-control { max-width: 22rem; }
+
+/* ---------- P16 ADM-SC-01 품목별 CCP (admin-settings/item-ccp.js — p16-s1-screens.md 3장) ---------- */
+.te-ic-default { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; align-items: center; background: #f1f3f5; border-radius: var(--radius-md); padding: 0.5rem 0.75rem; margin-bottom: 0.6rem; }
+.te-ic-check { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.85rem; align-self: flex-end; padding-bottom: 0.4rem; }
+.te-ic-title { font-weight: 600; margin: 0.4rem 0; }
+.te-ic-cell { text-align: center; }
+.te-ic-def, .te-ic-own { display: inline-block; min-width: 2.2rem; padding: 0.1rem 0.4rem; border-radius: 6px; font-size: 0.75rem; font-weight: 700; }
+.te-ic-def { background: #ede7fb; color: #6d28d9; }
+.te-ic-own { background: #6d28d9; color: #fff; }
+.te-ic-off { display: inline-block; min-width: 2.2rem; border: 1px dashed #ced4da; border-radius: 6px; color: #adb5bd; font-size: 0.75rem; }
+.te-ic-inactive td { color: #868e96; }
+.te-ic-edit-row > td { background: #faf8ff; }
+.te-ic-editor { display: grid; gap: 0.6rem; padding: 0.4rem 0.2rem; }
+.te-ic-seg { display: inline-flex; border: 1px solid #ced4da; border-radius: var(--radius-md); overflow: hidden; width: max-content; }
+.te-ic-seg button { border: 0; background: #fff; padding: 0.35rem 0.9rem; cursor: pointer; font-weight: 600; }
+.te-ic-seg button.on { background: #1d4ed8; color: #fff; }
+.te-ic-procs { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.4rem; }
+.te-ic-proc { display: flex; justify-content: space-between; gap: 0.5rem; border: 1px dashed #ced4da; background: #fff; border-radius: var(--radius-md); padding: 0.45rem 0.6rem; cursor: pointer; text-align: left; font-size: 0.8rem; }
+.te-ic-proc.on { border: 1px solid #6d28d9; background: #f1ebff; }
+.te-ic-proc:disabled { cursor: default; opacity: 0.75; }
+.te-ic-warn { background: #fff4d6; color: #8a5a00; border-radius: var(--radius-md); padding: 0.4rem 0.6rem; font-size: 0.85rem; }
+.te-ic-info { background: #e7f0ff; color: #1d4ed8; border-radius: var(--radius-md); padding: 0.4rem 0.6rem; font-size: 0.85rem; }
+.te-ic-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.te-req-ccp { font-size: 0.75rem; }

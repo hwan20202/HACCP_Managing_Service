@@ -133,6 +133,10 @@
     templateActive: { label: 'PLG 템플릿 사용 중지·다시 사용 (A07)', method: 'POST', flow: 'TPL-ACT', uses: ['id', 'body'], path: (s) => `process-templates/${s.id}/active`, scope: (s) => `process_template_id=${s.id}` },
     templateDelete: { label: 'PLG 템플릿 삭제 (A07)', method: 'DELETE', flow: 'TPL-DEL', uses: ['id', 'query'], path: (s) => `process-templates/${s.id}${s.query ? `?${s.query}` : ''}`, scope: (s) => `process_template_id=${s.id}` },
     masterHistory: { label: 'PLG 기준정보 변경 이력 (A08)', method: 'GET', flow: 'MST-HIS', uses: ['query'], path: (s) => `master-history${s.query ? `?${s.query}` : ''}` },
+    // ---- P16 관리 설정 묶음 ① — admin/p16-s2-spec.md 4장 A01·A02·A11(콘솔 흐름 admin_settings/flows.py CONSOLE). 쓰기는 X-CSRFToken(api-client)
+    admItemCcp: { label: 'ADM 품목별 CCP 목록 (A01)', method: 'GET', flow: 'ADM-CCP-LST', uses: ['query'], path: (s) => `admin/item-ccp${s.query ? `?${s.query}` : ''}` },
+    admItemCcpSave: { label: 'ADM 품목 CCP 저장 (A02)', method: 'PUT', flow: 'ADM-CCP-SAV', uses: ['id', 'body'], path: (s) => `admin/item-ccp/${s.id}` },
+    admHistory: { label: 'ADM 변경 이력 (A11)', method: 'GET', flow: 'ADM-HIS', uses: ['query'], defaultQuery: 'target=item_ccp', path: (s) => `admin/history${s.query ? `?${s.query}` : ''}` },
   };
   function periodicScope(spec, fromKey, toKey) {
     try {
@@ -2044,7 +2048,12 @@
     $('#dcFunc').innerHTML = Object.entries(FUNCS).map(([k, f]) => `<option value="${k}">${esc(f.label)}</option>`).join('');
     const group = (unit, label) => `<optgroup label="${label}">${PRESETS.filter((p) => (p.unit || p.id.split('-')[0]) === unit).map((p) => `<option value="${p.id}">${p.id} ${esc(p.label)}</option>`).join('')}</optgroup>`;
     $('#dcPreset').innerHTML = '<option value="">(직접 입력)</option>' + group('DOC', 'DOC 문서 도메인 (P1)') + group('WF', 'WF 결재 워크플로우 (P3)') + group('P4', 'DOC 확장 (P4·P6a)') + group('REQ', 'REQ 작성 요구 (P5)') + group('P6', '정정·판정 연동 (P6)') + group('P7', '일괄 결재·육안검사 묶음 (P7)') + group('FILE', '파일 업로드 (스프린트 3)') + group('P8', '점검표·작성 안 함 (P8)') + group('P9', '주기형 작성 요구 (P9)') + group('P10', '문서함·결재함 (P10)') + group('P11', 'CCP 대시보드 (P11)') + group('ROLE', '역할 기반 결재 (P14)') + group('P12', '출력 (P12)') + group('PLG', '생산일지 (P15)');
-    $('#dcFunc').addEventListener('change', () => { state.preset = null; toggleInputs(); });
+    $('#dcFunc').addEventListener('change', () => {
+      state.preset = null;
+      const q = FUNCS[$('#dcFunc').value].defaultQuery;  // 필수 쿼리가 있는 호출은 미리 채움(P16 S5 검토 C1)
+      if (q) $('#dcQuery').value = q;
+      toggleInputs();
+    });
     ['#dcId', '#dcQuery', '#dcBody', '#dcDocId'].forEach((sel) => $(sel).addEventListener('input', () => { if (state.preset && state.preset.script) state.preset = null; }));
     $('#dcLoadPreset').addEventListener('click', loadPreset);
     $('#dcRun').addEventListener('click', run);

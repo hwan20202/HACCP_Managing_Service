@@ -3,8 +3,11 @@
 from django.db.models import Q
 from django.http import JsonResponse
 from django.shortcuts import render
+from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_safe
 
+from apps.admin_settings.flows import CONSOLE as ADM_FLOWS
+from apps.admin_settings.flows import OPTIONAL as ADM_OPTIONAL
 from apps.approvals.flows import FLOWS as APR_FLOWS
 from apps.approvals.models import Approval, ApprovalCandidate, ApprovalRequest
 from apps.doc_effects.flows import FLOWS as EFF_FLOWS
@@ -36,7 +39,8 @@ FLOWS = {
     **REQ_FLOWS,
     **EFF_FLOWS,
     **PLG_FLOWS,
-}  # P15 S5b: PLG
+    **ADM_FLOWS,
+}  # P15 S5b: PLG · P16: ADM
 BATCH = {**DOC_BATCH, **WF_BATCH}
 
 
@@ -287,7 +291,7 @@ def flows(request, flow_id=None):
         # batch: P7 일괄 흐름의 머리·항목 묶음·꼬리(콘솔 항목별 비교, NFR-05)
         # optional: {흐름: 조건부 단계}(도식에 있어도 없을 수 있음 —
         # 콘솔이 그 흐름에서만 누락으로 세지 않음, P15 S5b r1)
-        return _json({"flows": FLOWS, "batch": BATCH, "optional": PLG_OPTIONAL})
+        return _json({"flows": FLOWS, "batch": BATCH, "optional": {**PLG_OPTIONAL, **ADM_OPTIONAL}})
     if flow_id not in FLOWS:
         return _json({"code": "NOT_FOUND", "message": "알 수 없는 흐름입니다."}, 404)
     return _json({"flow_id": flow_id, "steps": FLOWS[flow_id]})
@@ -302,5 +306,6 @@ def trace_detail(request, trace_id):
 
 
 @require_safe
+@ensure_csrf_cookie  # P16 S5 검토 B3: /dev/로 바로 열어도 관리 설정 쓰기(A02)에 쓸 CSRF 쿠키를 받음
 def console_page(request):
     return render(request, "dev_console.html")
