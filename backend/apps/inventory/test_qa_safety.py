@@ -82,6 +82,7 @@ class QaSafetyTests(ProductionTestCase):
     def test_auto_link_and_alternative_conversion(self):
         from .models import Item
 
+        Bom.objects.filter(item=self.semi).update(is_active=False)  # one active version per item
         self.bom = Bom.objects.create(
             item=self.semi, version=2, base_quantity_e6=to_e6(1), effective_from=self.today
         )
@@ -165,6 +166,7 @@ class QaSafetyTests(ProductionTestCase):
         complete_batch(batch_id=self.batch_.pk, staff_id=self.staff.pk)
 
     def test_shared_alternative_is_not_counted_twice(self):
+        Bom.objects.filter(item=self.semi).update(is_active=False)  # one active version per item
         self.bom = Bom.objects.create(
             item=self.semi, version=2, base_quantity_e6=to_e6(1), effective_from=self.today
         )

@@ -319,6 +319,7 @@ class UsageRuleTests(ProductionTestCase):
         self.assertEqual(self.stock(lot), to_e6(8))
 
     def test_bom_line_must_match(self):
+        Bom.objects.filter(item=self.semi).update(is_active=False)  # one active version per item
         bom = Bom.objects.create(
             item=self.semi, version=1, base_quantity_e6=to_e6(1000), effective_from=self.today
         )

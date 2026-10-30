@@ -73,6 +73,7 @@ from .production import (
     propose_bulk_allocation,
     propose_line_allocation,
     start_batch,
+    switch_batch_bom,
 )
 from .quantity import from_e6, to_e6
 from .receiving import ReceiptInput, cancel_receipt, register_receipt
@@ -653,6 +654,11 @@ def _batch_response(batch_id, status=200):
     summary["batch"] = ProductionBatch.objects.select_related(*BATCH_RELATED).get(pk=batch_id)
     data = out.batch_detail(summary)
     data["readiness"] = material_readiness(summary["batch"])
+    batch = summary["batch"]
+    active = Bom.objects.filter(item_id=batch.item_id, is_active=True).first()
+    # The screen offers "re-plan on the active BOM" when a not-started plan is on an old one.
+    data["bom_is_active"] = bool(batch.bom_id) and batch.bom.is_active
+    data["active_bom"] = active and {"id": active.pk, "version": active.version}
     holds = Hold.objects.filter(batch_id=batch_id).select_related(*HOLD_RELATED).order_by("-pk")
     data["holds"] = [out.hold(hold) for hold in holds]
     data["active_hold_count"] = sum(hold["is_open"] for hold in data["holds"])
@@ -828,6 +834,15 @@ def batch_cancel(request, pk):
     return _batch_response(pk)
 
 
+@endpoint("POST")
+def batch_switch_bom(request, pk):
+    """Cancel a not-started plan on an old BOM and re-plan it on the active version."""
+    data = request.data
+    _required(data, "staff_id")
+    new = switch_batch_bom(batch_id=pk, staff_id=_int(data["staff_id"], "staff_id"))
+    return _batch_response(new.pk, status=201)
+
+
 @endpoint("GET")
 def fefo(request):
     """Usable LOTs to cover a quantity of an item, earliest expiration first."""
@@ -850,6 +865,11 @@ def fefo(request):
     )
 
 
+BOM_CONFLICT = (
+    "다른 사용자가 먼저 BOM을 변경했습니다(활성 BOM은 품목당 하나). 새로고침 후 다시 시도하세요."
+)
+
+
 @endpoint("GET", "POST")
 def bom_collection(request):
     """BOM versions; authoring preserves versions referenced by production."""
@@ -860,7 +880,7 @@ def bom_collection(request):
             try:
                 bom = save_bom(request.data)
             except IntegrityError as error:
-                raise Conflict("BOM 저장이 충돌했습니다. 새로고침 후 다시 시도하세요.") from error
+                raise Conflict(BOM_CONFLICT) from error
         return ok(out.bom(bom, bom.lines.select_related("component_item").order_by("line_no")), 201)
     rows = Bom.objects.order_by("item_id", "-version")
     if item_id := _int(request.GET.get("item_id"), "item_id"):
@@ -883,7 +903,7 @@ def bom_detail(request, pk):
         try:
             bom = save_bom(request.data, pk)
         except IntegrityError as error:
-            raise Conflict("BOM 저장이 충돌했습니다. 새로고침 후 다시 시도하세요.") from error
+            raise Conflict(BOM_CONFLICT) from error
     else:
         bom = _get(Bom, pk, "BOM")
     return ok(out.bom(bom, bom.lines.select_related("component_item").order_by("line_no")))

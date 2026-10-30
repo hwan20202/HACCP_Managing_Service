@@ -90,6 +90,7 @@ class DocumentProductionSourceTests(ProductionTestCase):
     def test_large_products_remain_exact_integers(self):
         # Multiplication exceeds int64; REAL arithmetic would lose the final e6 digit.
         plan, component, base = 9_000_000_001, 9_000_000_007, 3_000_001
+        Bom.objects.filter(item=self.semi).update(is_active=False)  # one active version per item
         other_bom = Bom.objects.create(
             item=self.semi, version=2, base_quantity_e6=base, effective_from=self.today
         )

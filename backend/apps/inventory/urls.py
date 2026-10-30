@@ -43,6 +43,7 @@ urlpatterns = [
     path("batches/<int:pk>/outputs/", api.batch_output, name="batch-outputs"),
     path("batches/<int:pk>/complete/", api.batch_complete, name="batch-complete"),
     path("batches/<int:pk>/cancel/", api.batch_cancel, name="batch-cancel"),
+    path("batches/<int:pk>/switch-bom/", api.batch_switch_bom, name="batch-switch-bom"),
     path("boms/", api.bom_collection, name="boms"),
     path("boms/<int:pk>/", api.bom_detail, name="bom-detail"),
     path("boms/<int:pk>/delete/", api.bom_remove, name="bom-delete"),

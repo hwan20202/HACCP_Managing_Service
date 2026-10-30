@@ -242,7 +242,7 @@ const ProductionApiPage = {
             <span style="font-family:monospace;color:var(--brand-primary);font-weight:700;">${this.printSelecting?`<input type="checkbox" data-print-batch="${b.id}" aria-label="${this.esc(b.batch_number)} 인쇄 선택" ${this.printBatchIds.includes(b.id)?'checked':''} onclick="event.stopPropagation()" onchange="ProductionApiPage.selectPrintBatch(${b.id},this.checked)"> `:''}${this.esc(b.batch_number)}</span>
             <span>${b.active_hold_count ? '<span class="badge badge-danger">보류 중</span> ' : ''}${this.badge(this.STATUS[b.status] || [b.status, 'badge-neutral'])}</span>
           </div>
-          <div style="font-size:0.75rem;color:var(--text-muted);">${this.esc(b.item.name)} · 제조일 ${this.esc(b.manufactured_date || '미정')}</div>
+          <div style="font-size:0.75rem;color:var(--text-muted);">${this.esc(b.item.name)} · BOM ${b.bom_id?`v${this.esc(b.bom_version)}`:'없음'} · 제조일 ${this.esc(b.manufactured_date || '미정')}</div>
         </div>`).join(''):'<div class="empty-state"><p>배치가 없습니다.</p></div>');
       this.updatePrintSelection();
   },
@@ -280,6 +280,7 @@ const ProductionApiPage = {
         <div class="prod-plan-fields">
         ${this.field('생산 품목',`<select class="form-control" name="item_id" onchange="ProductionApiPage.updatePreview()"><option value="">품목을 선택하세요</option>${this.semiItems.map(i=>`<option value="${i.id}" ${String(i.id)===d.itemId?'selected':''}>${this.esc(i.item_code)} ${this.esc(i.name)} (${this.esc(i.base_unit)})</option>`).join('')}</select>`)}
         ${this.field('계획일',`<input type="date" class="form-control" name="planned_date" value="${this.esc(d.date)}" onchange="ProductionApiPage.updatePreview()">`)}
+        ${this.field('적용 BOM', '<div id="prodPlanBom" role="status" style="font-size:0.85rem;padding:0.5rem 0">품목을 선택하세요.</div>')}
         ${this.field('계획 수량',`<input type="number" min="0" step="any" class="form-control" name="planned_quantity" value="${this.esc(d.quantity)}" oninput="ProductionApiPage.updatePreview()">`)}
         ${this.field('입력 단위', `<select class="form-control" name="plan_unit" onchange="ProductionApiPage.updatePreview()"><option value="kg" ${d.unit!=='g'?'selected':''}>kg</option><option value="g" ${d.unit==='g'?'selected':''}>g</option></select>`)}
         ${this.field('메모 (선택)',`<input class="form-control" name="notes" maxlength="200" value="${this.esc(d.notes)}" oninput="ProductionApiPage.s.draft.notes=this.value">`)}
@@ -288,7 +289,7 @@ const ProductionApiPage = {
         </div></div>
       <div id="prodPlanPreview"><div class="card"><strong>BOM 소요량 · 가용재고</strong><p>품목과 계획 수량을 입력하면 필요한 원료와 재고를 미리 확인할 수 있습니다.</p></div></div>
     </div>`;
-    if(d.itemId && Number(d.quantity)>0) this.updatePreview();
+    if(d.itemId) this.updatePreview();
   },
 
   updatePreview() {
@@ -297,17 +298,31 @@ const ProductionApiPage = {
     const v=n=>form.querySelector(`[name="${n}"]`).value;
     const d=this.s.draft={itemId:v('item_id'),quantity:v('planned_quantity'),date:v('planned_date'),notes:v('notes'),unit:v('plan_unit')};
     const serial=this.previewSerial=(this.previewSerial||0)+1;
+    this.planPreview=null;
     clearTimeout(this.previewTimer);
-    const host=document.getElementById('prodPlanPreview');
+    const host=document.getElementById('prodPlanPreview'), bomLabel=document.getElementById('prodPlanBom');
+    const button=document.getElementById('prodCreateSubmit');
+    button.disabled=!!d.itemId;
+    bomLabel.textContent=d.itemId?'적용 버전을 확인하고 있습니다…':'품목을 선택하세요.';
     host.innerHTML='<div class="card"><strong>BOM 소요량 · 가용재고</strong><p>품목과 0보다 큰 계획 수량을 입력하세요.</p></div>';
-    if(!d.itemId || !(Number(d.quantity)>0)) return;
-    host.innerHTML='<div class="card">소요량을 조회하고 있습니다…</div>';
+    if(!d.itemId) return;
+    const hasQuantity=Number(d.quantity)>0;
+    if(hasQuantity) host.innerHTML='<div class="card">소요량을 조회하고 있습니다…</div>';
     this.previewTimer=setTimeout(async()=>{
       try {
-        const readiness=await this.get('/batches/preview/',{item_id:d.itemId,quantity:MassUnits.convert(d.quantity,d.unit,this.semiItems.find(i=>String(i.id)===d.itemId).base_unit,true),planned_date:d.date});
-        if(serial===this.previewSerial && host===document.getElementById('prodPlanPreview')) host.innerHTML=this.renderReadiness({readiness});
+        const item=this.semiItems.find(i=>String(i.id)===d.itemId);
+        const readiness=await this.get('/batches/preview/',{item_id:d.itemId,
+          quantity:hasQuantity?MassUnits.convert(d.quantity,d.unit,item.base_unit,true):'',planned_date:d.date});
+        if(serial!==this.previewSerial || host!==document.getElementById('prodPlanPreview')) return;
+        this.planPreview={...d,bom_id:readiness.bom_id,bom_version:readiness.bom_version};
+        if(readiness.bom_id) bomLabel.textContent=`v${readiness.bom_version} · 적용 시작일 ${readiness.bom_effective_from}`;
+        else bomLabel.innerHTML=`<span role="alert">${this.esc(readiness.bom_problem||'이 계획일에 적용할 수 있는 활성 BOM이 없습니다.')}</span> <button type="button" class="btn btn-secondary btn-sm" onclick="BomApiPage.open()">BOM 관리</button>`;
+        button.disabled=!readiness.bom_id;
+        if(hasQuantity) host.innerHTML=this.renderReadiness({readiness});
       } catch(error) {
-        if(serial===this.previewSerial && host===document.getElementById('prodPlanPreview')) host.innerHTML=`<div class="card" role="alert">${this.esc(error.message)}</div>`;
+        if(serial!==this.previewSerial || host!==document.getElementById('prodPlanPreview')) return;
+        bomLabel.textContent='적용 BOM을 확인하지 못했습니다.';
+        host.innerHTML=`<div class="card" role="alert">${this.esc(error.message)}</div>`;
       }
     },250);
   },
@@ -323,13 +338,15 @@ const ProductionApiPage = {
     const v = (n) => form.querySelector(`[name="${n}"]`).value;
     if (!this.s.staffId) return this.toast('error', '담당자', '담당자를 고르세요.');
     if (!v('item_id') || !(Number(v('planned_quantity')) > 0)) return this.toast('error','계획 등록','품목과 0보다 큰 계획 수량을 입력하세요.');
+    const preview=this.planPreview;
+    if(!preview?.bom_id || preview.itemId!==v('item_id') || preview.date!==v('planned_date') || preview.quantity!==v('planned_quantity') || preview.unit!==v('plan_unit')) return this.toast('error','적용 BOM 확인','현재 입력 조건의 활성 BOM 확인이 끝난 뒤 등록하세요.');
     await this.run('배치 생성', async () => {
       const batch = await this.post('/batches/', {
         item_id: Number(v('item_id')), staff_id: Number(this.s.staffId), process_type: 'MANUFACTURE',
-        planned_date: v('planned_date') || null, planned_quantity: MassUnits.convert(v('planned_quantity'),v('plan_unit'),this.semiItems.find(i=>String(i.id)===v('item_id')).base_unit,true), notes: v('notes') || null,
+        bom_id:preview.bom_id, planned_date: v('planned_date') || null, planned_quantity: MassUnits.convert(v('planned_quantity'),v('plan_unit'),this.semiItems.find(i=>String(i.id)===v('item_id')).base_unit,true), notes: v('notes') || null,
       });
       this.s.creating = false;
-      this.toast('success', '배치 생성', `${batch.batch_number} (계획)`);
+      this.toast('success', '배치 생성', `${batch.batch_number} (계획 · BOM v${batch.bom_version})`);
       await this.loadList();
       await this.select(batch.id);
     });
@@ -362,7 +379,56 @@ const ProductionApiPage = {
       if(serial!==this.selectSerial) return;
       this.renderDetail();
       this.loadTrace();
+      if(this.needsBomSwitch(detail) && !this.bomSwitchAsked.has(detail.id)) this.offerBomSwitch();
     } catch (error) { this.showError('prodDetail', error); }
+  },
+
+  // ---------- 이전 BOM 버전 계획 ----------
+  // 시작 전 계획이 비활성(이전) 버전을 쓰고 있고 활성 버전이 따로 있을 때만 안내한다.
+  bomSwitchAsked: new Set(),
+  needsBomSwitch(b) {
+    return !!b && b.status==='PLANNED' && b.bom_is_active===false && !!b.active_bom && b.active_bom.id!==b.bom_id;
+  },
+  renderBomSwitchNotice(b) {
+    if(!this.needsBomSwitch(b)) return '';
+    const from=b.bom_id?`v${this.esc(b.bom_version)}`:'BOM 없음';
+    return `<div class="card" id="prodBomSwitch" role="status" style="margin-bottom:0.75rem;border-color:var(--color-warning,#d97706)">
+      <span class="badge badge-warning">이전 BOM ${from} 기준</span>
+      <p style="margin:0.5rem 0">${this.esc(b.item.name)}의 활성 BOM은 <strong>v${this.esc(b.active_bom.version)}</strong>입니다. 이 계획은 그대로 ${from}로 생산하거나, 취소하고 v${this.esc(b.active_bom.version)}로 새로 만들 수 있습니다.</p>
+      <button class="btn btn-primary btn-sm" onclick="ProductionApiPage.switchBom()">v${this.esc(b.active_bom.version)}로 새로 만들기</button>
+    </div>`;
+  },
+  askBomSwitch(b) {
+    return new Promise(resolve=>{
+      const from=b.bom_id?`v${this.esc(b.bom_version)}`:'BOM 없음', to=`v${this.esc(b.active_bom.version)}`;
+      const dialog=document.createElement('dialog');
+      dialog.id='prodBomSwitchDialog';
+      dialog.setAttribute('aria-labelledby','prodBomSwitchTitle');
+      dialog.style.cssText='position:fixed;inset:0;margin:auto;max-width:480px;width:calc(100vw - 3rem);border:1px solid var(--border-subtle);border-radius:12px;padding:1.25rem;background:var(--bg-surface,#fff);color:var(--text-primary);';
+      dialog.innerHTML=`<style>#prodBomSwitchDialog::backdrop{background:#0007}</style><form method="dialog">
+        <h3 id="prodBomSwitchTitle">BOM이 ${from} → ${to}로 변경되었습니다</h3>
+        <p style="margin:0.75rem 0">${this.esc(b.item.name)} 생산계획 <strong>${this.esc(b.batch_number)}</strong>은(는) ${from} 기준입니다. 이 계획을 취소하고 같은 내용(계획일·수량·메모)으로 ${to} 생산계획을 새로 만들까요?</p>
+        <p style="margin:0 0 1rem;font-size:0.8rem;color:var(--text-muted)">새 계획은 배치번호가 새로 정해지고, 원료 배정은 ${to} 기준으로 다시 해야 합니다.</p>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap"><button value="switch" class="btn btn-primary" autofocus>${to}로 새로 만들기</button><button value="keep" class="btn btn-secondary">${from} 그대로 진행</button></div>
+      </form>`;
+      dialog.addEventListener('close',()=>{ const choice=dialog.returnValue; dialog.remove(); resolve(choice==='switch'?'switch':'keep'); },{once:true});
+      document.body.append(dialog); dialog.showModal();
+    });
+  },
+  async offerBomSwitch() {
+    const b=this.detail;
+    this.bomSwitchAsked.add(b.id);
+    if(await this.askBomSwitch(b)==='switch') { await this.switchBom(); return true; }
+    return false;
+  },
+  async switchBom() {
+    const b=this.detail;
+    await this.run('BOM 전환', async () => {
+      const created=await this.post(`/batches/${b.id}/switch-bom/`, { staff_id: Number(this.s.staffId) });
+      this.toast('success','BOM 전환 재지시',`${b.batch_number} 취소 → ${created.batch_number} (BOM v${created.bom_version})`);
+      await this.loadList();
+      await this.select(created.id);
+    });
   },
 
   async loadDocs() {
@@ -388,7 +454,7 @@ const ProductionApiPage = {
       ${tab==='documents'?this.renderCcp(b):tab==='trace'?'<div class="card" id="prodTrace">불러오는 중…</div>':`
         ${b.active_hold_count||['PLANNED','IN_PROGRESS'].includes(b.status)?`<div class="card" style="margin-bottom:0.75rem"><strong>${b.active_hold_count?'보류 중입니다. 담당자 확인 후 보류를 해제하면 생산 작업을 진행할 수 있습니다.':b.status==='PLANNED'?'다음 단계: 제조일을 확인하고 생산을 시작하세요.':'원료별 투입량 확인 → 생산량 등록 → 생산 완료'}</strong></div>`:''}
         <fieldset ${b.active_hold_count?'disabled':''} style="border:0;padding:0;margin:0;min-width:0">
-        ${b.status==='PLANNED'?this.renderReadiness(b)+this.renderStart(b):''}
+        ${b.status==='PLANNED'?this.renderBomSwitchNotice(b)+this.renderReadiness(b)+this.renderStart(b):''}
         ${b.status!=='PLANNED'?this.renderUsages(b)+this.renderOutputs(b):''}
         ${b.status==='IN_PROGRESS'?this.renderComplete(b):''}</fieldset>
         ${b.status==='IN_PROGRESS' && !b.active_hold_count && !hasHoldHistory?this.renderHolds(b):''}`}`;
@@ -599,6 +665,8 @@ const ProductionApiPage = {
 
   async start() {
     const date = document.querySelector('#prodStart [name="manufactured_date"]').value;
+    // 이전 BOM 기준 계획이면 시작 전에 한 번 더 묻는다 (상세를 열 때 이미 고른 경우 제외).
+    if(this.needsBomSwitch(this.detail) && !this.bomSwitchAsked.has(this.detail.id) && await this.offerBomSwitch()) return;
     await this.run('생산 시작', async () => {
       const b = await this.post(`/batches/${this.detail.id}/start/`, { staff_id: Number(this.s.staffId), manufactured_date: date || null });
       this.toast('success', '생산 시작', `${b.batch_number} 진행 — CCP 일지를 확인하세요`);
