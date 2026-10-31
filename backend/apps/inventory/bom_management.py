@@ -1,11 +1,10 @@
 """Versioned BOM authoring. Used recipes are immutable; replacement is a new version."""
 
-import datetime
-
 from django.db import transaction
 from django.db.models import Max
 
 from .errors import InventoryError, NotFound
+from .fields import kst_now
 from .models import AuditLog, Bom, BomLine, BomLineAlternative, Item, ProductionBatch
 from .movements import _staff
 from .quantity import to_e6
@@ -125,10 +124,9 @@ def save_bom(data, bom_id=None):
         raise InventoryError("사용 중인 반제품 품목을 선택하세요.")
     if old and old.item_id != item.pk:
         raise InventoryError("기존 BOM의 생산 품목을 변경할 수 없습니다.")
-    try:
-        effective = datetime.date.fromisoformat(str(data.get("effective_from", "")))
-    except ValueError as error:
-        raise InventoryError("적용 시작일을 입력하세요.") from error
+    # 적용 시작일은 입력받지 않는다 (10-31): 활성 버전이 품목당 하나라 예약 적용이 필요 없다.
+    # 새 버전은 등록일을, 덮어쓰기는 기존 날짜를 기록한다. 요청의 effective_from 은 무시한다.
+    effective = old.effective_from if old else kst_now().date()
     active = data.get("is_active", True)
     if not isinstance(active, bool):
         raise InventoryError("사용 여부는 참/거짓이어야 합니다.")
@@ -183,9 +181,7 @@ def save_bom(data, bom_id=None):
             (component.pk, amount, sorted(a.pk for a in alternatives))
             for component, amount, alternatives in lines
         )
-        recipe_changed = (
-            base != old.base_quantity_e6 or effective != old.effective_from or current != previous
-        )
+        recipe_changed = base != old.base_quantity_e6 or current != previous
         if not recipe_changed:
             return update_metadata(old, data, staff)
         if used and overwrite:
@@ -198,7 +194,7 @@ def save_bom(data, bom_id=None):
             item=item,
             version=version,
             base_quantity_e6=base,
-            effective_from=effective,
+            effective_from=kst_now().date(),
             is_active=active,
             notes=str(data.get("notes") or "").strip() or None,
             created_by=staff,

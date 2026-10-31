@@ -315,7 +315,7 @@ const ProductionApiPage = {
           quantity:hasQuantity?MassUnits.convert(d.quantity,d.unit,item.base_unit,true):'',planned_date:d.date});
         if(serial!==this.previewSerial || host!==document.getElementById('prodPlanPreview')) return;
         this.planPreview={...d,bom_id:readiness.bom_id,bom_version:readiness.bom_version};
-        if(readiness.bom_id) bomLabel.textContent=`v${readiness.bom_version} · 적용 시작일 ${readiness.bom_effective_from}`;
+        if(readiness.bom_id) bomLabel.textContent=`v${readiness.bom_version} (현재 활성 BOM)`;
         else bomLabel.innerHTML=`<span role="alert">${this.esc(readiness.bom_problem||'이 계획일에 적용할 수 있는 활성 BOM이 없습니다.')}</span> <button type="button" class="btn btn-secondary btn-sm" onclick="BomApiPage.open()">BOM 관리</button>`;
         button.disabled=!readiness.bom_id;
         if(hasQuantity) host.innerHTML=this.renderReadiness({readiness});

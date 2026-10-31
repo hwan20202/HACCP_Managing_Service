@@ -496,8 +496,8 @@ LOT 또는 제조 배치의 사용을 막는 보류. 배치를 보류하면 그 
 | `item_id` | INTEGER |  |  | FK → `items.id` | 만드는 품목 |
 | `version` | INTEGER |  |  |  | 버전(품목마다 1부터) |
 | `base_quantity_e6` | INTEGER |  |  |  | 기준 생산량(e6, 만드는 품목 기준단위) — 이만큼 만들 때의 소요량이 `bom_lines` |
-| `effective_from` | TEXT |  |  |  | 적용 시작일 |
-| `is_active` | INTEGER |  | `1` |  | 사용 중이면 1 |
+| `effective_from` | TEXT |  |  |  | 등록일 — 화면·API에서 입력받지 않고 새 버전 저장일을 자동 기록(덮어쓰기는 기존 값 유지). 컬럼은 이후 예약 적용을 위해 유지 |
+| `is_active` | INTEGER |  | `1` |  | 활성(새 생산계획의 기본 버전)이면 1. 품목당 최대 1개 |
 | `notes` | TEXT | 예 |  |  | 메모 |
 | `created_by` | INTEGER | 예 |  | FK → `staff.id` | 만든 사람 |
 | `created_at` | TEXT |  | `datetime('now', 'localtime')` |  | 만든 시각(KST 글자) |
@@ -505,6 +505,7 @@ LOT 또는 제조 배치의 사용을 막는 보류. 배치를 보류하면 그 
 **키·제약**
 
 - 유일: (item_id, version)
+- 유일(부분): `item_id` WHERE `is_active = 1` — `ux_boms_one_active_per_item`, 품목당 활성 0~1개 (0011)
 - 검사: `version > 0`
 - 검사: `base_quantity_e6 > 0`
 - 검사: `effective_from IS date(effective_from)`

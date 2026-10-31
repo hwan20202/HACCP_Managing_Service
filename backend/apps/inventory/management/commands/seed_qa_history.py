@@ -223,8 +223,6 @@ class Command(BaseCommand):
             item_id=self.items["3000014"].pk,
             staff_id=self.staff.pk,
             bom_id=self.bom.pk,
-            # Synthetic history predates the reviewed BOM's effective date on purpose.
-            allow_before_effective=True,
             planned_quantity=quantity,
             planned_date=day,
             manufactured_date=day,
