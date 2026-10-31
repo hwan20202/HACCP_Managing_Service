@@ -487,3 +487,28 @@ class SingleActiveBomTests(ApiTestCase):
         self.assertEqual(response.status_code, 400, response.content)
         self.assertEqual(ProductionBatch.objects.filter(item=self.semi).count(), 1)
         self.assertEqual(ProductionBatch.objects.get(pk=old["id"]).status, "PLANNED")
+
+    def test_future_effective_bom_blocks_plan_explicit_bom_and_switch_alike(self):
+        import datetime
+
+        future = (
+            datetime.date.fromisoformat(str(self.today)) + datetime.timedelta(days=30)
+        ).isoformat()
+        self.post("/boms/", self.recipe())
+        old = self.plan().json()
+        v2 = self.post("/boms/", self.recipe("700", new_version=True, effective_from=future)).json()
+        self.assertTrue(v2["is_active"])
+        for label, response in (
+            ("default", self.plan()),
+            ("explicit bom_id", self.plan(bom_id=v2["id"])),
+            (
+                "switch",
+                self.post(f"/batches/{old['id']}/switch-bom/", {"staff_id": self.staff.pk}),
+            ),
+        ):
+            with self.subTest(label):
+                self.assertEqual(response.status_code, 400, response.content)
+                self.assertIn("적용 시작일", response.json()["error"]["message"])
+        # The refused switch left the old plan untouched and created nothing.
+        self.assertEqual(ProductionBatch.objects.get(pk=old["id"]).status, "PLANNED")
+        self.assertEqual(ProductionBatch.objects.filter(item=self.semi).count(), 1)

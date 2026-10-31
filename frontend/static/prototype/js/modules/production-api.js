@@ -379,13 +379,21 @@ const ProductionApiPage = {
       if(serial!==this.selectSerial) return;
       this.renderDetail();
       this.loadTrace();
-      if(this.needsBomSwitch(detail) && !this.bomSwitchAsked.has(detail.id)) this.offerBomSwitch();
+      // 상세를 열 때는 (배치, 현재 활성 버전) 조합마다 한 번만 자동으로 묻는다.
+      const shownKey=detail.active_bom&&`${detail.id}:${detail.active_bom.id}`;
+      if(this.needsBomSwitch(detail) && !this.bomSwitchKept(detail) && !this.bomSwitchShown.has(shownKey)) {
+        this.bomSwitchShown.add(shownKey);
+        this.offerBomSwitch();
+      }
     } catch (error) { this.showError('prodDetail', error); }
   },
 
   // ---------- 이전 BOM 버전 계획 ----------
   // 시작 전 계획이 비활성(이전) 버전을 쓰고 있고 활성 버전이 따로 있을 때만 안내한다.
-  bomSwitchAsked: new Set(),
+  // '그대로 진행'을 고른 배치 → 그때의 활성 BOM id. 활성 버전이 다시 바뀌면 다시 묻는다.
+  bomSwitchKeep: new Map(),
+  bomSwitchShown: new Set(),
+  bomSwitchKept(b) { return !!b?.active_bom && this.bomSwitchKeep.get(b.id)===b.active_bom.id; },
   needsBomSwitch(b) {
     return !!b && b.status==='PLANNED' && b.bom_is_active===false && !!b.active_bom && b.active_bom.id!==b.bom_id;
   },
@@ -411,15 +419,19 @@ const ProductionApiPage = {
         <p style="margin:0 0 1rem;font-size:0.8rem;color:var(--text-muted)">새 계획은 배치번호가 새로 정해지고, 원료 배정은 ${to} 기준으로 다시 해야 합니다.</p>
         <div style="display:flex;gap:0.5rem;flex-wrap:wrap"><button value="switch" class="btn btn-primary" autofocus>${to}로 새로 만들기</button><button value="keep" class="btn btn-secondary">${from} 그대로 진행</button></div>
       </form>`;
-      dialog.addEventListener('close',()=>{ const choice=dialog.returnValue; dialog.remove(); resolve(choice==='switch'?'switch':'keep'); },{once:true});
+      // Esc·닫기는 결정하지 않은 것으로 본다 ('dismiss'): 기억하지 않고, 생산 시작도 하지 않는다.
+      dialog.returnValue='';
+      dialog.addEventListener('close',()=>{ const choice=dialog.returnValue; dialog.remove(); resolve(['switch','keep'].includes(choice)?choice:'dismiss'); },{once:true});
       document.body.append(dialog); dialog.showModal();
     });
   },
+  // 반환: 'switch'(전환 재지시 실행) | 'keep'(이전 버전 그대로) | 'dismiss'(Esc 등 미결정)
   async offerBomSwitch() {
     const b=this.detail;
-    this.bomSwitchAsked.add(b.id);
-    if(await this.askBomSwitch(b)==='switch') { await this.switchBom(); return true; }
-    return false;
+    const choice=await this.askBomSwitch(b);
+    if(choice==='switch') await this.switchBom();
+    else if(choice==='keep') this.bomSwitchKeep.set(b.id,b.active_bom.id);
+    return choice;
   },
   async switchBom() {
     const b=this.detail;
@@ -666,7 +678,8 @@ const ProductionApiPage = {
   async start() {
     const date = document.querySelector('#prodStart [name="manufactured_date"]').value;
     // 이전 BOM 기준 계획이면 시작 전에 한 번 더 묻는다 (상세를 열 때 이미 고른 경우 제외).
-    if(this.needsBomSwitch(this.detail) && !this.bomSwitchAsked.has(this.detail.id) && await this.offerBomSwitch()) return;
+    // 생산 시작 때는 '그대로 진행'을 고른 적이 없으면 항상 묻는다. 전환·미결정이면 시작하지 않는다.
+    if(this.needsBomSwitch(this.detail) && !this.bomSwitchKept(this.detail) && await this.offerBomSwitch()!=='keep') return;
     await this.run('생산 시작', async () => {
       const b = await this.post(`/batches/${this.detail.id}/start/`, { staff_id: Number(this.s.staffId), manufactured_date: date || null });
       this.toast('success', '생산 시작', `${b.batch_number} 진행 — CCP 일지를 확인하세요`);
