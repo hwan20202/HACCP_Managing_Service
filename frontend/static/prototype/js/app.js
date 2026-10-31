@@ -4,6 +4,7 @@
 
 const App = {
   currentPage: 'dashboard',
+  teamMembers: ['김정환', '박세욱', '박보경', '오주영'],
 
   init() {
     this.setupSidebar();
@@ -204,6 +205,7 @@ const App = {
   },
 
   renderSettings() {
+    this.versionTapCount = 0;
     return `
     <div class="fade-in">
       <div class="page-header">
@@ -268,7 +270,35 @@ const App = {
         <!-- 직원 관리 — P16: 그린 뒤 mountStaffAdmin이 ADM-SC-02로 바꿈(R50) -->
         <div class="card" style="grid-column:1/-1;" id="settingsStaff"><div class="te-empty">불러오는 중…</div></div>
       </div>
+      <footer class="settings-footer">
+        <span>BIODOT HACCP</span>
+        <button type="button" class="settings-version" onclick="App.tapVersion()">버전 1.0</button>
+      </footer>
+      <dialog id="teamCredits" class="team-credits" aria-labelledby="teamCreditsTitle" onclick="if(event.target===this)this.close()">
+        <form method="dialog">
+          <p class="team-credits-label">BIODOT HACCP</p>
+          <h2 id="teamCreditsTitle">이 시스템을 함께 만든 사람들</h2>
+          <ul class="team-credits-members"></ul>
+          <p class="team-credits-message">바이오닷의 하루가 조금 더 편해지기를 바라며.</p>
+          <button type="submit" class="btn btn-secondary" autofocus>닫기</button>
+        </form>
+      </dialog>
     </div>`;
+  },
+
+  tapVersion() {
+    const dialog = document.getElementById('teamCredits');
+    if (!dialog || dialog.open) return;
+    this.versionTapCount = (this.versionTapCount || 0) + 1;
+    if (this.versionTapCount < 3) return;
+    this.versionTapCount = 0;
+    const members = this.teamMembers.map(name => {
+      const item = document.createElement('li');
+      item.textContent = name;
+      return item;
+    });
+    dialog.querySelector('.team-credits-members').replaceChildren(...members);
+    dialog.showModal();
   },
 
   updateDateTime() {
