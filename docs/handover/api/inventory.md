@@ -97,6 +97,7 @@ API ID는 설계 때 번호가 없어 모두 `—`입니다(새로 매기지 않
 | POST | `/batches/{pk}/outputs/` | `F-PRD-05` | 산출 등록 | `api.py::batch_output` | [보기](#inv-outputs) |
 | POST | `/batches/{pk}/complete/` | `F-PRD-06` | 완료 | `api.py::batch_complete` | [보기](#inv-batch-complete) |
 | POST | `/batches/{pk}/cancel/` | `F-PRD-07` | 취소 | `api.py::batch_cancel` | [보기](#inv-batch-cancel) |
+| POST | `/batches/{pk}/switch-bom/` | `F-PRD-02` | 이전 BOM 계획을 활성 BOM으로 재지시 | `api.py::batch_switch_bom` | [보기](#inv-batch-switch-bom) |
 
 **6. BOM**
 
@@ -300,8 +301,8 @@ API ID는 설계 때 번호가 없어 모두 `—`입니다(새로 매기지 않
 |---|---|
 | 본문 | `item_id`·`staff_id`(필수) · `process_type`(`MANUFACTURE`만, 생략 가능) · `planned_date` · `planned_quantity` · `manufactured_date`(사후 입력이면 필요) · `bom_id` · `notes` |
 | 응답 | 201 배치 상세(`PLANNED`) |
-| 오류 | 400 포장 배치(범위 밖) · 400 BOM이 그 품목 것이 아님 |
-| 알아둘 점 | 등록만으로는 원료를 예약·차감하지 않습니다 |
+| 오류 | 400 포장 배치(범위 밖) · 400 BOM이 그 품목 것이 아님 · 400 활성 BOM 없음 · 400 보낸 `bom_id`가 더 이상 활성이 아님(그사이 버전 변경) |
+| 알아둘 점 | 등록만으로는 원료를 예약·차감하지 않습니다. `bom_id`를 생략하면 그 품목의 활성 BOM을 씁니다. BOM 없는 계획은 만들 수 없습니다 |
 
 <a id="inv-batches-preview"></a>
 #### GET `/batches/preview/` — 계획 미리 보기
@@ -309,7 +310,7 @@ API ID는 설계 때 번호가 없어 모두 `—`입니다(새로 매기지 않
 | | |
 |---|---|
 | 쿼리 | `item_id`(필수) · `quantity`(계획량) · `planned_date` |
-| 응답 | 200 BOM 줄마다 소요량·가용량·부족분 |
+| 응답 | 200 BOM 줄마다 소요량·가용량·부족분 + `bom_id`·`bom_version`(적용될 활성 BOM) · 활성 BOM이 없으면 `bom_problem`에 사유 |
 | 화면 | 생산지시·실적 — 계획 등록 전 확인 |
 
 <a id="inv-fefo"></a>
@@ -326,7 +327,7 @@ API ID는 설계 때 번호가 없어 모두 `—`입니다(새로 매기지 않
 
 | | |
 |---|---|
-| 응답 | 200 배치 상세(위 모양) |
+| 응답 | 200 배치 상세(위 모양) + `bom_is_active`(연결 BOM이 현재 활성인지) · `active_bom`(`{id, version}` 또는 null) |
 | 오류 | 404 |
 
 <a id="inv-batch-start"></a>
@@ -387,6 +388,16 @@ API ID는 설계 때 번호가 없어 모두 `—`입니다(새로 매기지 않
 | 응답 | 200 배치 상세(`CANCELLED`) |
 | 알아둘 점 | 배치는 지우지 않고 취소합니다. 취소 뒤 CCP 일지·생산일지 처리는 아직 정해지지 않았습니다(생산일지는 읽기 전용이 됨) — [남은 작업](../remaining-work.md) |
 
+<a id="inv-batch-switch-bom"></a>
+#### POST `/batches/{pk}/switch-bom/` — 이전 BOM 계획을 활성 BOM으로 재지시
+
+| | |
+|---|---|
+| 본문 | `staff_id`(필수) |
+| 응답 | 201 **새** 배치 상세(활성 BOM 기준 `PLANNED`) |
+| 오류 | 400 시작 전(`PLANNED`) 계획이 아님 · 이미 활성 BOM 기준 · 활성 BOM 없음 · 404 |
+| 알아둘 점 | 한 트랜잭션에서 새 계획 등록 + 기존 계획 취소(둘 다 되거나 둘 다 안 됨). 계획일·계획량·제조일·메모를 이어받고 배치번호는 새로 정하며 원료 배정은 복사하지 않습니다. 취소 사유와 새 배치 감사 이력에 상대 배치번호를 남깁니다 |
+
 ### 6. BOM
 
 <a id="inv-boms"></a>
@@ -395,9 +406,11 @@ API ID는 설계 때 번호가 없어 모두 `—`입니다(새로 매기지 않
 | | |
 |---|---|
 | 쿼리(GET 목록) | `item_id` · `include_inactive`(0/1, 기본 0) |
-| 본문(POST·PATCH) | `staff_id` · `item_id`(만드는 품목) · `effective_from` · `base_quantity` · `base_unit` · `is_active` · `lines: [{item_id, quantity, unit, alternatives: [item_id …]}]` |
-| 응답 | 목록 200 `{results}`(버전 높은 순, 줄 포함) · POST 201 · GET·PATCH 200 |
-| 오류 | 409 저장 충돌(새로 고친 뒤 다시) · 400 칸 값 |
+| 본문(POST·PATCH) | `staff_id` · `item_id`(만드는 품목) · `base_quantity` · `base_unit` · `is_active` · `lines: [{item_id, quantity, unit, alternatives: [item_id …]}]` · `new_version`·`overwrite`(PATCH) · `notes` |
+| 응답 | 목록 200 `{results}`(버전 높은 순, 줄 포함, 각 버전에 `open_batch_count` = 계획·진행 중 배치 수) · POST 201 · GET·PATCH 200 |
+| 오류 | 409 저장 충돌 — 다른 사용자가 먼저 변경(활성 BOM은 품목당 하나, 새로 고친 뒤 다시) · 400 칸 값 |
+| 활성 | 품목당 0~1개(DB 부분 유니크 인덱스). `is_active: true`로 저장·변경하면 같은 품목의 다른 활성 버전은 같은 트랜잭션에서 비활성이 됩니다 |
+| 적용일 | `effective_from`은 입력받지 않습니다(보내도 무시). 새 버전은 등록일, 덮어쓰기는 기존 값을 기록합니다 |
 | 알아둘 점 | **배치가 쓴 버전은 고칠 수 없고**(DB 트리거) 새 버전으로 저장됩니다. 생산에 연결된 기록의 기준을 보존하기 위해서입니다 |
 
 <a id="inv-bom-delete"></a>

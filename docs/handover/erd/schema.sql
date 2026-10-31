@@ -397,6 +397,9 @@ CREATE INDEX ix_bom_lines_component ON bom_lines (component_item_id);
 -- ix_boms_item_active (on boms)
 CREATE INDEX ix_boms_item_active ON boms (item_id, is_active, effective_from);
 
+-- ux_boms_one_active_per_item (on boms) — inventory 0011, 품목당 활성 BOM 0~1개
+CREATE UNIQUE INDEX ux_boms_one_active_per_item ON boms (item_id) WHERE is_active = 1;
+
 -- ix_deviation_document (on deviation_action)
 CREATE INDEX "ix_deviation_document" ON "deviation_action" ("document_id") WHERE "deleted_at" IS NULL;
 

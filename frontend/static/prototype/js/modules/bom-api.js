@@ -55,7 +55,7 @@ const BomApiPage = {
         const versions=[...boms].sort((a,b)=>rank(a)-rank(b)||a.version-b.version||a.id-b.id);
         return `<details data-bom-item="${itemId}" ${this.openItems[itemId]?'open':''} ontoggle="BomApiPage.openItems[${itemId}]=this.open" style="border:1px solid var(--border-subtle);border-radius:8px;margin-bottom:0.65rem;overflow:hidden">
           <summary><strong>${this.esc(item?.item_code||itemId)} ${this.esc(item?.name||'')}</strong> <span style="font-size:0.8rem;color:var(--text-muted);margin-left:0.5rem">${versions.length}개 버전 · 활성 ${versions.filter(b=>b.is_active).map(b=>`v${b.version}`).join(', ')||'없음'}${versions.filter(b=>!b.is_active&&this.openCount(b)).map(b=>` · 이전 버전 v${b.version} 진행 중 ${this.openCount(b)}건`).join('')}</span></summary>
-          <div class="table-wrapper"><table class="data-table"><thead><tr><th>버전</th><th>적용 시작일</th><th>상태</th><th>원료 수</th><th>관리</th></tr></thead><tbody>
+          <div class="table-wrapper"><table class="data-table"><thead><tr><th>버전</th><th>등록일</th><th>상태</th><th>원료 수</th><th>관리</th></tr></thead><tbody>
           ${versions.map(b=>`<tr data-bom-id="${b.id}"><td>v${b.version}</td><td>${this.esc(b.effective_from)}</td><td>${this.statusBadges(b)} · ${b.used?'생산 연결 이력 있음':'미사용'}${this.connectionNote(b)}</td><td>${b.lines.length}</td><td class="bom-actions"><button class="btn btn-secondary btn-sm" onclick="BomApiPage.edit(${b.id})">조회·수정</button> <button class="btn btn-secondary btn-sm" onclick="BomApiPage.edit(${b.id},true)">새 버전</button> <button class="btn btn-danger btn-sm" ${b.used?'disabled title="생산 연결 이력이 있어 삭제할 수 없습니다."':''} onclick="BomApiPage.remove(${b.id})">삭제</button> <button class="btn btn-secondary btn-sm bom-activation" data-bom-action="${b.is_active?'deactivate':'activate'}" onclick="BomApiPage.activate(${b.id},this)">${b.is_active?'비활성화':'활성화'}</button></td></tr>`).join('')}
           </tbody></table></div></details>`;
       }).join('')||`<div class="empty-state"><p>${query?'검색 결과가 없습니다.':'등록된 BOM이 없습니다.'}</p></div>`}</div>
@@ -89,12 +89,11 @@ const BomApiPage = {
     const d=this.draft;
     this.host().innerHTML=`<form id="bomForm" onsubmit="event.preventDefault();BomApiPage.save()">
       <p>${bom?`v${bom.version}${copy?' 기반 새 버전 등록':' 조회·수정'} · 메모만 바꾸면 현재 버전에 저장합니다.`:'신규 BOM 등록'}</p>
-      ${bom?`<div style="margin-bottom:0.75rem"><div role="tablist" aria-label="배합·적용 시작일 변경 시 저장 방식" style="display:flex;gap:0.5rem;flex-wrap:wrap"><button type="button" role="tab" aria-selected="true" data-save-mode="new" class="btn btn-primary btn-sm" onclick="BomApiPage.setSaveMode('new')">새 버전으로 저장 (권장)</button><button type="button" role="tab" aria-selected="false" data-save-mode="existing" class="btn btn-secondary btn-sm" ${bom.used?'disabled aria-describedby="bomOverwriteReason"':''} onclick="BomApiPage.setSaveMode('existing')">이 버전에 덮어쓰기</button></div><input type="hidden" name="save_mode" value="new"><p id="bomOverwriteReason" style="font-size:0.8rem;color:var(--text-muted);margin-top:0.4rem">${bom.used?'생산 연결 이력이 있어 덮어쓸 수 없습니다. 기존 생산 기록을 보존하려면 새 버전으로 저장하세요.':'미사용 버전은 확인 후 덮어쓸 수 있습니다. 새 버전 저장 시 활성화 여부를 선택합니다.'}</p></div>`:''}
+      ${bom?`<div style="margin-bottom:0.75rem"><div role="tablist" aria-label="배합 변경 시 저장 방식" style="display:flex;gap:0.5rem;flex-wrap:wrap"><button type="button" role="tab" aria-selected="true" data-save-mode="new" class="btn btn-primary btn-sm" onclick="BomApiPage.setSaveMode('new')">새 버전으로 저장 (권장)</button><button type="button" role="tab" aria-selected="false" data-save-mode="existing" class="btn btn-secondary btn-sm" ${bom.used?'disabled aria-describedby="bomOverwriteReason"':''} onclick="BomApiPage.setSaveMode('existing')">이 버전에 덮어쓰기</button></div><input type="hidden" name="save_mode" value="new"><p id="bomOverwriteReason" style="font-size:0.8rem;color:var(--text-muted);margin-top:0.4rem">${bom.used?'생산 연결 이력이 있어 덮어쓸 수 없습니다. 기존 생산 기록을 보존하려면 새 버전으로 저장하세요.':'미사용 버전은 확인 후 덮어쓸 수 있습니다. 새 버전 저장 시 활성화 여부를 선택합니다.'}</p></div>`:''}
       <div style="display:flex;gap:0.75rem;flex-wrap:wrap">
       <label>생산 품목<select class="form-control" name="item_id" ${id?'disabled':''} onchange="BomApiPage.changeItem(this.value)">${this.options(this.items.filter(i=>i.item_type==='SEMI'),d.item_id)}</select></label>
       <label>기준 생산량<input class="form-control" name="base_quantity" type="number" min="0" step="any" required value="${this.esc(d.base_quantity)}"></label>
       <label>단위<select class="form-control" name="base_unit">${this.unitOptions(d.base_unit || this.items.find(i=>i.id===d.item_id)?.base_unit)}</select></label>
-      <label>적용 시작일<input class="form-control" name="effective_from" type="date" required value="${this.esc(d.effective_from)}"></label>
       <label>담당자<select class="form-control" name="staff_id">${this.options(this.staff,ProductionApiPage.s.staffId)}</select></label>
       <input type="hidden" name="is_active" value="${d.is_active?'1':'0'}"></div>
       <label>변경 사유·메모<input class="form-control" name="notes" value="${this.esc(d.notes)}"></label>
@@ -132,7 +131,7 @@ const BomApiPage = {
   component(n,value) { this.readLines(); const item=this.items.find(i=>String(i.id)===value); this.draft.lines[n].unit=item.base_unit; this.draft.lines[n].alternatives=this.draft.lines[n].alternatives.filter(id=>id!==item.id); this.lines(); },
   recipeKey(data) {
     const unit=id=>this.items.find(i=>i.id===Number(id))?.base_unit;
-    return JSON.stringify([MassUnits.convert(data.base_quantity,data.base_unit,unit(data.item_id)),data.effective_from,
+    return JSON.stringify([MassUnits.convert(data.base_quantity,data.base_unit,unit(data.item_id)),
       data.lines.map(l=>[Number(l.item_id),MassUnits.convert(l.quantity,l.unit,unit(l.item_id)),[...l.alternatives].sort((a,b)=>a-b)]).sort((a,b)=>a[0]-b[0])]);
   },
   chooseActivation() {
@@ -191,8 +190,7 @@ const BomApiPage = {
     const bom=this.boms.find(b=>b.id===id);
     if(button.disabled) return;
     const active=!bom.is_active;
-    const future=active && bom.effective_from>InventoryApiPage.today()?` 적용 시작일(${bom.effective_from})이 오늘 이후라 그 전까지는 새 생산계획을 등록할 수 없습니다.`:'';
-    if(!confirm(active?`이 품목의 활성 BOM을 v${bom.version}으로 바꿀까요? 기존 활성 버전은 비활성으로 전환되며, 기존 생산지시는 원래 배합을 유지합니다.${future}`:`v${bom.version}을 비활성화할까요? 이 품목에 활성 BOM이 없어져 새 생산계획을 등록할 수 없게 됩니다. 연결된 생산지시는 기존 배합을 유지합니다.`)) return;
+    if(!confirm(active?`이 품목의 활성 BOM을 v${bom.version}으로 바꿀까요? 기존 활성 버전은 비활성으로 전환되며, 기존 생산지시는 원래 배합을 유지합니다.`:`v${bom.version}을 비활성화할까요? 이 품목에 활성 BOM이 없어져 새 생산계획을 등록할 수 없게 됩니다. 연결된 생산지시는 기존 배합을 유지합니다.`)) return;
     button.disabled=true;
     try {
       await this.request(`/boms/${id}/`,'PATCH',{staff_id:Number(ProductionApiPage.s.staffId||this.staff[0]?.id),is_active:active});

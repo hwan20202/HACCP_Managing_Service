@@ -149,15 +149,14 @@ def _active_bom(item):
     return Bom.objects.filter(item=item, is_active=True).first()
 
 
-def _plan_bom(item, on_date, bom_id=None, *, allow_before_effective=False):
+def _plan_bom(item, bom_id=None):
     """BOM for a new plan. A plan without a BOM cannot be started, so refuse it up front.
 
     ``bom_id`` is the version the planner saw on screen; if the active version changed in the
     meantime the plan is refused instead of silently switching recipes.
 
-    The BOM must already apply on ``on_date`` (effective_from <= on_date). The same rule covers
-    new plans, plans with an explicit ``bom_id`` and BOM switch re-plans. Only seeders that
-    back-enter synthetic history pass ``allow_before_effective=True``; the API never does.
+    There is no effective-date check: effective_from is only the registration date (10-31),
+    so the active version is the one to use, including for back-entered past records.
     """
     active = _active_bom(item)
     if bom_id:
@@ -178,11 +177,6 @@ def _plan_bom(item, on_date, bom_id=None, *, allow_before_effective=False):
     if bom is None:
         raise InventoryError(
             f"{item.name}의 활성 BOM이 없습니다. BOM 관리에서 사용할 버전을 활성화하세요."
-        )
-    if not allow_before_effective and bom.effective_from > on_date:
-        raise InventoryError(
-            f"{item.name} BOM v{bom.version}의 적용 시작일({bom.effective_from})이 "
-            f"생산 기준일({on_date})보다 늦습니다. BOM 적용 시작일을 확인하세요."
         )
     return bom
 
@@ -221,7 +215,6 @@ def create_batch(
     bom_id=None,
     notes=None,
     audit_reason=None,
-    allow_before_effective=False,
 ):
     """New PLANNED manufacturing batch for a 반제품 (bulk). The BOM defaults to the item's active
     one. Packaging batches are out of scope (10/15)."""
@@ -247,7 +240,7 @@ def create_batch(
             )
         staff = _staff(staff_id)
         base_date = manufactured_date or planned_date or today
-        bom = _plan_bom(item, base_date, bom_id, allow_before_effective=allow_before_effective)
+        bom = _plan_bom(item, bom_id)
         batch = ProductionBatch.objects.create(
             batch_number=_next_batch_number(item, base_date),
             process_type=process_type,
@@ -722,7 +715,7 @@ def preview_plan(*, item_id, quantity, on_date=None):
     if item.item_type_id not in PRODUCIBLE_ITEM_TYPES:
         raise InventoryError("제조할 반제품을 선택하세요.")
     try:
-        bom, problem = _plan_bom(item, on_date or kst_now().date()), None
+        bom, problem = _plan_bom(item), None
     except InventoryError as error:
         bom, problem = None, str(error)
     batch = ProductionBatch(

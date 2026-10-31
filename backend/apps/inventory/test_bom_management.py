@@ -488,27 +488,18 @@ class SingleActiveBomTests(ApiTestCase):
         self.assertEqual(ProductionBatch.objects.filter(item=self.semi).count(), 1)
         self.assertEqual(ProductionBatch.objects.get(pk=old["id"]).status, "PLANNED")
 
-    def test_future_effective_bom_blocks_plan_explicit_bom_and_switch_alike(self):
+    def test_effective_date_is_registration_date_not_input(self):
         import datetime
 
-        future = (
-            datetime.date.fromisoformat(str(self.today)) + datetime.timedelta(days=30)
-        ).isoformat()
-        self.post("/boms/", self.recipe())
-        old = self.plan().json()
-        v2 = self.post("/boms/", self.recipe("700", new_version=True, effective_from=future)).json()
-        self.assertTrue(v2["is_active"])
-        for label, response in (
-            ("default", self.plan()),
-            ("explicit bom_id", self.plan(bom_id=v2["id"])),
-            (
-                "switch",
-                self.post(f"/batches/{old['id']}/switch-bom/", {"staff_id": self.staff.pk}),
-            ),
-        ):
-            with self.subTest(label):
-                self.assertEqual(response.status_code, 400, response.content)
-                self.assertIn("적용 시작일", response.json()["error"]["message"])
-        # The refused switch left the old plan untouched and created nothing.
-        self.assertEqual(ProductionBatch.objects.get(pk=old["id"]).status, "PLANNED")
-        self.assertEqual(ProductionBatch.objects.filter(item=self.semi).count(), 1)
+        future = (kst_now().date() + datetime.timedelta(days=30)).isoformat()
+        past = (kst_now().date() - datetime.timedelta(days=30)).isoformat()
+        v1 = self.post("/boms/", self.recipe(effective_from=future)).json()
+        self.assertEqual(v1["effective_from"], kst_now().date().isoformat())
+        # A date-only change is not a recipe change any more: nothing is saved.
+        same = self.patch(f"/boms/{v1['id']}/", self.recipe(effective_from=past))
+        self.assertEqual(same.status_code, 400, same.content)
+        self.assertIn("변경된 내용이 없습니다", same.json()["error"]["message"])
+        # Back-entering an earlier manufacturing date still uses today's active version.
+        made = self.plan(manufactured_date=past)
+        self.assertEqual(made.status_code, 201, made.content)
+        self.assertEqual(made.json()["bom_id"], v1["id"])
